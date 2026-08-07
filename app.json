@@ -1,0 +1,48 @@
+{
+  "expo": {
+    "name": "AgriArch",
+    "slug": "your-app-slug",
+    "version": "1.0.0",
+    "scheme": "agriarch",
+    "orientation": "portrait",
+    "icon": "./assets/images/logo.jpeg",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourcompany.yourapp",
+      "buildNumber": "1.0.0"
+    },
+    "android": {
+      "package": "com.yourcompany.yourapp",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/logo.jpeg",
+        "backgroundColor": "#ffffff"
+      }
+    },
+    "web": {
+      "favicon": "./assets/images/logo.jpeg"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "3f30c682-8fcd-4d7c-a851-e255928970ce"
+      }
+    },
+   "plugins": [
+  "expo-router",
+  "expo-splash-screen",
+  "expo-web-browser",
+  [
+    "expo-build-properties",
+    {
+      "android": {
+        "usesCleartextTraffic": true
+      }
+    }
+  ]
+]
+  }
+}
