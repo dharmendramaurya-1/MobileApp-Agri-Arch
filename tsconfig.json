@@ -1,0 +1,18 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ],
+      "@/assets/*": [
+        "./assets/*"
+      ]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx"
+, "app/onboarding.jsx", "app/(main)/dashboard.jsx", "components/Logo.jsx", "src/services/api.js", "app/(auth)/login.jsx", "src/context/AuthContext.jsx", "app/index.jsx", "app/_layout.jsx", "app/(auth)/add_device.jsx", "app/(auth)/signup.jsx", "app/(main)/ph-level.jsx", "app/(main)/co2.jsx", "src/services/mqttClient.js", "app/(main)/add_device.jsx"  ]
+}

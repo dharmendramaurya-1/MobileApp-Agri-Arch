@@ -1,0 +1,627 @@
+// app/(main)/_layout.jsx
+import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import MaskedView from "@react-native-masked-view/masked-view";
+import { LinearGradient } from "expo-linear-gradient";
+import { router, useNavigation } from "expo-router";
+import { Drawer } from "expo-router/drawer";
+import { useEffect, useState } from "react";
+import { BackHandler } from "react-native";
+
+import {
+  Alert,
+  Dimensions,
+  Linking,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { SafeAreaView } from "react-native-safe-area-context";
+import Logo from "../../components/Logo";
+import { useAuth } from "../../src/context/AuthContext";
+import { useMqtt } from "../../src/context/MqttContext";
+import { useTheme } from "../../src/context/ThemContext";
+import { user_profile } from "../../src/services/profile/profile";
+
+const { width, height } = Dimensions.get("window");
+
+function CustomHeader({ navigation, onNotificationPress, theme }) {
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const [user_name, setUsername] = useState("");
+  const [currentvalue, setcurrentvalue] = useState({});
+  const { sensorData } = useMqtt();
+
+  useEffect(() => {
+    const profile = async () => {
+      try {
+        const response = await user_profile();
+        await AsyncStorage.setItem("Username", response);
+        setUsername(response);
+      } catch (e) {
+        console.log(e);
+      }
+    };
+    profile();
+  }, []);
+
+  useEffect(() => {
+    setcurrentvalue({
+      WaterLevel: sensorData.waterLevel,
+      temperature: sensorData.ambientTemperature,
+      Humidity: sensorData.ambientHumidity,
+    });
+  }, [sensorData]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatTime = () => {
+    return currentTime.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  const formatDate = () => {
+    return currentTime.toLocaleDateString([], {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+    });
+  };
+
+  const openWhatsApp = () => {
+    const phoneNumber = "9340389016";
+    const url = `whatsapp://send?phone=${phoneNumber}`;
+
+    Linking.canOpenURL(url)
+      .then((supported) => {
+        if (supported) {
+          return Linking.openURL(url);
+        } else {
+          const webUrl = `https://wa.me/${phoneNumber}`;
+          Linking.openURL(webUrl);
+        }
+      })
+      .catch((err) => {
+        console.error("Error opening WhatsApp:", err);
+        Alert.alert(
+          "WhatsApp Not Available",
+          "Please install WhatsApp to chat with support."
+        );
+      });
+  };
+
+  return (
+    <View
+      style={[
+        styles.headerContainer,
+        { paddingTop: Platform.OS === "ios" ? 50 : 40 },
+      ]}
+    >
+      <View style={styles.headerTopRow}>
+        <TouchableOpacity
+          onPress={() => navigation.openDrawer()}
+          style={styles.headerIconButton}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="menu" size={24} color="#FFF" />
+        </TouchableOpacity>
+
+        <View style={styles.logoContainer} pointerEvents="none">
+          <Logo showText={true} size={30} />
+        </View>
+
+        <View style={styles.headerRightIcons}>
+          <TouchableOpacity
+            onPress={openWhatsApp}
+            style={styles.headerIconButton}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="logo-whatsapp" size={22} color="#25D366" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={onNotificationPress}
+            style={styles.headerIconButton}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="notifications-outline" size={22} color="#FFF" />
+            <View style={styles.notificationBadge}>
+              <Text style={styles.notificationBadgeText}>3</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      <View style={[styles.heroSection, { minHeight: height * 0.22 }]}>
+        <View style={[styles.heroImage, { backgroundColor: "#2E7D32" }]} />
+        <View style={styles.heroContent}>
+          <View style={styles.weatherTimeRow}>
+            <View style={styles.weatherInfo}>
+              <Text style={styles.weatherIcon}>☀️</Text>
+              <View>
+                <Text style={styles.weatherTemp}>
+                  {currentvalue.temperature?.toFixed(1) || '--'}°C
+                </Text>
+                <Text style={styles.weatherCondition}>Sunny</Text>
+              </View>
+            </View>
+            <View style={styles.timeInfo}>
+              <Text style={styles.timeText}>{formatTime()}</Text>
+              <Text style={styles.dateText}>{formatDate()}</Text>
+            </View>
+          </View>
+
+          <View style={styles.greetingContainer}>
+            <Text style={styles.greetingText}>
+              Good Morning, {user_name}! 👋
+            </Text>
+            <Text style={styles.greetingSubtext}>
+              Your farm is healthy today
+            </Text>
+          </View>
+
+          <View style={styles.quickStats}>
+            <View style={styles.statItem}>
+              <Ionicons name="water" size={14} color="#4CAF50" />
+              <Text style={styles.statValue}>{currentvalue.WaterLevel?.toFixed(0) || '--'}%</Text>
+              <Text style={styles.statLabel}>Water</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Ionicons name="thermometer" size={14} color="#FF9800" />
+              <Text style={styles.statValue}>{currentvalue.temperature?.toFixed(1) || '--'}</Text>
+              <Text style={styles.statLabel}>Temp</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Ionicons name="leaf" size={14} color="#8BC34A" />
+              <Text style={styles.statValue}>{currentvalue.Humidity?.toFixed(0) || '--'}</Text>
+              <Text style={styles.statLabel}>Humidity</Text>
+            </View>
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function CustomDrawerContent({ navigation }) {
+  const { theme } = useTheme();
+  const { logout } = useAuth();
+
+  const handleLogout = async () => {
+    Alert.alert("Logout", "Are you sure you want to logout?", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Logout",
+        style: "destructive",
+        onPress: () => {
+          navigation.closeDrawer();
+          setTimeout(() => {
+            logout().catch(console.error);
+            setTimeout(() => {
+              router.push("/onboarding");
+            }, 100);
+          }, 200);
+        },
+      },
+    ]);
+  };
+
+  const navigateTo = (route) => {
+    navigation.closeDrawer();
+    router.push(route);
+  };
+
+  // ✅ Updated menu items with correct routes
+  const menuItems = [
+    {
+      section: "MAIN",
+      items: [
+        { name: "Dashboard", icon: "grid-outline", route: "/(main)/dashboard" },
+        { name: "Devices", icon: "hardware-chip-outline", route: "/(main)/devices" },
+        { name: "Add Device", icon: "add-circle-outline", route: "/(main)/add_device" },
+        { name: "Device Selection", icon: "phone-portrait-outline", route: "/(main)/device-selection" },
+        { name: "Add Crops", icon: "leaf-outline", route: "/(main)/add_crops" },
+        { name: "Profile", icon: "person-outline", route: "/(main)/profile" },
+      ],
+    },
+    {
+      section: "ENVIRONMENT SENSORS",
+      items: [
+        { name: "Ambient Temperature", icon: "thermometer-outline", route: "/(main)/ambient-temperature" },
+        { name: "Ambient Humidity", icon: "water-outline", route: "/(main)/ambient-humidity" },
+        { name: "Light Level", icon: "sunny-outline", route: "/(main)/light-level" },
+        { name: "CO₂ Level", icon: "leaf-outline", route: "/(main)/co2" },
+      ],
+    },
+    {
+      section: "WATER & SOIL SENSORS",
+      items: [
+        { name: "Water Temperature", icon: "thermometer-outline", route: "/(main)/water-temperature" },
+        { name: "Water Level", icon: "water-outline", route: "/(main)/water-level" },
+        { name: "EC Value", icon: "flash-outline", route: "/(main)/ec-value" },
+        { name: "pH Level", icon: "flask-outline", route: "/(main)/ph-level" },
+      ],
+    },
+    {
+      section: "HISTORY",
+      items: [
+        { name: "Pump History", icon: "time-outline", route: "/(main)/pump-history" },
+        { name: "Sensor History", icon: "analytics-outline", route: "/(main)/sensor-history" },
+      ],
+    },
+  ];
+
+  return (
+    <SafeAreaView
+      style={[
+        styles.drawerContainer,
+        { backgroundColor: theme.colors.background },
+      ]}
+    >
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
+        <View
+          style={[
+            styles.drawerHeader,
+            { borderBottomColor: theme.colors.border },
+          ]}
+        >
+          <View style={styles.drawerLogoContainer}>
+            <View
+              style={[
+                styles.drawerLogoCircle,
+                { backgroundColor: `${theme.colors.primary}90` },
+              ]}
+            >
+              <Logo showText={false} size={60} />
+            </View>
+
+            <MaskedView
+              maskElement={<Text style={styles.drawerBrandText}>AgriArch</Text>}
+            >
+              <LinearGradient
+                colors={["#8BC34A", "#1B5E20"]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+              >
+                <Text style={[styles.drawerBrandText, { opacity: 0 }]}>
+                  AgriArch
+                </Text>
+              </LinearGradient>
+            </MaskedView>
+          </View>
+        </View>
+
+        <View style={styles.drawerMenu}>
+          {menuItems.map((section, idx) => (
+            <View key={idx}>
+              <Text
+                style={[
+                  styles.drawerSectionTitle,
+                  { color: theme.colors.textSecondary },
+                ]}
+              >
+                {section.section}
+              </Text>
+              {section.items.map((item, itemIdx) => (
+                <TouchableOpacity
+                  key={itemIdx}
+                  style={styles.drawerItem}
+                  onPress={() => navigateTo(item.route)}
+                  activeOpacity={0.7}
+                >
+                  <View
+                    style={[
+                      styles.drawerIconWrapper,
+                      { backgroundColor: `${theme.colors.primary}15` },
+                    ]}
+                  >
+                    <Ionicons
+                      name={item.icon}
+                      size={16}
+                      color={theme.colors.primary}
+                    />
+                  </View>
+                  <Text
+                    style={[
+                      styles.drawerItemText,
+                      { color: theme.colors.text },
+                    ]}
+                  >
+                    {item.name}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          ))}
+        </View>
+
+        <View style={styles.footerSection}>
+          <View
+            style={[
+              styles.footerDivider,
+              { backgroundColor: theme.colors.border },
+            ]}
+          />
+          <TouchableOpacity
+            style={styles.drawerItem}
+            onPress={() => navigateTo("/(main)/settings")}
+            activeOpacity={0.7}
+          >
+            <View
+              style={[
+                styles.drawerIconWrapper,
+                { backgroundColor: `${theme.colors.primary}15` },
+              ]}
+            >
+              <Ionicons
+                name="settings-outline"
+                size={16}
+                color={theme.colors.primary}
+              />
+            </View>
+            <Text style={[styles.drawerItemText, { color: theme.colors.text }]}>
+              Settings
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.logoutButton}
+            onPress={handleLogout}
+            activeOpacity={0.7}
+          >
+            <View
+              style={[
+                styles.drawerIconWrapper,
+                { backgroundColor: "#F4433615" },
+              ]}
+            >
+              <Ionicons name="log-out-outline" size={20} color="#F44336" />
+            </View>
+            <Text style={styles.logoutText}>Logout</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={{ height: height * 0.06 }} />
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+export default function MainLayout() {
+  const { theme } = useTheme();
+  const navigation = useNavigation();
+
+  const handleNotificationPress = () => {
+    router.push("/(main)/notifications");
+  };
+
+  // Handle Android back button
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+        return true;
+      }
+      
+      Alert.alert(
+        "Exit App",
+        "Are you sure you want to exit?",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Exit", onPress: () => BackHandler.exitApp() }
+        ]
+      );
+      return true;
+    });
+
+    return () => backHandler.remove();
+  }, [navigation]);
+
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <Drawer
+        screenOptions={{
+          drawerPosition: "left",
+          drawerStyle: {
+            width: width * 0.7,
+            maxWidth: 280,
+            backgroundColor: theme.colors.background,
+          },
+          headerShown: true,
+          header: ({ navigation }) => (
+            <CustomHeader
+              navigation={navigation}
+              onNotificationPress={handleNotificationPress}
+              theme={theme}
+            />
+          ),
+        }}
+        drawerContent={(props) => <CustomDrawerContent {...props} />}
+      >
+        {/* ── MAIN SCREENS ── */}
+        <Drawer.Screen name="dashboard" options={{ title: "Dashboard" }} />
+        <Drawer.Screen name="devices" options={{ title: "Devices" }} />
+        <Drawer.Screen name="add_device" options={{ title: "Add Device" }} />
+        <Drawer.Screen name="device-selection" options={{ title: "Device Selection" }} />
+        <Drawer.Screen name="add_crops" options={{ title: "Add Crops" }} />
+        <Drawer.Screen name="profile" options={{ title: "Profile" }} />
+        
+        {/* ── NOTIFICATIONS & SETTINGS ── */}
+        <Drawer.Screen name="notifications" options={{ title: "Notifications" }} />
+        <Drawer.Screen name="settings" options={{ title: "Settings" }} />
+        
+        {/* ── HISTORY ── */}
+        <Drawer.Screen name="pump-history" options={{ title: "Pump History" }} />
+        <Drawer.Screen name="sensor-history" options={{ title: "Sensor History" }} />
+        
+        {/* ── ENVIRONMENT SENSORS ── */}
+        <Drawer.Screen name="ambient-temperature" options={{ title: "Ambient Temperature" }} />
+        <Drawer.Screen name="ambient-humidity" options={{ title: "Ambient Humidity" }} />
+        <Drawer.Screen name="light-level" options={{ title: "Light Level" }} />
+        <Drawer.Screen name="co2" options={{ title: "CO₂ Level" }} />
+        
+        {/* ── WATER & SOIL SENSORS ── */}
+        <Drawer.Screen name="water-temperature" options={{ title: "Water Temperature" }} />
+        <Drawer.Screen name="water-level" options={{ title: "Water Level" }} />
+        <Drawer.Screen name="ec-value" options={{ title: "EC Value" }} />
+        <Drawer.Screen name="ph-level" options={{ title: "pH Level" }} />
+        
+        {/* ── INDIVIDUAL SENSOR DETAILS ── */}
+        <Drawer.Screen name="sensor/[id]" options={{ title: "Sensor Details" }} />
+        <Drawer.Screen name="sensor/ambient-temperature" options={{ title: "Temperature Details" }} />
+        <Drawer.Screen name="sensor/ambient-humidity" options={{ title: "Humidity Details" }} />
+        <Drawer.Screen name="sensor/ph-level" options={{ title: "pH Details" }} />
+        <Drawer.Screen name="sensor/ec-value" options={{ title: "EC Details" }} />
+      </Drawer>
+    </GestureHandlerRootView>
+  );
+}
+
+const styles = StyleSheet.create({
+  headerContainer: { backgroundColor: "#2E7D32", paddingBottom: 0 },
+  headerTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  headerIconButton: { padding: 6, position: "relative" },
+  headerRightIcons: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  logoContainer: {
+    backgroundColor: "rgba(255,255,255,0.15)",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  notificationBadge: {
+    position: "absolute",
+    top: 2,
+    right: 2,
+    backgroundColor: "#F44336",
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 3,
+  },
+  notificationBadgeText: { color: "#FFF", fontSize: 9, fontWeight: "700" },
+  heroSection: { position: "relative", width: "100%" },
+  heroImage: { width: "100%", height: "100%", position: "absolute" },
+  heroContent: { padding: 12, paddingTop: 8, paddingBottom: 12 },
+  weatherTimeRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 8,
+  },
+  weatherInfo: { flexDirection: "row", alignItems: "center", gap: 8 },
+  weatherIcon: { fontSize: 28 },
+  weatherTemp: { fontSize: 18, fontWeight: "700", color: "#FFF" },
+  weatherCondition: { fontSize: 11, color: "rgba(255,255,255,0.9)" },
+  timeInfo: { alignItems: "flex-end" },
+  timeText: { fontSize: 20, fontWeight: "700", color: "#FFF" },
+  dateText: { fontSize: 11, color: "rgba(255,255,255,0.9)", marginTop: 2 },
+  greetingContainer: { alignItems: "center", marginBottom: 8 },
+  greetingText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#FFF",
+    marginBottom: 2,
+  },
+  greetingSubtext: { fontSize: 11, color: "rgba(255,255,255,0.9)" },
+  quickStats: {
+    flexDirection: "row",
+    backgroundColor: "rgba(255,255,255,0.15)",
+    borderRadius: 12,
+    padding: 8,
+    justifyContent: "space-around",
+  },
+  statItem: { alignItems: "center", gap: 2 },
+  statValue: { fontSize: 14, fontWeight: "700", color: "#FFF" },
+  statLabel: { fontSize: 9, color: "rgba(255,255,255,0.9)" },
+  statDivider: { width: 1, backgroundColor: "rgba(255,255,255,0.2)" },
+  drawerContainer: { flex: 1 },
+  scrollContent: { flexGrow: 1 },
+  drawerHeader: {
+    paddingTop: 32,
+    paddingBottom: 16,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    marginBottom: 4,
+  },
+  drawerLogoContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginLeft: 8,
+    gap: 18,
+    flexWrap: "nowrap",
+  },
+  drawerLogoCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    justifyContent: "center",
+    alignItems: "center",
+    overflow: "hidden",
+  },
+  drawerBrandText: {
+    fontSize: 22,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+  },
+  drawerMenu: { paddingHorizontal: 12, paddingBottom: 16 },
+  drawerSectionTitle: {
+    fontSize: 10,
+    fontWeight: "600",
+    marginTop: 12,
+    marginBottom: 6,
+    marginLeft: 8,
+    letterSpacing: 0.5,
+  },
+  drawerItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    gap: 10,
+  },
+  drawerIconWrapper: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  drawerItemText: { fontSize: 13, fontWeight: "500" },
+  footerSection: { marginTop: 20, paddingHorizontal: 12 },
+  footerDivider: { height: 1, marginVertical: 12 },
+  logoutButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    gap: 10,
+    marginBottom: 8,
+  },
+  logoutText: { fontSize: 13, fontWeight: "600", color: "#F44336" },
+});
