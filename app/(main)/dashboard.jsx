@@ -2,12 +2,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Dimensions,
-  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -17,7 +16,6 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 // ✅ CORRECT - Components from root components/ folder
-import { AlertList } from '../../components/AlertList';
 import { DeviceStatusSummary } from '../../components/DeviceStatusSummary';
 
 // ✅ CORRECT - Context from src/context/
@@ -106,20 +104,65 @@ function CircularProgress({ value, size = 70, color = "#4CAF50", maxValue = 100 
 }
 
 // ── Connection status dot ─────────────────────────────────────────────────────
-function ConnectionDot({ connected, isOffline }) {
-  return (
-    <View style={styles.connectionRow}>
-      <View
-        style={[
-          styles.connectionDot,
-          { backgroundColor: isOffline ? "#F44336" : connected ? "#4CAF50" : "#FF9800" },
-        ]}
-      />
-      <Text style={styles.connectionLabel}>
-        {isOffline ? "Device Offline" : connected ? "Live" : "Connecting…"}
-      </Text>
-    </View>
-  );
+function ConnectionDot({ connectionState, hasReceivedData, hasEverBeenOnline }) {
+  // ✅ If no data ever received - show "Waiting" (Orange)
+  if (!hasEverBeenOnline) {
+    return (
+      <View style={styles.connectionRow}>
+        <View style={[styles.connectionDot, { backgroundColor: '#FF9800' }]} />
+        <Text style={styles.connectionLabel}>Waiting...</Text>
+      </View>
+    );
+  }
+
+  // ✅ If data received before but no data in current session - show "Waiting" (Orange)
+  if (!hasReceivedData && hasEverBeenOnline) {
+    return (
+      <View style={styles.connectionRow}>
+        <View style={[styles.connectionDot, { backgroundColor: '#FF9800' }]} />
+        <Text style={styles.connectionLabel}>Waiting...</Text>
+      </View>
+    );
+  }
+
+  // ✅ Show based on connection state
+  switch (connectionState) {
+    case 'online':
+      return (
+        <View style={styles.connectionRow}>
+          <View style={[styles.connectionDot, { backgroundColor: '#4CAF50' }]} />
+          <Text style={styles.connectionLabel}>Online</Text>
+        </View>
+      );
+    case 'waiting':
+      return (
+        <View style={styles.connectionRow}>
+          <View style={[styles.connectionDot, { backgroundColor: '#FF9800' }]} />
+          <Text style={styles.connectionLabel}>Waiting...</Text>
+        </View>
+      );
+    case 'offline':
+      return (
+        <View style={styles.connectionRow}>
+          <View style={[styles.connectionDot, { backgroundColor: '#F44336' }]} />
+          <Text style={styles.connectionLabel}>Offline</Text>
+        </View>
+      );
+    case 'connecting':
+      return (
+        <View style={styles.connectionRow}>
+          <View style={[styles.connectionDot, { backgroundColor: '#FFC107' }]} />
+          <Text style={styles.connectionLabel}>Connecting...</Text>
+        </View>
+      );
+    default:
+      return (
+        <View style={styles.connectionRow}>
+          <View style={[styles.connectionDot, { backgroundColor: '#9E9E9E' }]} />
+          <Text style={styles.connectionLabel}>Disconnected</Text>
+        </View>
+      );
+  }
 }
 
 // ── Helper ────────────────────────────────────────────────────────────────────
@@ -167,44 +210,50 @@ export default function Dashboard() {
 
   const { theme } = useTheme();
   const { user } = useAuth();
-const {
-  sensorData,
-  isConnected,
-  hasReceivedData,
-  deviceStatus,
-  actuatorStatus,
-  toggleDeviceStatus,
-  deviceConfig,
-  publishConfig,
-  deviceStatusFlags,
-  connectionState,
-  externalKey,
-  activeDeviceId,  // ✅ YEH ADD KARO
-} = useMqtt();
+  
+  const {
+    sensorData,
+    isConnected,
+    hasReceivedData,
+    deviceStatus,
+    actuatorStatus,
+    toggleDeviceStatus,
+    deviceConfig,
+    publishConfig,
+    deviceStatusFlags,
+    connectionState,
+    externalKey,
+    activeDeviceId,
+    hasEverBeenOnline,
+  } = useMqtt();
 
   const {
     isManualMode,
     isModeLoaded,
     checkBeforeActuator,
     modeDisplay,
+    switchToManual,
+    switchToAuto,
   } = useSystemMode();
 
-  // ✅ Extract both addAlert AND alerts
-  const { addAlert, alerts } = useAlerts();
+  const { addAlert } = useAlerts();
 
   const [pumpStatus, setPumpStatus] = useState("OFF");
   const [isPublishing, setIsPublishing] = useState(false);
   const [optimisticPumpStatus, setOptimisticPumpStatus] = useState(null);
   const [isSwitchingMode, setIsSwitchingMode] = useState(false);
   const [modeSwitchPending, setModeSwitchPending] = useState(false);
-  const [showAlerts, setShowAlerts] = useState(false);
   const [pumpToggleTime, setPumpToggleTime] = useState(null);
+  const pendingActionRef = useRef(null);
 
   // ── Get display status ──────────────────────────────────────────────────
   const displayStatus = getDisplayStatus(deviceStatusFlags);
 
   // ── Check if device is offline ──────────────────────────────────────────
-  const isOffline = deviceStatus === 0 || connectionState === 'disconnected' || connectionState === 'idle';
+  const isOffline = connectionState === 'offline';
+
+  // ── Check if publish is allowed ─────────────────────────────────────────
+  const canPublish = isConnected && hasReceivedData && isManualMode && !isSwitchingMode;
 
   // ── Update pump status from actuatorStatus ──────────────────────────────
   useEffect(() => {
@@ -227,7 +276,7 @@ const {
         );
       }
     }
-  }, [actuatorStatus]);
+  }, [actuatorStatus, addAlert]);
 
   // ── Monitor deviceConfig for mode switch confirmation ────────────────────
   useEffect(() => {
@@ -236,13 +285,21 @@ const {
         console.log("✅ Mode switch confirmed - Now in MANUAL mode");
         setModeSwitchPending(false);
         setIsSwitchingMode(false);
-        performPumpToggle();
+        
+        // ✅ After mode switch, perform the pending action
+        if (pendingActionRef.current) {
+          const action = pendingActionRef.current;
+          pendingActionRef.current = null;
+          if (action === 'togglePump') {
+            performPumpToggle();
+          }
+        }
       }
     }
   }, [deviceConfig, modeSwitchPending]);
 
-  // ── SWITCH TO MANUAL MODE ──────────────────────────────────────────────────
-  const switchToManualMode = useCallback(async () => {
+  // ── SWITCH TO MANUAL MODE WITH CALLBACK ──────────────────────────────────
+  const switchToManualModeWithCallback = useCallback(async (callback) => {
     if (isSwitchingMode || isPublishing) return;
 
     if (isOffline) {
@@ -256,7 +313,6 @@ const {
     }
 
     setIsSwitchingMode(true);
-    setIsPublishing(true);
     setModeSwitchPending(true);
 
     try {
@@ -269,12 +325,16 @@ const {
       const success = await publishConfig(manualModeConfig);
 
       if (success) {
-        addAlert(
-          'mode',
-          '🔄 System Mode: MANUAL',
-          `System mode changed to MANUAL at ${new Date().toLocaleTimeString()}`,
-          'info'
+        pendingActionRef.current = callback;
+        
+        Alert.alert(
+          "🔄 Switching Mode",
+          "Switching to MANUAL mode...\n\n" +
+          "Please wait for confirmation from the device.\n" +
+          "Your action will be performed automatically after mode switch.",
+          [{ text: "OK" }]
         );
+        
         return true;
       } else {
         setModeSwitchPending(false);
@@ -287,10 +347,8 @@ const {
       setModeSwitchPending(false);
       setIsSwitchingMode(false);
       return false;
-    } finally {
-      setIsPublishing(false);
     }
-  }, [isSwitchingMode, isPublishing, isOffline, deviceConfig, publishConfig, addAlert]);
+  }, [isSwitchingMode, isPublishing, isOffline, deviceConfig, publishConfig]);
 
   // ── PERFORM PUMP TOGGLE ─────────────────────────────────────────────────────
   const performPumpToggle = useCallback(async () => {
@@ -335,7 +393,7 @@ const {
     }
   }, [actuatorStatus, isPublishing, isOffline, toggleDeviceStatus, addAlert]);
 
-  // ── PUMP CONTROL ──────────────────────────────────────────────────────────
+  // ── PUMP CONTROL WITH MODE CHECK ──────────────────────────────────────────
   const togglePump = useCallback(async () => {
     if (isPublishing || isSwitchingMode) return;
 
@@ -344,20 +402,38 @@ const {
       return;
     }
 
+    // ✅ Check if in AUTO mode - Show popup with option to switch
     if (!isManualMode && isModeLoaded) {
       Alert.alert(
         "🤖 Auto Mode Active",
         "Cannot control pump while system is in AUTO mode.\n\n" +
-        "Would you like to switch to MANUAL mode to control the pump?",
+        "Current Mode: AUTO\n" +
+        `Report Interval: ${formatDuration(deviceConfig?.report_interval || 120)}\n` +
+        `Sampling Interval: ${formatDuration(deviceConfig?.sampling_interval || 30)}\n\n` +
+        "Please switch to MANUAL mode to control devices.\n\n" +
+        "Select an option below:",
         [
-          { text: "Cancel", style: "cancel" },
-          {
-            text: "Switch to Manual",
-            onPress: async () => {
-              await switchToManualMode();
-            },
+          { 
+            text: "Cancel", 
+            style: "cancel" 
           },
-        ]
+          { 
+            text: "🔧 Switch to Manual Now", 
+            onPress: async () => {
+              // ✅ Directly switch to manual mode
+              await switchToManualModeWithCallback('togglePump');
+            },
+            style: "default"
+          },
+          { 
+            text: "⚙️ Go to Settings", 
+            onPress: () => {
+              router.push("/(main)/settings");
+            },
+            style: "default"
+          }
+        ],
+        { cancelable: true }
       );
       return;
     }
@@ -373,10 +449,16 @@ const {
     isPublishing,
     isSwitchingMode,
     isOffline,
+    deviceConfig,
     checkBeforeActuator,
     performPumpToggle,
-    switchToManualMode,
+    switchToManualModeWithCallback,
   ]);
+
+  // ── Navigate to Settings ──────────────────────────────────────────────────
+  const navigateToSettings = () => {
+    router.push("/(main)/settings");
+  };
 
   const sensorRows = chunkArray(SENSOR_CONFIG, 3);
 
@@ -386,472 +468,425 @@ const {
 
   const displayPumpStatus = optimisticPumpStatus || pumpStatus;
 
-  // ✅ ALWAYS SHOW THE DASHBOARD - No loading/offline screens
   return (
-    <>
-      <ScrollView
-        style={[styles.container, { backgroundColor: theme.colors.background }]}
-        contentContainerStyle={[
-          styles.scrollViewContent,
-          { paddingBottom: 20 + insets.bottom },
-        ]}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* ── Header ────────────────────────────────────────────────────────── */}
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <Text style={[styles.greeting, { color: theme.colors.text }]}>
-              Hello, {u_name} 👋
-            </Text>
-            <Text
-              style={[styles.subtitle, { color: theme.colors.textSecondary }]}
-            >
-              Real-time Farm Analytics Dashboard
-            </Text>
-            <ConnectionDot connected={isConnected} isOffline={isOffline} />
-
-            {isOffline && (
-              <View style={styles.deviceStatusRow}>
-                <View style={[styles.deviceStatusDot, { backgroundColor: '#F44336' }]} />
-                <Text style={[styles.deviceStatusText, { color: '#F44336' }]}>
-                  ● Device Offline
-                </Text>
-              </View>
-            )}
-
-            {isModeLoaded && !isOffline && (
-              <View style={styles.modeStatusRow}>
-                <Text style={[styles.modeStatusLabel, { color: theme.colors.textSecondary }]}>
-                  System Mode:
-                </Text>
-                <Text style={[styles.modeStatusValue, {
-                  color: isManualMode ? '#4CAF50' : '#FF9800',
-                  fontWeight: '700'
-                }]}>
-                  {isManualMode ? '🔧 MANUAL' : '🤖 AUTO'}
-                </Text>
-                {isSwitchingMode && (
-                  <Text style={[styles.modeSwitchingText, { color: '#FF9800' }]}>
-                    ⏳ Switching...
-                  </Text>
-                )}
-              </View>
-            )}
-          </View>
-          <View style={styles.headerRight}>
-            <TouchableOpacity onPress={() => setShowAlerts(true)} style={styles.bellButton}>
-              <Ionicons name="notifications-outline" size={24} color={theme.colors.text} />
-              {alerts && alerts.filter(a => !a.read).length > 0 && (
-                <View style={styles.bellBadge}>
-                  <Text style={styles.bellBadgeText}>
-                    {alerts.filter(a => !a.read).length}
-                  </Text>
-                </View>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => router.push("/(main)/profile")}>
-              <View
-                style={[styles.avatar, { backgroundColor: theme.colors.primary }]}
-              >
-                <Text style={{ color: "#FFF", fontWeight: "700", fontSize: 18 }}>
-                  {user?.name?.charAt(0) || "F"}
-                </Text>
-              </View>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* ── Last updated timestamp ────────────────────────────────────────── */}
-        <Text style={[styles.lastUpdated, { color: theme.colors.textSecondary }]}>
-          {lastUpdatedLabel}
-        </Text>
-
-        {/* ── Device Status Summary ─────────────────────────────────────────── */}
-        <DeviceStatusSummary 
-          onPress={() => setShowAlerts(true)}
-          deviceStatusFlags={deviceStatusFlags}
-          hasReceivedData={hasReceivedData}
-          connectionState={connectionState}
-        />
-
-        {/* ── Water Tank Status ─────────────────────────────────────────────── */}
-        <View style={styles.statsRow}>
-          <View
-            style={[
-              styles.waterTankCard,
-              { backgroundColor: isOffline ? '#999' : theme.colors.primaryLight, flex: 1 },
-            ]}
+    <ScrollView
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
+      contentContainerStyle={[
+        styles.scrollViewContent,
+        { paddingBottom: 20 + insets.bottom },
+      ]}
+      showsVerticalScrollIndicator={false}
+    >
+      {/* ── Header ────────────────────────────────────────────────────────── */}
+      <View style={styles.header}>
+        <View style={styles.headerLeft}>
+          <Text style={[styles.greeting, { color: theme.colors.text }]}>
+            Hello, {u_name} 👋
+          </Text>
+          <Text
+            style={[styles.subtitle, { color: theme.colors.textSecondary }]}
           >
-            <Text style={styles.cardTitle}>Water Tank Status</Text>
-            <View style={styles.tankContent}>
-              <CircularProgress
-                value={sensorData.waterLevel}
-                size={60}
-                color="#FFF"
-                maxValue={100}
-              />
-              <View>
-                <Text style={styles.waterLevelValue}>
-                  {fmt(sensorData.waterLevel)}%
-                </Text>
-                <Text style={styles.capacityText}>Capacity: 5,000 L</Text>
-                {displayStatus.tankLow !== '_ _' && !isOffline && (
-                  <Text style={[styles.tankAlert, { 
-                    color: displayStatus.tankLow === 'YES' ? '#FF5722' : '#4CAF50' 
-                  }]}>
-                    {displayStatus.tankLow === 'YES' ? '⚠️ LOW LEVEL' : '✅ Level OK'}
-                  </Text>
-                )}
-                {isOffline && (
-                  <Text style={[styles.tankAlert, { color: '#FF5722' }]}>
-                    ⚠️ Device Offline
-                  </Text>
-                )}
-              </View>
+            Real-time Farm Analytics Dashboard
+          </Text>
+          
+          <ConnectionDot 
+            connectionState={connectionState}
+            hasReceivedData={hasReceivedData}
+            hasEverBeenOnline={hasEverBeenOnline}
+          />
+
+          {isOffline && hasEverBeenOnline && (
+            <View style={styles.deviceStatusRow}>
+              <View style={[styles.deviceStatusDot, { backgroundColor: '#F44336' }]} />
+              <Text style={[styles.deviceStatusText, { color: '#F44336' }]}>
+                ● Device Offline
+              </Text>
             </View>
-          </View>
+          )}
+
+          {isModeLoaded && !isOffline && (
+            <View style={styles.modeStatusRow}>
+              <Text style={[styles.modeStatusLabel, { color: theme.colors.textSecondary }]}>
+                System Mode:
+              </Text>
+              <Text style={[styles.modeStatusValue, {
+                color: isManualMode ? '#4CAF50' : '#FF9800',
+                fontWeight: '700'
+              }]}>
+                {isManualMode ? '🔧 MANUAL' : '🤖 AUTO'}
+              </Text>
+              {isSwitchingMode && (
+                <Text style={[styles.modeSwitchingText, { color: '#FF9800' }]}>
+                  ⏳ Switching...
+                </Text>
+              )}
+            </View>
+          )}
         </View>
-
-        {/* ── Pump Control ──────────────────────────────────────────────────── */}
-        <View
-          style={[
-            styles.pumpCard,
-            {
-              backgroundColor: isOffline ? '#999' : displayPumpStatus === "ON" ? "#4CAF50" : "#F44336",
-              opacity: isOffline ? 0.6 : 1,
-            },
-          ]}
-        >
-          <View style={styles.pumpHeader}>
-            <View>
-              <Text style={styles.pumpTitle}>Water Pump</Text>
-              {pumpToggleTime && !isOffline && (
-                <Text style={styles.pumpTimeText}>
-                  Last toggle: {pumpToggleTime}
-                </Text>
-              )}
-              {isOffline && (
-                <Text style={styles.pumpTimeText}>
-                  ⚠️ Offline - No control
-                </Text>
-              )}
-            </View>
-
-            {isModeLoaded && !isOffline && (
-              <View style={styles.pumpModeBadge}>
-                <Text style={styles.pumpModeBadgeText}>
-                  {isManualMode ? '🔧 Manual' : '🤖 Auto'}
-                </Text>
-              </View>
-            )}
-
-            <TouchableOpacity
-              style={[
-                styles.pumpButton,
-                (isOffline || isPublishing || isSwitchingMode || !isManualMode) && styles.pumpButtonDisabled,
-              ]}
-              onPress={togglePump}
-              disabled={isOffline || isPublishing || isSwitchingMode || !isManualMode}
+        <View style={styles.headerRight}>
+          <TouchableOpacity onPress={navigateToSettings} style={styles.settingsButton}>
+            <Ionicons name="settings-outline" size={24} color={theme.colors.text} />
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => router.push("/(main)/profile")}>
+            <View
+              style={[styles.avatar, { backgroundColor: theme.colors.primary }]}
             >
-              {isPublishing || isSwitchingMode ? (
-                <ActivityIndicator size="small" color="#FFF" />
-              ) : (
-                <Text style={styles.pumpButtonText}>
-                  {displayPumpStatus === "ON" ? "TURN OFF" : "TURN ON"}
+              <Text style={{ color: "#FFF", fontWeight: "700", fontSize: 18 }}>
+                {user?.name?.charAt(0) || "F"}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* ── Last updated timestamp ────────────────────────────────────────── */}
+      <Text style={[styles.lastUpdated, { color: theme.colors.textSecondary }]}>
+        {lastUpdatedLabel}
+      </Text>
+
+      {/* ── Device Status Summary ─────────────────────────────────────────── */}
+      <DeviceStatusSummary 
+        onPress={() => {}}
+        deviceStatusFlags={deviceStatusFlags}
+        hasReceivedData={hasReceivedData}
+        connectionState={connectionState}
+      />
+
+      {/* ── Water Tank Status ─────────────────────────────────────────────── */}
+      <View style={styles.statsRow}>
+        <View
+          style={[
+            styles.waterTankCard,
+            { backgroundColor: isOffline ? '#999' : theme.colors.primaryLight, flex: 1 },
+          ]}
+        >
+          <Text style={styles.cardTitle}>Water Tank Status</Text>
+          <View style={styles.tankContent}>
+            <CircularProgress
+              value={sensorData.waterLevel}
+              size={60}
+              color="#FFF"
+              maxValue={100}
+            />
+            <View>
+              <Text style={styles.waterLevelValue}>
+                {fmt(sensorData.waterLevel)}%
+              </Text>
+              <Text style={styles.capacityText}>Capacity: 5,000 L</Text>
+              {displayStatus.tankLow !== '_ _' && !isOffline && hasReceivedData && (
+                <Text style={[styles.tankAlert, { 
+                  color: displayStatus.tankLow === 'YES' ? '#FF5722' : '#4CAF50' 
+                }]}>
+                  {displayStatus.tankLow === 'YES' ? '⚠️ LOW LEVEL' : '✅ Level OK'}
                 </Text>
               )}
-            </TouchableOpacity>
-          </View>
-          <Text style={styles.pumpStatus}>
-            {isOffline ? "Device Offline" : `Pump is ${displayPumpStatus === "ON" ? "RUNNING" : "OFF"}`}
-            {isPublishing && " (Sending...)"}
-            {isSwitchingMode && " (Switching Mode...)"}
-            {!isManualMode && isModeLoaded && !isOffline && " (Auto Mode)"}
-          </Text>
-          <View style={styles.pumpStats}>
-            <Text style={styles.pumpStatText}>⚡ 2.5 kW</Text>
-            <Text style={styles.pumpStatText}>⏱️ Last run: {pumpToggleTime || 'N/A'}</Text>
-          </View>
-        </View>
-
-        {/* ── Environmental Sensors Grid ────────────────────────────────────── */}
-        <Text
-          style={[
-            styles.sectionTitle,
-            { color: theme.colors.text, marginHorizontal: 16, marginTop: 8 },
-          ]}
-        >
-          Environmental Sensors
-        </Text>
-
-        <View style={styles.sensorsGrid}>
-          {sensorRows.map((row, rowIndex) => (
-            <View key={rowIndex} style={styles.sensorRow}>
-              {row.map((sensor) => {
-                const liveValue = sensorData[sensor.dataKey];
-                return (
-                  <TouchableOpacity
-                    key={sensor.id}
-                    style={[
-                      styles.sensorCardSquare,
-                      {
-                        backgroundColor: theme.colors.card,
-                        borderColor: isOffline ? '#ccc' : theme.colors.border,
-                      },
-                    ]}
-                    onPress={() => router.push(sensor.route)}
-                    activeOpacity={0.7}
-                  >
-                    <CircularProgress
-                      value={liveValue}
-                      size={50}
-                      color={isOffline ? '#999' : sensor.color}
-                      maxValue={sensor.maxValue || 100}
-                    />
-
-                    <Text
-                      style={[styles.sensorName, { color: isOffline ? '#999' : theme.colors.text }]}
-                      numberOfLines={1}
-                    >
-                      {sensor.name}
-                    </Text>
-
-                    <Text
-                      style={[styles.sensorValue, { color: isOffline ? '#999' : sensor.color }]}
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                    >
-                      {fmt(liveValue)}
-                      {liveValue !== null && liveValue !== undefined && sensor.unit}
-                    </Text>
-
-                    <Text
-                      style={[styles.clickText, { color: isOffline ? '#999' : theme.colors.primary }]}
-                    >
-                      tap for details
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-
-              {row.length < 3 &&
-                Array(3 - row.length)
-                  .fill(null)
-                  .map((_, i) => (
-                    <View
-                      key={`empty-${i}`}
-                      style={styles.sensorCardSquareEmpty}
-                    />
-                  ))}
+              {isOffline && hasEverBeenOnline && (
+                <Text style={[styles.tankAlert, { color: '#FF5722' }]}>
+                  ⚠️ Device Offline
+                </Text>
+              )}
+              {!hasEverBeenOnline && (
+                <Text style={[styles.tankAlert, { color: '#FF9800' }]}>
+                  ⏳ Waiting for device...
+                </Text>
+              )}
             </View>
-          ))}
-        </View>
-
-        {/* ── Quick Summary ─────────────────────────────────────────────────── */}
-        <View
-          style={[
-            styles.quickStatsCard,
-            {
-              backgroundColor: theme.colors.surface,
-              borderColor: theme.colors.border,
-            },
-          ]}
-        >
-          <Text style={[styles.overviewTitle, { color: theme.colors.text }]}>
-            Quick Summary
-          </Text>
-
-          <View style={styles.overviewGrid}>
-            {[
-              {
-                label: "Temp",
-                value: fmt(sensorData.ambientTemperature) + "°",
-                color: isOffline ? '#999' : "#FF5722",
-              },
-              {
-                label: "Humidity",
-                value: fmt(sensorData.ambientHumidity) + "%",
-                color: isOffline ? '#999' : "#2196F3",
-              },
-              { 
-                label: "CO₂", 
-                value: fmt(sensorData.co2Level), 
-                color: isOffline ? '#999' : "#9C27B0" 
-              },
-              { 
-                label: "pH", 
-                value: fmt(sensorData.phValue), 
-                color: isOffline ? '#999' : "#4CAF50" 
-              },
-              {
-                label: "Water",
-                value: fmt(sensorData.waterLevel) + "%",
-                color: isOffline ? '#999' : "#2E7D32",
-              },
-              {
-                label: "Soil",
-                value: fmt(sensorData.soilMoisture) + "%",
-                color: isOffline ? '#999' : "#8BC34A",
-              },
-            ].map((item) => (
-              <View key={item.label} style={styles.overviewItem}>
-                <Text
-                  style={[
-                    styles.overviewLabel,
-                    { color: theme.colors.textSecondary },
-                  ]}
-                >
-                  {item.label}
-                </Text>
-                <Text style={[styles.overviewValue, { color: item.color }]}>
-                  {item.value}
-                </Text>
-              </View>
-            ))}
           </View>
         </View>
+      </View>
 
-        {/* ── Status Flags Quick View ──────────────────────────────────────── */}
-        <View
-          style={[
-            styles.flagCard,
-            {
-              backgroundColor: theme.colors.surface,
-              borderColor: theme.colors.border,
-            },
-          ]}
-        >
-          <Text style={[styles.overviewTitle, { color: theme.colors.text }]}>
-            🚦 Status Flags
-          </Text>
-          <View style={styles.flagGrid}>
-            {[
-              { key: 'tankLow', label: 'Tank Low' },
-              { key: 'tankHigh', label: 'Tank High' },
-              { key: 'waterPump', label: 'Water Pump' },
-              { key: 'nutrientPump', label: 'Nutrient Pump' },
-              { key: 'inletValve', label: 'Inlet Valve' },
-              { key: 'outletValve', label: 'Outlet Valve' },
-              { key: 'mode', label: 'Mode' },
-              { key: 'dimmingLevel', label: 'Dimming' },
-            ].map(item => {
-              const value = displayStatus[item.key];
-              const isOn = value === 'YES' || value === 'ON' || value === 'OPEN' || value === 'AUTO';
-              const isOff = value === 'NO' || value === 'OFF' || value === 'CLOSED' || value === 'MANUAL';
-              const color = isOffline ? '#999' : value === '_ _' ? '#999' : isOn ? '#4CAF50' : isOff ? '#F44336' : '#FF9800';
-              
+      {/* ── Pump Control ──────────────────────────────────────────────────── */}
+      <View
+        style={[
+          styles.pumpCard,
+          {
+            backgroundColor: isOffline ? '#999' : displayPumpStatus === "ON" ? "#4CAF50" : "#F44336",
+            opacity: isOffline || !canPublish ? 0.6 : 1,
+          },
+        ]}
+      >
+        <View style={styles.pumpHeader}>
+          <View>
+            <Text style={styles.pumpTitle}>Water Pump</Text>
+            {pumpToggleTime && !isOffline && hasReceivedData && (
+              <Text style={styles.pumpTimeText}>
+                Last toggle: {pumpToggleTime}
+              </Text>
+            )}
+            {isOffline && hasEverBeenOnline && (
+              <Text style={styles.pumpTimeText}>
+                ⚠️ Offline - No control
+              </Text>
+            )}
+            {!isManualMode && isModeLoaded && !isOffline && hasReceivedData && (
+              <Text style={styles.pumpTimeText}>
+                🔒 Auto Mode - Click to switch
+              </Text>
+            )}
+            {!hasEverBeenOnline && (
+              <Text style={styles.pumpTimeText}>
+                ⏳ Waiting for device...
+              </Text>
+            )}
+          </View>
+
+          {isModeLoaded && !isOffline && hasReceivedData && (
+            <View style={styles.pumpModeBadge}>
+              <Text style={styles.pumpModeBadgeText}>
+                {isManualMode ? '🔧 Manual' : '🤖 Auto'}
+              </Text>
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={[
+              styles.pumpButton,
+              (!canPublish || isPublishing || isSwitchingMode) && styles.pumpButtonDisabled,
+            ]}
+            onPress={togglePump}
+            disabled={!canPublish || isPublishing || isSwitchingMode}
+          >
+            {isPublishing || isSwitchingMode ? (
+              <ActivityIndicator size="small" color="#FFF" />
+            ) : (
+              <Text style={styles.pumpButtonText}>
+                {displayPumpStatus === "ON" ? "TURN OFF" : "TURN ON"}
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.pumpStatus}>
+          {isOffline && hasEverBeenOnline ? "Device Offline" : 
+           !hasEverBeenOnline ? "Waiting for device..." :
+           !hasReceivedData ? "Waiting for data..." :
+           !isManualMode ? "Auto Mode - Switch to Manual to control" :
+           `Pump is ${displayPumpStatus === "ON" ? "RUNNING" : "OFF"}`}
+          {isPublishing && " (Sending...)"}
+          {isSwitchingMode && " (Switching Mode...)"}
+        </Text>
+        <View style={styles.pumpStats}>
+          <Text style={styles.pumpStatText}>⚡ 2.5 kW</Text>
+          <Text style={styles.pumpStatText}>⏱️ Last run: {pumpToggleTime || 'N/A'}</Text>
+        </View>
+      </View>
+
+      {/* ── Environmental Sensors Grid ────────────────────────────────────── */}
+      <Text
+        style={[
+          styles.sectionTitle,
+          { color: theme.colors.text, marginHorizontal: 16, marginTop: 8 },
+        ]}
+      >
+        Environmental Sensors
+      </Text>
+
+      <View style={styles.sensorsGrid}>
+        {sensorRows.map((row, rowIndex) => (
+          <View key={rowIndex} style={styles.sensorRow}>
+            {row.map((sensor) => {
+              const liveValue = sensorData[sensor.dataKey];
+              const hasValue = liveValue !== null && liveValue !== undefined;
               return (
-                <View key={item.key} style={styles.flagItem}>
-                  <Text style={[styles.flagLabel, { color: theme.colors.textSecondary }]}>
-                    {item.label}
+                <TouchableOpacity
+                  key={sensor.id}
+                  style={[
+                    styles.sensorCardSquare,
+                    {
+                      backgroundColor: theme.colors.card,
+                      borderColor: isOffline ? '#ccc' : theme.colors.border,
+                    },
+                  ]}
+                  onPress={() => router.push(sensor.route)}
+                  activeOpacity={0.7}
+                >
+                  <CircularProgress
+                    value={liveValue}
+                    size={50}
+                    color={isOffline || !hasValue ? '#999' : sensor.color}
+                    maxValue={sensor.maxValue || 100}
+                  />
+
+                  <Text
+                    style={[styles.sensorName, { color: isOffline || !hasValue ? '#999' : theme.colors.text }]}
+                    numberOfLines={1}
+                  >
+                    {sensor.name}
                   </Text>
-                  <Text style={[styles.flagValue, { color }]}>
-                    {isOffline ? '_ _' : value}
+
+                  <Text
+                    style={[styles.sensorValue, { color: isOffline || !hasValue ? '#999' : sensor.color }]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                  >
+                    {hasValue ? fmt(liveValue) + sensor.unit : '_ _'}
                   </Text>
-                </View>
+
+                  <Text
+                    style={[styles.clickText, { color: isOffline || !hasValue ? '#999' : theme.colors.primary }]}
+                  >
+                    tap for details
+                  </Text>
+                </TouchableOpacity>
               );
             })}
+
+            {row.length < 3 &&
+              Array(3 - row.length)
+                .fill(null)
+                .map((_, i) => (
+                  <View
+                    key={`empty-${i}`}
+                    style={styles.sensorCardSquareEmpty}
+                  />
+                ))}
           </View>
-        </View>
+        ))}
+      </View>
 
-        {/* ── Recent Alerts ─────────────────────────────────────────────────── */}
-        <View style={styles.alertsSection}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
-            Recent Alerts
-          </Text>
+      {/* ── Quick Summary ─────────────────────────────────────────────────── */}
+      <View
+        style={[
+          styles.quickStatsCard,
+          {
+            backgroundColor: theme.colors.surface,
+            borderColor: theme.colors.border,
+          },
+        ]}
+      >
+        <Text style={[styles.overviewTitle, { color: theme.colors.text }]}>
+          Quick Summary
+        </Text>
 
+        <View style={styles.overviewGrid}>
           {[
             {
-              title: isOffline ? "📡 Device Offline" : displayStatus.tankLow === 'YES' ? "⚠️ Tank Low" : "✅ Tank Level OK",
-              message: isOffline 
-                ? "Device is currently offline. Please check your connection."
-                : displayStatus.tankLow === 'YES' 
-                  ? "Water tank is critically low! Please refill immediately."
-                  : "Water tank level is normal.",
-              color: isOffline ? "#F44336" : displayStatus.tankLow === 'YES' ? "#F44336" : "#4CAF50",
+              label: "Temp",
+              value: fmt(sensorData.ambientTemperature) + "°",
+              color: isOffline ? '#999' : "#FF5722",
             },
             {
-              title: isOffline ? "⏳ Waiting for Data" : displayPumpStatus === "ON" ? "💧 Pump Running" : "💧 Pump Off",
-              message: isOffline
-                ? "No data received from device."
-                : displayPumpStatus === "ON"
-                  ? `Water pump is actively running (Last toggled: ${pumpToggleTime || 'N/A'})`
-                  : `Water pump is currently off (Last toggled: ${pumpToggleTime || 'N/A'})`,
-              color: isOffline ? "#999" : displayPumpStatus === "ON" ? "#4CAF50" : "#F44336",
+              label: "Humidity",
+              value: fmt(sensorData.ambientHumidity) + "%",
+              color: isOffline ? '#999' : "#2196F3",
+            },
+            { 
+              label: "CO₂", 
+              value: fmt(sensorData.co2Level), 
+              color: isOffline ? '#999' : "#9C27B0" 
+            },
+            { 
+              label: "pH", 
+              value: fmt(sensorData.phValue), 
+              color: isOffline ? '#999' : "#4CAF50" 
             },
             {
-              title: isOffline ? "🔴 Disconnected" : `🔧 System Mode: ${displayStatus.mode}`,
-              message: isOffline
-                ? "Device is offline. Reconnecting..."
-                : `System is currently in ${displayStatus.mode} mode. ${displayStatus.mode === 'AUTO' ? 'Automatic controls are active.' : 'Manual controls are available.'}`,
-              color: isOffline ? "#F44336" : displayStatus.mode === 'AUTO' ? "#FF9800" : "#4CAF50",
+              label: "Water",
+              value: fmt(sensorData.waterLevel) + "%",
+              color: isOffline ? '#999' : "#2E7D32",
             },
-          ].map((alertItem) => (
-            <TouchableOpacity
-              key={alertItem.title}
-              style={[
-                styles.alertCard,
-                {
-                  backgroundColor: theme.colors.surface,
-                  borderLeftColor: alertItem.color,
-                },
-              ]}
-              onPress={() => setShowAlerts(true)}
-            >
-              <Text style={[styles.alertTitle, { color: theme.colors.text }]}>
-                {alertItem.title}
-              </Text>
+            {
+              label: "Soil",
+              value: fmt(sensorData.soilMoisture) + "%",
+              color: isOffline ? '#999' : "#8BC34A",
+            },
+          ].map((item) => (
+            <View key={item.label} style={styles.overviewItem}>
               <Text
                 style={[
-                  styles.alertMessage,
+                  styles.overviewLabel,
                   { color: theme.colors.textSecondary },
                 ]}
               >
-                {alertItem.message}
+                {item.label}
               </Text>
-            </TouchableOpacity>
+              <Text style={[styles.overviewValue, { color: item.color }]}>
+                {item.value}
+              </Text>
+            </View>
           ))}
         </View>
+      </View>
 
-        {/* ── Debug Section ─────────────────────────────────────────────────── */}
-        <View style={[styles.debugSection, { 
-          backgroundColor: theme.colors.surface,
-          borderColor: theme.colors.border,
-        }]}>
-          <Text style={[styles.debugTitle, { color: theme.colors.text }]}>
-            🔍 Debug Info
-          </Text>
-          <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-            Connected: {isConnected ? '✅ Yes' : '❌ No'}
-          </Text>
-          <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-            Has Data: {hasReceivedData ? '✅ Yes' : '❌ No'}
-          </Text>
-          <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-            Device Status: {deviceStatus !== null ? deviceStatus : '_ _'}
-          </Text>
-          <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-            External Key: {externalKey || '_ _'}
-          </Text>
-          <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-            Connection State: {connectionState || '_ _'}
-          </Text>
-          <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-            Device ID: {activeDeviceId || '_ _'}
-          </Text>
-        </View>
-      </ScrollView>
-
-      {/* ── Alert Modal ────────────────────────────────────────────────────── */}
-      <Modal
-        visible={showAlerts}
-        animationType="slide"
-        presentationStyle="fullScreen"
-        onRequestClose={() => setShowAlerts(false)}
+      {/* ── Status Flags Quick View ──────────────────────────────────────── */}
+      <View
+        style={[
+          styles.flagCard,
+          {
+            backgroundColor: theme.colors.surface,
+            borderColor: theme.colors.border,
+          },
+        ]}
       >
-        <AlertList onClose={() => setShowAlerts(false)} />
-      </Modal>
-    </>
+        <Text style={[styles.overviewTitle, { color: theme.colors.text }]}>
+          🚦 Status Flags
+        </Text>
+        <View style={styles.flagGrid}>
+          {[
+            { key: 'tankLow', label: 'Tank Low' },
+            { key: 'tankHigh', label: 'Tank High' },
+            { key: 'waterPump', label: 'Water Pump' },
+            { key: 'nutrientPump', label: 'Nutrient Pump' },
+            { key: 'inletValve', label: 'Inlet Valve' },
+            { key: 'outletValve', label: 'Outlet Valve' },
+            { key: 'mode', label: 'Mode' },
+            { key: 'dimmingLevel', label: 'Dimming' },
+          ].map(item => {
+            const value = displayStatus[item.key];
+            const isOn = value === 'YES' || value === 'ON' || value === 'OPEN' || value === 'AUTO';
+            const isOff = value === 'NO' || value === 'OFF' || value === 'CLOSED' || value === 'MANUAL';
+            const color = isOffline || !hasReceivedData ? '#999' : value === '_ _' ? '#999' : isOn ? '#4CAF50' : isOff ? '#F44336' : '#FF9800';
+            
+            return (
+              <View key={item.key} style={styles.flagItem}>
+                <Text style={[styles.flagLabel, { color: theme.colors.textSecondary }]}>
+                  {item.label}
+                </Text>
+                <Text style={[styles.flagValue, { color }]}>
+                  {!hasReceivedData ? '_ _' : value}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+      </View>
+
+      {/* ── Debug Section ─────────────────────────────────────────────────── */}
+      <View style={[styles.debugSection, { 
+        backgroundColor: theme.colors.surface,
+        borderColor: theme.colors.border,
+      }]}>
+        <Text style={[styles.debugTitle, { color: theme.colors.text }]}>
+          🔍 Debug Info
+        </Text>
+        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
+          Connected: {isConnected ? '✅ Yes' : '❌ No'}
+        </Text>
+        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
+          Has Data: {hasReceivedData ? '✅ Yes' : '❌ No'}
+        </Text>
+        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
+          Ever Online: {hasEverBeenOnline ? '✅ Yes' : '❌ No'}
+        </Text>
+        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
+          Connection State: {connectionState || '_ _'}
+        </Text>
+        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
+          External Key: {externalKey || '_ _'}
+        </Text>
+        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
+          Device ID: {activeDeviceId || '_ _'}
+        </Text>
+        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
+          Mode: {isManualMode ? 'MANUAL' : 'AUTO'}
+        </Text>
+        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
+          Can Publish: {canPublish ? '✅ Yes' : '❌ No'}
+        </Text>
+        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
+          Device Status: {deviceStatus !== null ? deviceStatus : '_ _'}
+        </Text>
+      </View>
+    </ScrollView>
   );
 }
 
@@ -877,6 +912,9 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingTop: 4,
   },
+  settingsButton: {
+    padding: 4,
+  },
   greeting: { fontSize: 24, fontWeight: "800" },
   subtitle: { fontSize: 13, marginTop: 2 },
   avatar: {
@@ -885,27 +923,6 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     justifyContent: "center",
     alignItems: "center",
-  },
-  bellButton: {
-    position: 'relative',
-    padding: 4,
-  },
-  bellBadge: {
-    position: 'absolute',
-    top: -2,
-    right: -4,
-    backgroundColor: '#F44336',
-    borderRadius: 10,
-    minWidth: 18,
-    height: 18,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 4,
-  },
-  bellBadgeText: {
-    color: '#FFF',
-    fontSize: 10,
-    fontWeight: '700',
   },
 
   connectionRow: {
@@ -1093,16 +1110,6 @@ const styles = StyleSheet.create({
     transform: [{ rotate: "-45deg" }],
   },
   circularText: { fontWeight: "bold", zIndex: 1 },
-
-  alertsSection: { marginTop: 12, marginBottom: 20, paddingHorizontal: 16 },
-  alertCard: {
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 8,
-    borderLeftWidth: 3,
-  },
-  alertTitle: { fontSize: 13, fontWeight: "600", marginBottom: 2 },
-  alertMessage: { fontSize: 11 },
 
   flagCard: {
     marginHorizontal: 16,

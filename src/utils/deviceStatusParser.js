@@ -1,8 +1,32 @@
-// src/utils/deviceStatusParser.js
 /**
  * Device Status Parser Utility
  * Parses 32-bit device status flags from the device
  * All values default to '_ _' when no data available
+ * 
+ * 32-bit Status Bit Mapping:
+ * Bit 0:   tank_low      (0x00000001)
+ * Bit 1:   tank_high     (0x00000002)
+ * Bit 2:   ec_high       (0x00000004)
+ * Bit 3:   ec_low        (0x00000008)
+ * Bit 4:   ph_high       (0x00000010)
+ * Bit 5:   ph_low        (0x00000020)
+ * Bit 6:   lux_low       (0x00000040)
+ * Bit 7:   lux_high      (0x00000080)
+ * Bit 8:   co2_high      (0x00000100)
+ * Bit 9:   co2_low       (0x00000200)
+ * Bit 10:  inlet_valve   (0x00000400)  - 1=OPEN, 0=CLOSED
+ * Bit 11:  outlet_valve  (0x00000800)  - 1=OPEN, 0=CLOSED
+ * Bit 12:  water_pump    (0x00001000)  - 1=ON, 0=OFF
+ * Bit 13:  nutrient_pump (0x00002000)  - 1=ON, 0=OFF
+ * Bit 14:  ac_status     (0x00004000)  - 1=ON, 0=OFF
+ * Bit 15:  reboot_ok     (0x00008000)  - 1=ACK, 0=NO
+ * Bit 16:  mode          (0x00010000)  - 1=AUTO, 0=MANUAL
+ * Bit 17:  online        (0x00020000)  - 1=ONLINE, 0=OFFLINE
+ * Bit 18:  buzzer_status (0x00040000)  - 1=ON, 0=OFF
+ * Bit 19:  spare_bit1    (0x00080000)  - RESERVED
+ * Bit 20-23: sensor_fault (0x00F00000) - 4 bits fault code
+ * Bit 24-30: dimming_level (0x7F000000) - 7 bits (0-127)
+ * Bit 31:  spare_bit2    (0x80000000)  - RESERVED
  */
 
 /**
@@ -19,6 +43,7 @@ export const parseDeviceStatus = (statusValue) => {
   const status = statusValue >>> 0;
 
   return {
+    // ── STATUS FLAGS (Bit 0-18) ──
     // Bit 0: Tank Low (0x00000001)
     tankLow: !!(status & 0x00000001),
     // Bit 1: Tank High (0x00000002)
@@ -39,26 +64,32 @@ export const parseDeviceStatus = (statusValue) => {
     co2High: !!(status & 0x00000100),
     // Bit 9: CO2 Low (0x00000200)
     co2Low: !!(status & 0x00000200),
-    // Bit 10-11: Inlet Valve (0x00000C00) - 2 bits
-    inletValve: (status >> 10) & 0x03, // 0=CLOSED, 1=OPEN, 2=ERROR
-    // Bit 12-13: Outlet Valve (0x00003000) - 2 bits
-    outletValve: (status >> 12) & 0x03,
-    // Bit 14: Water Pump (0x00004000)
-    waterPump: !!(status & 0x00004000),
-    // Bit 15: Nutrient Pump (0x00008000)
-    nutrientPump: !!(status & 0x00008000),
-    // Bit 16: AC Status (0x00010000)
-    acStatus: !!(status & 0x00010000),
-    // Bit 17: Reboot ACK (0x00020000)
-    rebootAck: !!(status & 0x00020000),
-    // Bit 18: Buzzer (0x00040000)
+    // Bit 10: Inlet Valve (0x00000400) - 1=OPEN, 0=CLOSED
+    inletValve: !!(status & 0x00000400),
+    // Bit 11: Outlet Valve (0x00000800) - 1=OPEN, 0=CLOSED
+    outletValve: !!(status & 0x00000800),
+    // Bit 12: Water Pump (0x00001000) - 1=ON, 0=OFF
+    waterPump: !!(status & 0x00001000),
+    // Bit 13: Nutrient Pump (0x00002000) - 1=ON, 0=OFF
+    nutrientPump: !!(status & 0x00002000),
+    // Bit 14: AC Status (0x00004000) - 1=ON, 0=OFF
+    acStatus: !!(status & 0x00004000),
+    // Bit 15: Reboot ACK (0x00008000) - 1=ACK, 0=NO
+    rebootAck: !!(status & 0x00008000),
+    // Bit 16: Mode (0x00010000) - 1=AUTO, 0=MANUAL
+    mode: !!(status & 0x00010000),
+    // Bit 17: Online (0x00020000) - 1=ONLINE, 0=OFFLINE
+    online: !!(status & 0x00020000),
+    // Bit 18: Buzzer (0x00040000) - 1=ON, 0=OFF
     buzzer: !!(status & 0x00040000),
-    // Bit 19-20: Mode (0x00180000) - 2 bits
-    mode: (status >> 19) & 0x03, // 0=MANUAL, 1=AUTO, 2=SCHEDULE
-    // Bit 21-24: Sensor Fault (0x01E00000) - 4 bits
-    sensorFault: (status >> 21) & 0x0F,
-    // Bit 25-31: Dimming Level (0xFE000000) - 7 bits (0-100)
-    dimmingLevel: (status >> 25) & 0x7F,
+    // Bit 19: spare_bit1 (0x00080000) - RESERVED
+    spareBit1: !!(status & 0x00080000),
+    // Bit 20-23: Sensor Fault (0x00F00000) - 4 bits
+    sensorFault: (status >> 20) & 0x0F,
+    // Bit 24-30: Dimming Level (0x7F000000) - 7 bits (0-127)
+    dimmingLevel: (status >> 24) & 0x7F,
+    // Bit 31: spare_bit2 (0x80000000) - RESERVED
+    spareBit2: !!(status & 0x80000000),
     // Raw status for debugging
     rawStatus: `0x${status.toString(16).padStart(8, '0').toUpperCase()}`,
   };
@@ -84,10 +115,13 @@ export const getDefaultDeviceStatus = () => ({
   nutrientPump: null,
   acStatus: null,
   rebootAck: null,
-  buzzer: null,
   mode: null,
+  online: null,
+  buzzer: null,
+  spareBit1: null,
   sensorFault: null,
   dimmingLevel: null,
+  spareBit2: null,
   rawStatus: null,
 });
 
@@ -109,25 +143,30 @@ export const getDisplayStatus = (status) => {
     co2High: status.co2High !== null ? (status.co2High ? 'YES' : 'NO') : '_ _',
     co2Low: status.co2Low !== null ? (status.co2Low ? 'YES' : 'NO') : '_ _',
     inletValve: status.inletValve !== null 
-      ? ['CLOSED', 'OPEN', 'ERROR'][status.inletValve] || 'ERROR' 
+      ? (status.inletValve ? 'OPEN' : 'CLOSED') 
       : '_ _',
     outletValve: status.outletValve !== null 
-      ? ['CLOSED', 'OPEN', 'ERROR'][status.outletValve] || 'ERROR' 
+      ? (status.outletValve ? 'OPEN' : 'CLOSED') 
       : '_ _',
     waterPump: status.waterPump !== null ? (status.waterPump ? 'ON' : 'OFF') : '_ _',
     nutrientPump: status.nutrientPump !== null ? (status.nutrientPump ? 'ON' : 'OFF') : '_ _',
     acStatus: status.acStatus !== null ? (status.acStatus ? 'ON' : 'OFF') : '_ _',
     rebootAck: status.rebootAck !== null ? (status.rebootAck ? 'YES' : 'NO') : '_ _',
-    buzzer: status.buzzer !== null ? (status.buzzer ? 'ON' : 'OFF') : '_ _',
     mode: status.mode !== null 
-      ? ['MANUAL', 'AUTO', 'SCHEDULE'][status.mode] || 'UNKNOWN' 
+      ? (status.mode ? 'AUTO' : 'MANUAL') 
       : '_ _',
+    online: status.online !== null 
+      ? (status.online ? 'ONLINE' : 'OFFLINE') 
+      : '_ _',
+    buzzer: status.buzzer !== null ? (status.buzzer ? 'ON' : 'OFF') : '_ _',
+    spareBit1: status.spareBit1 !== null ? (status.spareBit1 ? 'YES' : 'NO') : '_ _',
     sensorFault: status.sensorFault !== null 
-      ? `0x${status.sensorFault.toString(16).padStart(2, '0')}` 
+      ? `0x${status.sensorFault.toString(16).padStart(1, '0')}` 
       : '_ _',
     dimmingLevel: status.dimmingLevel !== null 
       ? `${Math.round((status.dimmingLevel / 127) * 100)}%` 
       : '_ _',
+    spareBit2: status.spareBit2 !== null ? (status.spareBit2 ? 'YES' : 'NO') : '_ _',
     rawStatus: status.rawStatus || '_ _',
   };
 };
@@ -152,10 +191,13 @@ export const getDefaultDisplayStatus = () => ({
   nutrientPump: '_ _',
   acStatus: '_ _',
   rebootAck: '_ _',
-  buzzer: '_ _',
   mode: '_ _',
+  online: '_ _',
+  buzzer: '_ _',
+  spareBit1: '_ _',
   sensorFault: '_ _',
   dimmingLevel: '_ _',
+  spareBit2: '_ _',
   rawStatus: '_ _',
 });
 
@@ -181,4 +223,34 @@ export const formatValue = (value, options = {}) => {
   }
   
   return String(value);
+};
+
+/**
+ * Check if device is online based on status
+ */
+export const isDeviceOnline = (status) => {
+  if (!status || status.online === null || status.online === undefined) {
+    return false;
+  }
+  return status.online === true;
+};
+
+/**
+ * Check if device is in AUTO mode
+ */
+export const isAutoMode = (status) => {
+  if (!status || status.mode === null || status.mode === undefined) {
+    return false;
+  }
+  return status.mode === true;
+};
+
+/**
+ * Check if device is in MANUAL mode
+ */
+export const isManualMode = (status) => {
+  if (!status || status.mode === null || status.mode === undefined) {
+    return false;
+  }
+  return status.mode === false;
 };

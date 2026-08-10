@@ -1,5 +1,7 @@
 // app/(auth)/signup.jsx
+import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
 import { useRef, useState } from "react";
 import {
@@ -17,19 +19,38 @@ import {
   TouchableWithoutFeedback,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import Logo from "../../components/Logo";
 import { useAuth } from "../../src/context/AuthContext";
 import { useTheme } from "../../src/context/ThemContext";
 import { updateUser } from "../../src/services/api";
-import { Register } from "../../src/services/Getstartedservices";
+import { getstarted, Register } from "../../src/services/Getstartedservices";
 import { group_creat, groupview } from "../../src/services/groups/groups";
 import { orgscreated, vieworgs } from "../../src/services/organization/orgs";
 import { profile_creat } from "../../src/services/profile/profile";
 import { TwilioService } from "../../src/services/TwilioService";
 
+const PASSWORD_REGEX =
+  /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>]).{8,}$/;
+
+// Small inline checklist item used for live password requirements
+const PasswordRequirement = ({ label, met, color }) => (
+  <View style={styles.requirement}>
+    <Ionicons
+      name={met ? "checkmark-circle" : "ellipse-outline"}
+      size={15}
+      color={met ? "#388E3C" : color}
+    />
+    <Text style={[styles.requirementText, { color: met ? "#388E3C" : color }]}>
+      {label}
+    </Text>
+  </View>
+);
+
 export default function SignupScreen() {
   const { theme } = useTheme();
   const { signupLogin } = useAuth(); // ✅ Use signupLogin instead of login
-  
+
   const [name, setName] = useState("");
   const [mobileNumber, setMobileNumber] = useState("");
   const [email, setEmail] = useState("");
@@ -43,6 +64,11 @@ export default function SignupScreen() {
   const [isResending, setIsResending] = useState(false);
   const [otpStatus, setOtpStatus] = useState("");
 
+  // UI state
+  const [focusedField, setFocusedField] = useState(null);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
   const inputRefs = useRef([]);
   const scrollViewRef = useRef(null);
 
@@ -53,6 +79,14 @@ export default function SignupScreen() {
   let emailInputRef = null;
   let passwordInputRef = null;
   let confirmPasswordInputRef = null;
+
+  // Live password requirement checks (mirrors PASSWORD_REGEX)
+  const hasMinLength = password.length >= 8;
+  const hasUppercase = /[A-Z]/.test(password);
+  const hasNumber = /\d/.test(password);
+  const hasSpecial = /[!@#$%^&*(),.?":{}|<>]/.test(password);
+  const passwordsMatch =
+    confirmPassword.length > 0 && password === confirmPassword;
 
   const handleSendOtp = async () => {
     if (!name.trim()) {
@@ -71,10 +105,8 @@ export default function SignupScreen() {
       Alert.alert("Error", "Please enter a password");
       return;
     }
-    const passwordRegex =
-      /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*(),.?":{}|<>]).{8,}$/;
 
-    if (!passwordRegex.test(password)) {
+    if (!PASSWORD_REGEX.test(password)) {
       Alert.alert(
         "Invalid Password",
         "Password must contain:\n\n• Minimum 8 characters\n• At least 1 uppercase letter\n• At least 1 number\n• At least 1 special character (!@#$%^&*)",
@@ -198,8 +230,14 @@ export default function SignupScreen() {
 
   const completeRegistration = async () => {
     console.log("📝 Starting registration process...");
-    
     try {
+      await getstarted();
+      try {
+        await AsyncStorage.setItem("hasSeenOnboarding", "true");
+        await AsyncStorage.setItem("userIntent", "signup");
+      } catch (error) {
+        console.error("Error saving:", error);
+      }
       // 1. Register user
       console.log("📝 Step 1: Registering user...");
       const response = await Register(email, password);
@@ -212,12 +250,14 @@ export default function SignupScreen() {
       // ✅ Step 2: Use signupLogin (sets isSignupFlow flag to prevent auto-redirect)
       console.log("📝 Step 2: Signup login via AuthContext...");
       const loginResult = await signupLogin(email, password);
-      
+
       if (!loginResult || !loginResult.success) {
-        throw new Error("Login failed: " + (loginResult?.error || "Unknown error"));
+        throw new Error(
+          "Login failed: " + (loginResult?.error || "Unknown error"),
+        );
       }
       console.log("✅ Signup login successful, isSignupFlow set to true");
-      
+
       // ✅ Step 3: Update user profile
       console.log("📝 Step 3: Updating user profile...");
       await updateUser(name, email, mobileNumber, password);
@@ -266,14 +306,18 @@ export default function SignupScreen() {
       console.log("📝 Step 8: Creating profile...");
       const profileResponse = await profile_creat(groupId, name);
       console.log("📦 Profile response status:", profileResponse.status);
-      console.log("📦 Profile response data:", JSON.stringify(profileResponse.data, null, 2));
-      
+      console.log(
+        "📦 Profile response data:",
+        JSON.stringify(profileResponse.data, null, 2),
+      );
+
       if (profileResponse.status !== 201 && profileResponse.status !== 200) {
         throw new Error("Profile creation failed");
       }
-      
+
       // 9. Get Profile ID
-      const profileId = profileResponse?.data?.profiles?.[0]?.id || profileResponse?.data?.id;
+      const profileId =
+        profileResponse?.data?.profiles?.[0]?.id || profileResponse?.data?.id;
       if (profileId) {
         await AsyncStorage.setItem("profile_id", profileId);
         console.log("✅ Profile ID stored:", profileId);
@@ -284,13 +328,12 @@ export default function SignupScreen() {
       // 10. Verify Profile ID is stored
       const storedProfileId = await AsyncStorage.getItem("profile_id");
       console.log("📦 Stored Profile ID:", storedProfileId);
-      
+
       console.log("✅ Registration completed successfully!");
-      
+
       // ✅ Step 11: Navigate to add device
       // The isSignupFlow flag will prevent auto-redirect to dashboard
       router.replace("/(auth)/add_device");
-      
     } catch (error) {
       console.error("❌ Registration Error:", error);
       Alert.alert(
@@ -314,199 +357,369 @@ export default function SignupScreen() {
       keyboardVerticalOffset={Platform.OS === "ios" ? 64 : 0}
     >
       <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-        <ScrollView
-          ref={scrollViewRef}
-          style={[
-            styles.container,
-            { backgroundColor: theme.colors.background },
-          ]}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.scrollContent}
+        <SafeAreaView
+          style={[styles.container, { backgroundColor: theme.colors.background }]}
+          edges={["top", "bottom"]}
         >
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={styles.backButton}
+          <ScrollView
+            ref={scrollViewRef}
+            style={styles.container}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.scrollContent}
           >
-            <Text
-              style={[styles.backButtonText, { color: theme.colors.primary }]}
-            >
-              ← Back
-            </Text>
-          </TouchableOpacity>
-
-          <Text style={[styles.title, { color: theme.colors.primary }]}>
-            Create Account
-          </Text>
-
-          <Text
-            style={[styles.subtitle, { color: theme.colors.textSecondary }]}
-          >
-            Sign up to start managing your farm
-          </Text>
-
-          <View style={styles.form}>
-            <View style={styles.inputWrapper}>
-              <Text style={[styles.label, { color: theme.colors.text }]}>
-                Full Name
+            {/* Brand header */}
+            <View style={styles.header}>
+              <View style={styles.logoWrap}>
+                <Logo size={64} showText={false} />
+              </View>
+              <Text style={[styles.title, { color: theme.colors.primary }]}>
+                Create Account
               </Text>
-              <TextInput
-                style={[
-                  styles.input,
-                  {
-                    borderColor: theme.colors.border,
-                    backgroundColor: theme.colors.inputBackground,
-                    color: theme.colors.text,
-                  },
-                ]}
-                placeholder="Enter your full name"
-                placeholderTextColor={theme.colors.textSecondary}
-                value={name}
-                onChangeText={setName}
-                returnKeyType="next"
-                onSubmitEditing={() => focusInput(mobileInputRef)}
-              />
-            </View>
-
-            <View style={styles.inputWrapper}>
-              <Text style={[styles.label, { color: theme.colors.text }]}>
-                Mobile Number
-              </Text>
-              <TextInput
-                ref={(ref) => (mobileInputRef = ref)}
-                style={[
-                  styles.input,
-                  {
-                    borderColor: theme.colors.border,
-                    backgroundColor: theme.colors.inputBackground,
-                    color: theme.colors.text,
-                  },
-                ]}
-                placeholder="Enter 10-digit mobile number"
-                placeholderTextColor={theme.colors.textSecondary}
-                value={mobileNumber}
-                onChangeText={setMobileNumber}
-                keyboardType="phone-pad"
-                maxLength={10}
-                returnKeyType="next"
-                onSubmitEditing={() => focusInput(emailInputRef)}
-              />
               <Text
-                style={[
-                  styles.helperText,
-                  { color: theme.colors.textSecondary },
-                ]}
+                style={[styles.subtitle, { color: theme.colors.textSecondary }]}
               >
-                {COUNTRY_CODE} - {mobileNumber || "Enter 10-digit number"}
+                Join AgriArch and start managing your farm
               </Text>
             </View>
 
-            <View style={styles.inputWrapper}>
-              <Text style={[styles.label, { color: theme.colors.text }]}>
-                Email Address
-              </Text>
-              <TextInput
-                ref={(ref) => (emailInputRef = ref)}
-                style={[
-                  styles.input,
-                  {
-                    borderColor: theme.colors.border,
-                    backgroundColor: theme.colors.inputBackground,
-                    color: theme.colors.text,
-                  },
-                ]}
-                placeholder="Enter your email"
-                placeholderTextColor={theme.colors.textSecondary}
-                value={email}
-                onChangeText={setEmail}
-                autoCapitalize="none"
-                keyboardType="email-address"
-                returnKeyType="next"
-                onSubmitEditing={() => focusInput(passwordInputRef)}
-              />
-            </View>
-
-            <View style={styles.inputWrapper}>
-              <Text style={[styles.label, { color: theme.colors.text }]}>
-                Password
-              </Text>
-              <TextInput
-                ref={(ref) => (passwordInputRef = ref)}
-                style={[
-                  styles.input,
-                  {
-                    borderColor: theme.colors.border,
-                    backgroundColor: theme.colors.inputBackground,
-                    color: theme.colors.text,
-                  },
-                ]}
-                placeholder="Create a password (min 6 characters)"
-                placeholderTextColor={theme.colors.textSecondary}
-                secureTextEntry
-                value={password}
-                onChangeText={setPassword}
-                returnKeyType="next"
-                onSubmitEditing={() => focusInput(confirmPasswordInputRef)}
-              />
-            </View>
-
-            <View style={styles.inputWrapper}>
-              <Text style={[styles.label, { color: theme.colors.text }]}>
-                Confirm Password
-              </Text>
-              <TextInput
-                ref={(ref) => (confirmPasswordInputRef = ref)}
-                style={[
-                  styles.input,
-                  {
-                    borderColor: theme.colors.border,
-                    backgroundColor: theme.colors.inputBackground,
-                    color: theme.colors.text,
-                  },
-                ]}
-                placeholder="Confirm your password"
-                placeholderTextColor={theme.colors.textSecondary}
-                secureTextEntry
-                value={confirmPassword}
-                onChangeText={setConfirmPassword}
-                returnKeyType="done"
-                onSubmitEditing={handleSendOtp}
-              />
-            </View>
-
-            <TouchableOpacity
-              style={[
-                styles.signupButton,
-                { backgroundColor: theme.colors.primary },
-              ]}
-              onPress={handleSendOtp}
-              activeOpacity={0.8}
-              disabled={isLoading}
-            >
-              {isLoading ? (
-                <ActivityIndicator color={theme.colors.textOnPrimary} />
-              ) : (
-                <Text
+            <View style={styles.form}>
+              {/* Full Name */}
+              <View style={styles.inputWrapper}>
+                <Text style={[styles.label, { color: theme.colors.textSecondary }]}>
+                  Full Name
+                </Text>
+                <View
                   style={[
-                    styles.signupButtonText,
-                    { color: theme.colors.textOnPrimary },
+                    styles.inputContainer,
+                    {
+                      borderColor:
+                        focusedField === "name"
+                          ? theme.colors.primary
+                          : theme.colors.border,
+                      backgroundColor: theme.colors.inputBackground,
+                    },
                   ]}
                 >
-                  Send OTP & Sign Up
+                  <Ionicons
+                    name="person-outline"
+                    size={18}
+                    color={
+                      focusedField === "name"
+                        ? theme.colors.primary
+                        : theme.colors.textSecondary
+                    }
+                  />
+                  <TextInput
+                    style={[styles.inputInner, { color: theme.colors.text }]}
+                    placeholder="Enter your full name"
+                    placeholderTextColor={theme.colors.textSecondary}
+                    value={name}
+                    onChangeText={setName}
+                    returnKeyType="next"
+                    onFocus={() => setFocusedField("name")}
+                    onBlur={() => setFocusedField(null)}
+                    onSubmitEditing={() => focusInput(mobileInputRef)}
+                  />
+                </View>
+              </View>
+
+              {/* Mobile Number */}
+              <View style={styles.inputWrapper}>
+                <Text style={[styles.label, { color: theme.colors.textSecondary }]}>
+                  Mobile Number
                 </Text>
-              )}
-            </TouchableOpacity>
+                <View
+                  style={[
+                    styles.inputContainer,
+                    {
+                      borderColor:
+                        focusedField === "mobile"
+                          ? theme.colors.primary
+                          : theme.colors.border,
+                      backgroundColor: theme.colors.inputBackground,
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name="call-outline"
+                    size={18}
+                    color={
+                      focusedField === "mobile"
+                        ? theme.colors.primary
+                        : theme.colors.textSecondary
+                    }
+                  />
+                  <TextInput
+                    ref={(ref) => (mobileInputRef = ref)}
+                    style={[styles.inputInner, { color: theme.colors.text }]}
+                    placeholder="Enter 10-digit mobile number"
+                    placeholderTextColor={theme.colors.textSecondary}
+                    value={mobileNumber}
+                    onChangeText={setMobileNumber}
+                    keyboardType="phone-pad"
+                    maxLength={10}
+                    returnKeyType="next"
+                    onFocus={() => setFocusedField("mobile")}
+                    onBlur={() => setFocusedField(null)}
+                    onSubmitEditing={() => focusInput(emailInputRef)}
+                  />
+                </View>
+                <Text
+                  style={[
+                    styles.helperText,
+                    { color: theme.colors.textSecondary },
+                  ]}
+                >
+                  {COUNTRY_CODE} - {mobileNumber || "Enter 10-digit number"}
+                </Text>
+              </View>
 
-            <TouchableOpacity onPress={() => router.push("/(auth)/login")}>
-              <Text style={[styles.loginText, { color: theme.colors.primary }]}>
-                Already have an account?{" "}
-                <Text style={styles.loginLink}>Sign In</Text>
-              </Text>
-            </TouchableOpacity>
-          </View>
+              {/* Email */}
+              <View style={styles.inputWrapper}>
+                <Text style={[styles.label, { color: theme.colors.textSecondary }]}>
+                  Email Address
+                </Text>
+                <View
+                  style={[
+                    styles.inputContainer,
+                    {
+                      borderColor:
+                        focusedField === "email"
+                          ? theme.colors.primary
+                          : theme.colors.border,
+                      backgroundColor: theme.colors.inputBackground,
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name="mail-outline"
+                    size={18}
+                    color={
+                      focusedField === "email"
+                        ? theme.colors.primary
+                        : theme.colors.textSecondary
+                    }
+                  />
+                  <TextInput
+                    ref={(ref) => (emailInputRef = ref)}
+                    style={[styles.inputInner, { color: theme.colors.text }]}
+                    placeholder="Enter your email"
+                    placeholderTextColor={theme.colors.textSecondary}
+                    value={email}
+                    onChangeText={setEmail}
+                    autoCapitalize="none"
+                    keyboardType="email-address"
+                    returnKeyType="next"
+                    onFocus={() => setFocusedField("email")}
+                    onBlur={() => setFocusedField(null)}
+                    onSubmitEditing={() => focusInput(passwordInputRef)}
+                  />
+                </View>
+              </View>
 
-          <View style={styles.bottomPadding} />
-        </ScrollView>
+              {/* Password */}
+              <View style={styles.inputWrapper}>
+                <Text style={[styles.label, { color: theme.colors.textSecondary }]}>
+                  Password
+                </Text>
+                <View
+                  style={[
+                    styles.inputContainer,
+                    {
+                      borderColor:
+                        focusedField === "password"
+                          ? theme.colors.primary
+                          : theme.colors.border,
+                      backgroundColor: theme.colors.inputBackground,
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name="lock-closed-outline"
+                    size={18}
+                    color={
+                      focusedField === "password"
+                        ? theme.colors.primary
+                        : theme.colors.textSecondary
+                    }
+                  />
+                  <TextInput
+                    ref={(ref) => (passwordInputRef = ref)}
+                    style={[styles.inputInner, { color: theme.colors.text }]}
+                    placeholder="Create a password (min 8 characters)"
+                    placeholderTextColor={theme.colors.textSecondary}
+                    secureTextEntry={!showPassword}
+                    value={password}
+                    onChangeText={setPassword}
+                    autoCapitalize="none"
+                    returnKeyType="next"
+                    onFocus={() => setFocusedField("password")}
+                    onBlur={() => setFocusedField(null)}
+                    onSubmitEditing={() => focusInput(confirmPasswordInputRef)}
+                  />
+                  <TouchableOpacity
+                    style={styles.eyeButton}
+                    onPress={() => setShowPassword(!showPassword)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      showPassword ? "Hide password" : "Show password"
+                    }
+                  >
+                    <Ionicons
+                      name={showPassword ? "eye-off-outline" : "eye-outline"}
+                      size={22}
+                      color={theme.colors.textSecondary}
+                    />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Live password requirements */}
+                {password.length > 0 && (
+                  <View style={styles.requirementsContainer}>
+                    <PasswordRequirement
+                      label="8+ characters"
+                      met={hasMinLength}
+                      color={theme.colors.textSecondary}
+                    />
+                    <PasswordRequirement
+                      label="1 uppercase letter"
+                      met={hasUppercase}
+                      color={theme.colors.textSecondary}
+                    />
+                    <PasswordRequirement
+                      label="1 number"
+                      met={hasNumber}
+                      color={theme.colors.textSecondary}
+                    />
+                    <PasswordRequirement
+                      label="1 special character"
+                      met={hasSpecial}
+                      color={theme.colors.textSecondary}
+                    />
+                  </View>
+                )}
+              </View>
+
+              {/* Confirm Password */}
+              <View style={styles.inputWrapper}>
+                <Text style={[styles.label, { color: theme.colors.textSecondary }]}>
+                  Confirm Password
+                </Text>
+                <View
+                  style={[
+                    styles.inputContainer,
+                    {
+                      borderColor:
+                        focusedField === "confirm"
+                          ? theme.colors.primary
+                          : theme.colors.border,
+                      backgroundColor: theme.colors.inputBackground,
+                    },
+                  ]}
+                >
+                  <Ionicons
+                    name="lock-closed-outline"
+                    size={18}
+                    color={
+                      focusedField === "confirm"
+                        ? theme.colors.primary
+                        : theme.colors.textSecondary
+                    }
+                  />
+                  <TextInput
+                    ref={(ref) => (confirmPasswordInputRef = ref)}
+                    style={[styles.inputInner, { color: theme.colors.text }]}
+                    placeholder="Confirm your password"
+                    placeholderTextColor={theme.colors.textSecondary}
+                    secureTextEntry={!showConfirmPassword}
+                    value={confirmPassword}
+                    onChangeText={setConfirmPassword}
+                    autoCapitalize="none"
+                    returnKeyType="done"
+                    onFocus={() => setFocusedField("confirm")}
+                    onBlur={() => setFocusedField(null)}
+                    onSubmitEditing={handleSendOtp}
+                  />
+                  <TouchableOpacity
+                    style={styles.eyeButton}
+                    onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      showConfirmPassword
+                        ? "Hide password"
+                        : "Show password"
+                    }
+                  >
+                    <Ionicons
+                      name={
+                        showConfirmPassword ? "eye-off-outline" : "eye-outline"
+                      }
+                      size={22}
+                      color={theme.colors.textSecondary}
+                    />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Match indicator */}
+                {confirmPassword.length > 0 && (
+                  <Text
+                    style={[
+                      styles.matchText,
+                      {
+                        color: passwordsMatch
+                          ? theme.colors.success
+                          : theme.colors.error,
+                      },
+                    ]}
+                  >
+                    {passwordsMatch
+                      ? "✓ Passwords match"
+                      : "Passwords do not match"}
+                  </Text>
+                )}
+              </View>
+
+              {/* CTA */}
+              <TouchableOpacity
+                style={styles.signupButton}
+                onPress={handleSendOtp}
+                activeOpacity={0.85}
+                disabled={isLoading}
+                accessibilityRole="button"
+              >
+                <LinearGradient
+                  colors={[theme.colors.primary, theme.colors.primaryDark]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.signupButtonGradient}
+                >
+                  {isLoading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.signupButtonText}>Create Account</Text>
+                  )}
+                </LinearGradient>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => router.push("/(auth)/login")}
+                accessibilityRole="button"
+              >
+                <Text style={[styles.loginText, { color: theme.colors.textSecondary }]}>
+                  Already have an account?{" "}
+                  <Text style={[styles.loginLink, { color: theme.colors.primary }]}>
+                    Sign In
+                  </Text>
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.bottomPadding} />
+          </ScrollView>
+        </SafeAreaView>
       </TouchableWithoutFeedback>
 
       {/* OTP Verification Modal */}
@@ -640,63 +853,119 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
+    flexGrow: 1,
     paddingHorizontal: 24,
-    paddingTop: 12,
+    paddingTop: 16,
     paddingBottom: 40,
   },
-  backButton: {
+  header: {
+    alignItems: "center",
     marginTop: 12,
-    marginBottom: 20,
-  },
-  backButtonText: {
-    fontSize: 16,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: "bold",
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 14,
     marginBottom: 32,
   },
+  logoWrap: {
+    marginBottom: 20,
+  },
+  title: {
+    fontSize: 30,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+    marginBottom: 6,
+  },
+  subtitle: {
+    fontSize: 15,
+    opacity: 0.75,
+    textAlign: "center",
+  },
   form: {
-    gap: 20,
+    gap: 18,
   },
   inputWrapper: {
     gap: 8,
   },
   label: {
-    fontSize: 14,
-    fontWeight: "500",
+    fontSize: 13,
+    fontWeight: "600",
+    marginLeft: 4,
+    letterSpacing: 0.2,
   },
-  input: {
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 12,
+  inputContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1.5,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    height: 52,
+  },
+  inputInner: {
+    flex: 1,
     fontSize: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 0,
+    height: "100%",
+  },
+  eyeButton: {
+    padding: 4,
+    marginLeft: 8,
   },
   helperText: {
     fontSize: 12,
-    marginTop: 4,
+    marginLeft: 4,
+    marginTop: 2,
+    opacity: 0.8,
+  },
+  requirementsContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 10,
+  },
+  requirement: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    width: "48%",
+  },
+  requirementText: {
+    fontSize: 12.5,
+    fontWeight: "500",
+  },
+  matchText: {
+    fontSize: 12.5,
+    fontWeight: "500",
+    marginLeft: 4,
+    marginTop: 2,
   },
   signupButton: {
-    padding: 16,
-    borderRadius: 8,
-    marginTop: 8,
+    marginTop: 10,
+    borderRadius: 50,
+    shadowColor: "#1B5E20",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  signupButtonGradient: {
+    borderRadius: 50,
+    overflow: "hidden",
+    paddingVertical: 16,
+    alignItems: "center",
+    justifyContent: "center",
   },
   signupButtonText: {
-    textAlign: "center",
-    fontSize: 18,
-    fontWeight: "600",
+    color: "#fff",
+    fontSize: 17,
+    fontWeight: "700",
+    letterSpacing: 0.3,
   },
   loginText: {
     textAlign: "center",
-    marginTop: 20,
-    marginBottom: 30,
+    marginTop: 22,
+    marginBottom: 10,
+    fontSize: 14.5,
   },
   loginLink: {
-    fontWeight: "bold",
+    fontWeight: "700",
   },
   bottomPadding: {
     height: Platform.OS === "ios" ? 40 : 20,

@@ -289,12 +289,20 @@ export const MqttProvider = ({ children }) => {
   // ✅ Device status flags from 32-bit parsing
   const [deviceStatusFlags, setDeviceStatusFlags] = useState(getDefaultDeviceStatus());
   
-  // ✅ Connection state management - SIMPLIFIED
-  const [connectionState, setConnectionState] = useState('idle'); 
-  // idle | connecting | waiting | online
+  // ✅ Connection state management
+  const [connectionState, setConnectionState] = useState('idle');
+  // idle | connecting | waiting (orange) | online (green) | offline (red)
   
-  // ✅ Track if first data has been received
-  const [hasEverReceivedData, setHasEverReceivedData] = useState(false);
+  // ✅ Track if device has ever been online
+  const [hasEverBeenOnline, setHasEverBeenOnline] = useState(false);
+  
+  // ✅ Report interval from config - default 30 minutes (1800 seconds)
+  const [reportInterval, setReportInterval] = useState(1800);
+  const [timeoutDuration, setTimeoutDuration] = useState(3600); // 2x report interval
+  
+  // ✅ Timeout check refs
+  const timeoutCheckInterval = useRef(null);
+  const lastDataReceivedTime = useRef(null);
   
   // ✅ Multiple device support
   const [availableDevices, setAvailableDevices] = useState([]);
@@ -307,7 +315,6 @@ export const MqttProvider = ({ children }) => {
   const connectionCheckInterval = useRef(null);
   const hasInitializedRef = useRef(false);
   const unsubscribeRef = useRef(null);
-  const dataReceivedTimeRef = useRef(null);
   
   const getTopics = (key) => ({
     data: `/messages/${key}/data`,
@@ -326,10 +333,59 @@ export const MqttProvider = ({ children }) => {
     console.log("externalKey:", externalKey);
     console.log("activeDeviceId:", activeDeviceId);
     console.log("hasReceivedData:", hasReceivedData);
-    console.log("hasEverReceivedData:", hasEverReceivedData);
+    console.log("hasEverBeenOnline:", hasEverBeenOnline);
     console.log("deviceStatus:", deviceStatus);
+    console.log("reportInterval:", reportInterval);
+    console.log("timeoutDuration:", timeoutDuration);
     console.log("=== END DEBUG ===");
   };
+
+  // ── Update timeout based on report interval ──────────────────────────────
+  const updateTimeoutFromReportInterval = (interval) => {
+    if (interval && interval > 0) {
+      const newTimeout = interval * 2;
+      setReportInterval(interval);
+      setTimeoutDuration(newTimeout);
+      console.log(`📡 Report interval: ${interval}s, Timeout set to: ${newTimeout}s (2x)`);
+      
+      AsyncStorage.setItem('report_interval', String(interval)).catch(console.error);
+      AsyncStorage.setItem('timeout_duration', String(newTimeout)).catch(console.error);
+      
+      return newTimeout;
+    }
+    return timeoutDuration;
+  };
+
+  // ── Load saved timeout values ────────────────────────────────────────────
+  useEffect(() => {
+    const loadSavedValues = async () => {
+      try {
+        const savedInterval = await AsyncStorage.getItem('report_interval');
+        const savedTimeout = await AsyncStorage.getItem('timeout_duration');
+        
+        if (savedInterval) {
+          setReportInterval(Number(savedInterval));
+        }
+        if (savedTimeout) {
+          setTimeoutDuration(Number(savedTimeout));
+        }
+        console.log(`📡 Loaded saved values - Report: ${savedInterval || 1800}s, Timeout: ${savedTimeout || 3600}s`);
+      } catch (error) {
+        console.error('Error loading saved timeout values:', error);
+      }
+    };
+    loadSavedValues();
+  }, []);
+
+  // ── Monitor deviceConfig for report_interval changes ────────────────────
+  useEffect(() => {
+    if (deviceConfig && deviceConfig.report_interval) {
+      const interval = deviceConfig.report_interval;
+      if (interval !== reportInterval) {
+        updateTimeoutFromReportInterval(interval);
+      }
+    }
+  }, [deviceConfig]);
 
   // ── Connection callback ──────────────────────────────────────────────────
   useEffect(() => {
@@ -349,7 +405,13 @@ export const MqttProvider = ({ children }) => {
         }
         
         if (connected) {
-          setConnectionState('waiting');
+          if (hasEverBeenOnline) {
+            setConnectionState('waiting');
+            startTimeoutCheck();
+          } else {
+            setConnectionState('waiting');
+            console.log('⏳ First connection - Waiting for data with no timeout');
+          }
         }
         
         if (connected && connectionCheckInterval.current) {
@@ -377,6 +439,10 @@ export const MqttProvider = ({ children }) => {
 
   // ── Cleanup ──────────────────────────────────────────────────────────────
   const cleanupMqtt = async () => {
+    if (timeoutCheckInterval.current) {
+      clearInterval(timeoutCheckInterval.current);
+      timeoutCheckInterval.current = null;
+    }
     if (connectionCheckInterval.current) {
       clearInterval(connectionCheckInterval.current);
       connectionCheckInterval.current = null;
@@ -444,27 +510,75 @@ export const MqttProvider = ({ children }) => {
         }
         clearInterval(connectionCheckInterval.current);
         connectionCheckInterval.current = null;
+        
+        if (hasEverBeenOnline) {
+          startTimeoutCheck();
+        } else {
+          console.log('⏳ First connection - Waiting for data with no timeout');
+        }
       }
     }, 5000);
   };
 
-  // ── Check if publish is allowed ──────────────────────────────────────────
-  const canPublish = () => {
-    // ✅ Publish only if MQTT is connected AND data has been received
-    return isConnected && hasReceivedData;
+  // ── Start Timeout Check ──────────────────────────────────────────────────
+  const startTimeoutCheck = () => {
+    if (timeoutCheckInterval.current) {
+      clearInterval(timeoutCheckInterval.current);
+      timeoutCheckInterval.current = null;
+    }
+
+    if (!hasEverBeenOnline) {
+      console.log('⏳ Device never online - No timeout check');
+      return;
+    }
+
+    console.log(`⏳ Starting timeout check - Timeout: ${timeoutDuration}s (${Math.round(timeoutDuration/60)} minutes)`);
+
+    timeoutCheckInterval.current = setInterval(() => {
+      if (!isMountedRef.current) {
+        clearInterval(timeoutCheckInterval.current);
+        timeoutCheckInterval.current = null;
+        return;
+      }
+
+      if (hasReceivedData) {
+        lastDataReceivedTime.current = Date.now();
+        return;
+      }
+
+      if (lastDataReceivedTime.current) {
+        const timeSinceLastData = (Date.now() - lastDataReceivedTime.current) / 1000;
+        
+        if (timeSinceLastData >= timeoutDuration) {
+          setConnectionState('offline');
+          if (activeDeviceId) {
+            setDeviceConnectionStatus(prev => ({
+              ...prev,
+              [activeDeviceId]: 'offline'
+            }));
+          }
+          console.log(`📡 Device marked OFFLINE - No data received for ${timeoutDuration}s (${Math.round(timeoutDuration/60)} minutes)`);
+          
+          if (timeoutCheckInterval.current) {
+            clearInterval(timeoutCheckInterval.current);
+            timeoutCheckInterval.current = null;
+          }
+        } else {
+          if (connectionState !== 'waiting') {
+            setConnectionState('waiting');
+          }
+          const remaining = Math.round((timeoutDuration - timeSinceLastData) / 60);
+          console.log(`⏳ Waiting for data... ${remaining} minutes remaining`);
+        }
+      }
+
+    }, 30000);
   };
 
   // ── Publish ──────────────────────────────────────────────────────────────
   const doPublish = (client, topic, message, resolve) => {
     if (!client || !client.connected) {
       console.log("❌ Client not connected");
-      resolve(false);
-      return;
-    }
-    
-    // ✅ Check if data has been received before publishing
-    if (!hasReceivedData) {
-      console.log("⚠️ Cannot publish - Device data not received yet");
       resolve(false);
       return;
     }
@@ -486,13 +600,6 @@ export const MqttProvider = ({ children }) => {
   const publish = (topic, message) => {
     return new Promise((resolve) => {
       console.log(`📤 Publishing to: ${topic}`);
-      
-      // ✅ Check if data has been received
-      if (!hasReceivedData) {
-        console.log("⚠️ Cannot publish - Waiting for device data...");
-        resolve(false);
-        return;
-      }
       
       let clientToUse = mqttClient;
       
@@ -793,15 +900,18 @@ export const MqttProvider = ({ children }) => {
         const parsed = parseSenML(msgStr);
         console.log("📊 Parsed data:", parsed);
         
-        // ✅ Data received! Set online
+        // ✅ Data received! Mark device online
         setHasReceivedData(true);
         setConnectionState('online');
-        dataReceivedTimeRef.current = new Date();
+        lastDataReceivedTime.current = Date.now();
         
-        // ✅ If first data ever received, mark it
-        if (!hasEverReceivedData) {
-          setHasEverReceivedData(true);
-          console.log('✅ First data received from device!');
+        // ✅ If first data ever received
+        if (!hasEverBeenOnline) {
+          setHasEverBeenOnline(true);
+          console.log('✅ First data received from device! Device is ONLINE');
+          
+          // Start timeout check now
+          startTimeoutCheck();
         }
         
         // ✅ Update device connection status
@@ -816,6 +926,26 @@ export const MqttProvider = ({ children }) => {
         if (parsed.deviceStatusFlags) {
           setDeviceStatusFlags(parsed.deviceStatusFlags);
           console.log("📊 Device Status Flags:", parsed.deviceStatusFlags);
+          
+          // ✅ Check online status from 32-bit status (Bit 17)
+          const isOnline = parsed.deviceStatusFlags.online;
+          if (isOnline !== null && isOnline !== undefined) {
+            if (isOnline) {
+              setConnectionState('online');
+              setHasEverBeenOnline(true);
+              console.log('✅ Device reported ONLINE from status flags (Bit 17)');
+            } else {
+              // Device reports offline, but we still received this message
+              // So we don't mark offline immediately - let timeout handle it
+              console.log('⚠️ Device reported OFFLINE from status flags (Bit 17)');
+            }
+          }
+          
+          // ✅ Check mode from 32-bit status (Bit 16)
+          const isAuto = parsed.deviceStatusFlags.mode;
+          if (isAuto !== null && isAuto !== undefined) {
+            console.log(`📡 Device mode from status flags: ${isAuto ? 'AUTO' : 'MANUAL'} (Bit 16)`);
+          }
         }
         
         const updatedSensorData = { ...sensorData };
@@ -903,6 +1033,18 @@ export const MqttProvider = ({ children }) => {
             console.log(`📡 Updated ${deviceList.length} devices`);
           }
         }
+        
+        // ✅ Reset timeout check - start fresh
+        if (timeoutCheckInterval.current) {
+          clearInterval(timeoutCheckInterval.current);
+          timeoutCheckInterval.current = null;
+        }
+        // Start checking for data timeout with current timeout duration
+        setTimeout(() => {
+          if (isMountedRef.current && isConnected && hasEverBeenOnline) {
+            startTimeoutCheck();
+          }
+        }, 2000);
       };
 
       // ── Subscribe ONLY to data topic ──────────────────────────────────────
@@ -1015,6 +1157,10 @@ export const MqttProvider = ({ children }) => {
       clearInterval(connectionCheckInterval.current);
       connectionCheckInterval.current = null;
     }
+    if (timeoutCheckInterval.current) {
+      clearInterval(timeoutCheckInterval.current);
+      timeoutCheckInterval.current = null;
+    }
     await cleanupMqtt();
     await initializeMqtt();
   };
@@ -1056,10 +1202,14 @@ export const MqttProvider = ({ children }) => {
         clearInterval(connectionCheckInterval.current);
         connectionCheckInterval.current = null;
       }
+      if (timeoutCheckInterval.current) {
+        clearInterval(timeoutCheckInterval.current);
+        timeoutCheckInterval.current = null;
+      }
     };
   }, [isAuthenticated, token, authLoading, isSignupFlow]);
 
-  // ── Publish SenML ────────────────────────────────────────────────────────
+  // ── Publish Functions ──────────────────────────────────────────────────
   const publishSenML = async (senmlData, topic = 'settings') => {
     if (!externalKey) {
       console.log("⚠️ No external_key available for SenML publish");
@@ -1068,12 +1218,6 @@ export const MqttProvider = ({ children }) => {
     
     if (!isConnected) {
       console.log("⚠️ MQTT not connected");
-      return false;
-    }
-    
-    // ✅ Check if data has been received
-    if (!hasReceivedData) {
-      console.log("⚠️ Cannot publish SenML - Waiting for device data...");
       return false;
     }
     
@@ -1089,15 +1233,8 @@ export const MqttProvider = ({ children }) => {
     }
   };
 
-  // ── Publish Actuator Status with Preservation ──────────────────────────────
   const publishActuatorStatus = async (status) => {
     if (!externalKey) return false;
-    
-    // ✅ Check if data has been received
-    if (!hasReceivedData) {
-      console.log("⚠️ Cannot publish actuator - Waiting for device data...");
-      return false;
-    }
     
     const preservedStatus = {
       ...lastKnownActuatorState,
@@ -1128,19 +1265,11 @@ export const MqttProvider = ({ children }) => {
     return success;
   };
 
-  // ── Publish Settings ─────────────────────────────────────────────────────
   const publishSettings = async (settings) => {
     if (!externalKey) {
       console.log("⚠️ No external_key available");
       return false;
     }
-    
-    // ✅ Check if data has been received
-    if (!hasReceivedData) {
-      console.log("⚠️ Cannot publish settings - Waiting for device data...");
-      return false;
-    }
-    
     console.log(`📤 Publishing settings to /messages/${externalKey}/settings`);
     
     const payload = buildSettingsPayload(settings, externalKey);
@@ -1158,15 +1287,8 @@ export const MqttProvider = ({ children }) => {
     return success;
   };
 
-  // ── Publish Config with Preservation ──────────────────────────────────────
   const publishConfig = async (config) => {
     if (!externalKey) return false;
-    
-    // ✅ Check if data has been received
-    if (!hasReceivedData) {
-      console.log("⚠️ Cannot publish config - Waiting for device data...");
-      return false;
-    }
     
     const preservedConfig = {
       ...lastKnownConfigState,
@@ -1186,10 +1308,8 @@ export const MqttProvider = ({ children }) => {
       lastKnownConfigState = { ...cleanConfig };
       setDeviceConfig({ ...cleanConfig, lastUpdated: new Date() });
       
-      // ✅ Update report interval and timeout from published config
       if (cleanConfig.report_interval) {
-        // Store in AsyncStorage for persistence
-        AsyncStorage.setItem('report_interval', String(cleanConfig.report_interval)).catch(console.error);
+        updateTimeoutFromReportInterval(cleanConfig.report_interval);
       }
       
       console.log("✅ Config published with preservation:", cleanConfig);
@@ -1209,20 +1329,17 @@ export const MqttProvider = ({ children }) => {
     externalKey,
     hasReceivedData,
     deviceStatus,
-    // ✅ New values for status flags
     deviceStatusFlags,
     connectionState,
-    hasEverReceivedData,
-    // ✅ Multiple device support
+    hasEverBeenOnline,
+    reportInterval,
+    timeoutDuration,
     availableDevices,
     activeDeviceId,
     deviceConnectionStatus,
     isSwitchingDevice,
     switchToDevice,
     loadAvailableDevices,
-    // ✅ Publish allowed check
-    canPublish: canPublish(),
-    // Existing functions
     publish,
     publishWithRetry: async (topic, msg, retries = 3) => publishWithRetry(topic, msg, retries),
     publishActuatorStatus,

@@ -1,21 +1,14 @@
-// components/Logo.tsx
+// components/Logo.jsx
 import { Ionicons } from "@expo/vector-icons";
 import React from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
 
-interface LogoProps {
-  size?: number;
-  showText?: boolean;
-  textColor?: string;
-  iconColor?: string;
-}
-
-export default function Logo({ 
-  size = 40, 
-  showText = true, 
+export default function Logo({
+  size = 40,
+  showText = true,
   textColor = "#FFF",
-  iconColor = "#4CAF50"
-}: LogoProps) {
+  iconColor = "#4CAF50",
+}) {
   const [hasError, setHasError] = React.useState(false);
 
   if (hasError) {

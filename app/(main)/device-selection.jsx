@@ -3,50 +3,60 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useEffect, useState } from "react";
 import {
-    ActivityIndicator,
-    Alert,
-    Dimensions,
-    FlatList,
-    RefreshControl,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  FlatList,
+  Modal,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
 import { useTheme } from "../../src/context/ThemContext";
 import {
-    getActiveDevice,
-    getAllThings,
-    setActiveDevice,
+  getActiveDevice,
+  getAllThings,
+  setActiveDevice,
 } from "../../src/services/identify/identify";
 
-const { width } = Dimensions.get("window");
+const { width, height } = Dimensions.get("window");
 
 // ── Connection Status Component ──────────────────────────────────────────────
-function ConnectionStatusIndicator({ status, deviceId, theme }) {
+function ConnectionStatusIndicator({ status, theme }) {
   const getStatusConfig = () => {
     switch (status) {
-      case 'connected':
+      case 'online':
         return {
           icon: 'checkmark-circle',
           color: '#4CAF50',
-          text: 'Connected',
+          text: 'Online',
           bgColor: `${theme.colors.success}15`,
+        };
+      case 'waiting':
+        return {
+          icon: 'sync-outline',
+          color: '#FF9800',
+          text: 'Waiting...',
+          bgColor: `${theme.colors.warning}15`,
         };
       case 'connecting':
         return {
           icon: 'sync-outline',
-          color: '#FF9800',
+          color: '#FFC107',
           text: 'Connecting...',
           bgColor: `${theme.colors.warning}15`,
         };
-      case 'disconnected':
+      case 'offline':
         return {
           icon: 'close-circle',
           color: '#F44336',
-          text: 'Disconnected',
+          text: 'Offline',
           bgColor: `${theme.colors.error}15`,
         };
       case 'error':
@@ -70,7 +80,7 @@ function ConnectionStatusIndicator({ status, deviceId, theme }) {
 
   return (
     <View style={[styles.statusContainer, { backgroundColor: config.bgColor }]}>
-      {status === 'connecting' ? (
+      {status === 'connecting' || status === 'waiting' ? (
         <ActivityIndicator size="small" color={config.color} />
       ) : (
         <Ionicons name={config.icon} size={16} color={config.color} />
@@ -82,36 +92,37 @@ function ConnectionStatusIndicator({ status, deviceId, theme }) {
   );
 }
 
-// ── Circular Progress for Device Connection ──────────────────────────────────
-function ConnectionProgress({ progress, size = 50, color = "#4CAF50" }) {
-  const circumference = 2 * Math.PI * (size / 2 - 4);
-  const strokeDashoffset = circumference - (progress / 100) * circumference;
-
-  return (
-    <View style={[styles.progressContainer, { width: size, height: size }]}>
-      <View style={[styles.progressBg, { width: size, height: size, borderRadius: size / 2 }]} />
-      <View
-        style={[
-          styles.progressFill,
-          {
-            width: size - 8,
-            height: size - 8,
-            borderRadius: (size - 8) / 2,
-            borderWidth: 4,
-            borderColor: color,
-          },
-        ]}
-      />
-      <Text style={[styles.progressText, { fontSize: size / 4, color }]}>
-        {Math.round(progress)}%
-      </Text>
-    </View>
-  );
-}
-
 // ── Device Card Component ──────────────────────────────────────────────────
-function DeviceCard({ device, isActive, onSelect, onConnect, theme, connectionStatus, connectionProgress }) {
+function DeviceCard({ 
+  device, 
+  isActive, 
+  onSelect, 
+  onConnect, 
+  onDelete,
+  theme, 
+  connectionStatus,
+  hasReceivedData,
+  hasEverBeenOnline,
+}) {
   const [isConnecting, setIsConnecting] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+
+  // ✅ Get connection status from MqttContext
+  const getStatus = () => {
+    if (isActive) {
+      if (connectionStatus === 'online' && hasReceivedData) return 'online';
+      if (connectionStatus === 'waiting') return 'waiting';
+      if (connectionStatus === 'connecting') return 'connecting';
+      if (connectionStatus === 'offline') return 'offline';
+      if (connectionStatus === 'error') return 'error';
+      if (hasEverBeenOnline && !hasReceivedData) return 'waiting';
+      return 'waiting';
+    }
+    return 'disconnected';
+  };
+
+  const status = getStatus();
 
   const handleConnect = async () => {
     setIsConnecting(true);
@@ -119,127 +130,266 @@ function DeviceCard({ device, isActive, onSelect, onConnect, theme, connectionSt
     setIsConnecting(false);
   };
 
-  const getStatus = () => {
-    if (isActive && connectionStatus === 'connected') return 'connected';
-    if (isConnecting || connectionStatus === 'connecting') return 'connecting';
-    if (isActive && connectionStatus === 'error') return 'error';
-    if (isActive) return 'connected';
-    return 'disconnected';
+  const handleDelete = () => {
+    setShowDeleteModal(true);
   };
 
-  const status = getStatus();
+  const confirmDelete = async () => {
+    if (deleteConfirmText.toLowerCase() !== 'delete') {
+      Alert.alert('Confirmation Required', 'Please type "delete" to confirm.');
+      return;
+    }
+    setShowDeleteModal(false);
+    await onDelete(device);
+  };
+
+  const getStatusColor = () => {
+    switch (status) {
+      case 'online': return '#4CAF50';
+      case 'waiting': return '#FF9800';
+      case 'connecting': return '#FFC107';
+      case 'offline': return '#F44336';
+      case 'error': return '#F44336';
+      default: return theme.colors.textSecondary;
+    }
+  };
+
+  const getStatusLabel = () => {
+    switch (status) {
+      case 'online': return '🟢 Online';
+      case 'waiting': return '🟡 Waiting...';
+      case 'connecting': return '🟡 Connecting...';
+      case 'offline': return '🔴 Offline';
+      case 'error': return '🔴 Error';
+      default: return '⚪ Disconnected';
+    }
+  };
 
   return (
-    <TouchableOpacity
-      style={[
-        styles.deviceCard,
-        {
-          backgroundColor: theme.colors.surface,
-          borderColor: isActive && status === 'connected' 
-            ? theme.colors.primary 
-            : status === 'connecting' 
-            ? '#FF9800' 
-            : theme.colors.border,
-          borderWidth: isActive && status === 'connected' ? 2 : 1,
-          opacity: status === 'connecting' ? 0.8 : 1,
-        },
-      ]}
-      onPress={() => onSelect(device)}
-      activeOpacity={0.7}
-      disabled={status === 'connecting'}
-    >
-      <View style={styles.deviceHeader}>
-        <View style={styles.deviceIconContainer}>
-          <Ionicons 
-            name={device.type === "device" ? "hardware-chip-outline" : "sensor-outline"} 
-            size={24} 
-            color={status === 'connected' ? theme.colors.primary : theme.colors.textSecondary} 
-          />
-        </View>
-        <View style={styles.deviceInfo}>
-          <Text style={[styles.deviceName, { color: theme.colors.text }]}>
-            {device.name || "Unnamed Device"}
-          </Text>
-          <Text style={[styles.deviceType, { color: theme.colors.textSecondary }]}>
-            {device.type || "device"} • ID: {device.id.substring(0, 8)}...
-          </Text>
-        </View>
-        {isActive && status === 'connected' && (
-          <View style={[styles.activeBadge, { backgroundColor: theme.colors.primary }]}>
-            <Text style={styles.activeBadgeText}>Active</Text>
-          </View>
-        )}
-        {status === 'connecting' && (
-          <View style={[styles.activeBadge, { backgroundColor: '#FF9800' }]}>
-            <Text style={styles.activeBadgeText}>Connecting</Text>
-          </View>
-        )}
-      </View>
-
-      {/* Connection Status Indicator */}
-      <View style={styles.statusRow}>
-        <ConnectionStatusIndicator status={status} deviceId={device.id} theme={theme} />
-        
-        {status === 'connecting' && (
-          <View style={styles.progressWrapper}>
-            <ConnectionProgress 
-              progress={connectionProgress || 0} 
-              size={40} 
-              color="#FF9800" 
-            />
-          </View>
-        )}
-      </View>
-
-      <View style={styles.deviceDetails}>
-        <View style={styles.detailRow}>
-          <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>
-            External Key:
-          </Text>
-          <Text style={[styles.detailValue, { color: theme.colors.text }]}>
-            {device.external_key || "N/A"}
-          </Text>
-        </View>
-        <View style={styles.detailRow}>
-          <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>
-            Status:
-          </Text>
-          <Text style={[styles.detailValue, { 
-            color: status === 'connected' ? '#4CAF50' : status === 'connecting' ? '#FF9800' : '#F44336',
-            fontWeight: '600',
-          }]}>
-            {status === 'connected' ? '🟢 Online' : status === 'connecting' ? '🟡 Connecting...' : '🔴 Offline'}
-          </Text>
-        </View>
-      </View>
-
+    <>
       <TouchableOpacity
         style={[
-          styles.connectButton,
+          styles.deviceCard,
           {
-            backgroundColor: status === 'connected' 
-              ? theme.colors.primary 
+            backgroundColor: theme.colors.surface,
+            borderColor: isActive && status === 'online' 
+              ? '#4CAF50' 
+              : isActive && status === 'waiting'
+              ? '#FF9800'
               : status === 'connecting' 
-              ? '#FF9800' 
-              : theme.colors.primary,
-            opacity: status === 'connecting' ? 0.7 : 1,
+              ? '#FFC107' 
+              : theme.colors.border,
+            borderWidth: isActive && (status === 'online' || status === 'waiting') ? 2 : 1,
+            opacity: status === 'connecting' ? 0.8 : 1,
           },
         ]}
-        onPress={handleConnect}
-        disabled={status === 'connecting' || status === 'connected'}
+        onPress={() => onSelect(device)}
+        activeOpacity={0.7}
+        disabled={status === 'connecting'}
       >
-        {status === 'connecting' ? (
-          <View style={styles.buttonLoadingContainer}>
-            <ActivityIndicator size="small" color="#FFF" />
-            <Text style={styles.connectButtonText}>Connecting...</Text>
+        <View style={styles.deviceHeader}>
+          <View style={styles.deviceIconContainer}>
+            <Ionicons 
+              name={device.type === "device" ? "hardware-chip-outline" : "sensor-outline"} 
+              size={24} 
+              color={status === 'online' ? '#4CAF50' : status === 'waiting' ? '#FF9800' : theme.colors.textSecondary} 
+            />
           </View>
-        ) : status === 'connected' ? (
-          <Text style={styles.connectButtonText}>✓ Connected</Text>
-        ) : (
-          <Text style={styles.connectButtonText}>Connect</Text>
-        )}
+          <View style={styles.deviceInfo}>
+            <Text style={[styles.deviceName, { color: theme.colors.text }]}>
+              {device.name || "Unnamed Device"}
+            </Text>
+            <Text style={[styles.deviceType, { color: theme.colors.textSecondary }]}>
+              {device.type || "device"} • ID: {device.id.substring(0, 8)}...
+            </Text>
+          </View>
+          {isActive && status === 'online' && (
+            <View style={[styles.activeBadge, { backgroundColor: '#4CAF50' }]}>
+              <Text style={styles.activeBadgeText}>Active</Text>
+            </View>
+          )}
+          {isActive && status === 'waiting' && (
+            <View style={[styles.activeBadge, { backgroundColor: '#FF9800' }]}>
+              <Text style={styles.activeBadgeText}>Waiting</Text>
+            </View>
+          )}
+          {(status === 'connecting' || status === 'offline') && isActive && (
+            <View style={[styles.activeBadge, { backgroundColor: status === 'connecting' ? '#FFC107' : '#F44336' }]}>
+              <Text style={styles.activeBadgeText}>
+                {status === 'connecting' ? 'Connecting' : 'Offline'}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* Connection Status Indicator */}
+        <View style={styles.statusRow}>
+          <ConnectionStatusIndicator status={status} theme={theme} />
+          
+          <View style={styles.statusDotContainer}>
+            <View style={[styles.statusDot, { backgroundColor: getStatusColor() }]} />
+            <Text style={[styles.statusDotLabel, { color: getStatusColor() }]}>
+              {getStatusLabel()}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.deviceDetails}>
+          <View style={styles.detailRow}>
+            <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>
+              External Key:
+            </Text>
+            <Text style={[styles.detailValue, { color: theme.colors.text }]}>
+              {device.external_key || "N/A"}
+            </Text>
+          </View>
+          <View style={styles.detailRow}>
+            <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>
+              Last Seen:
+            </Text>
+            <Text style={[styles.detailValue, { color: theme.colors.text }]}>
+              {hasReceivedData ? 'Just now' : 'Never'}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.buttonRow}>
+          <TouchableOpacity
+            style={[
+              styles.connectButton,
+              {
+                backgroundColor: status === 'online' 
+                  ? '#4CAF50' 
+                  : status === 'waiting' 
+                  ? '#FF9800'
+                  : status === 'connecting' 
+                  ? '#FFC107' 
+                  : theme.colors.primary,
+                opacity: status === 'connecting' || status === 'online' ? 0.7 : 1,
+                flex: 1,
+              },
+            ]}
+            onPress={handleConnect}
+            disabled={status === 'connecting' || status === 'online'}
+          >
+            {status === 'connecting' ? (
+              <View style={styles.buttonLoadingContainer}>
+                <ActivityIndicator size="small" color="#FFF" />
+                <Text style={styles.connectButtonText}>Connecting...</Text>
+              </View>
+            ) : status === 'online' ? (
+              <Text style={styles.connectButtonText}>✓ Connected</Text>
+            ) : status === 'waiting' ? (
+              <Text style={styles.connectButtonText}>⏳ Waiting...</Text>
+            ) : (
+              <Text style={styles.connectButtonText}>Connect</Text>
+            )}
+          </TouchableOpacity>
+
+          {!isActive && (
+            <TouchableOpacity
+              style={[styles.deleteButton, { backgroundColor: '#F44336' }]}
+              onPress={handleDelete}
+            >
+              <Ionicons name="trash-outline" size={20} color="#FFF" />
+            </TouchableOpacity>
+          )}
+        </View>
       </TouchableOpacity>
-    </TouchableOpacity>
+
+      {/* ── Delete Confirmation Modal ── */}
+      <Modal
+        visible={showDeleteModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowDeleteModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface }]}>
+            <View style={styles.modalHeader}>
+              <Ionicons name="warning" size={32} color="#F44336" />
+              <Text style={[styles.modalTitle, { color: theme.colors.text }]}>
+                ⚠️ Delete Device
+              </Text>
+            </View>
+            
+            <Text style={[styles.modalMessage, { color: theme.colors.text }]}>
+              Are you sure you want to delete this device?
+            </Text>
+            
+            <View style={styles.deviceInfoBox}>
+              <Text style={[styles.deviceInfoLabel, { color: theme.colors.textSecondary }]}>
+                Device Name:
+              </Text>
+              <Text style={[styles.deviceInfoValue, { color: theme.colors.text }]}>
+                {device?.name || 'Unnamed'}
+              </Text>
+              <Text style={[styles.deviceInfoLabel, { color: theme.colors.textSecondary, marginTop: 4 }]}>
+                Device ID:
+              </Text>
+              <Text style={[styles.deviceInfoValue, { color: theme.colors.text }]}>
+                {device?.id || 'N/A'}
+              </Text>
+            </View>
+
+            <Text style={[styles.modalWarning, { color: '#F44336' }]}>
+              ⚠️ This action cannot be undone. All data associated with this device will be permanently deleted.
+            </Text>
+
+            <Text style={[styles.confirmLabel, { color: theme.colors.textSecondary }]}>
+              Type <Text style={{ fontWeight: '700', color: '#F44336' }}>"delete"</Text> to confirm:
+            </Text>
+            
+            <View style={styles.confirmInputContainer}>
+              <TextInput
+                style={[
+                  styles.confirmInput,
+                  {
+                    color: theme.colors.text,
+                    borderColor: deleteConfirmText.toLowerCase() === 'delete' ? '#4CAF50' : theme.colors.border,
+                  }
+                ]}
+                placeholder="Type delete here..."
+                placeholderTextColor={theme.colors.textSecondary}
+                value={deleteConfirmText}
+                onChangeText={setDeleteConfirmText}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalCancelButton]}
+                onPress={() => {
+                  setShowDeleteModal(false);
+                  setDeleteConfirmText('');
+                }}
+              >
+                <Text style={[styles.modalButtonText, { color: theme.colors.text }]}>
+                  Cancel
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalButton, 
+                  styles.modalDeleteButton,
+                  { 
+                    opacity: deleteConfirmText.toLowerCase() === 'delete' ? 1 : 0.5,
+                  }
+                ]}
+                onPress={confirmDelete}
+                disabled={deleteConfirmText.toLowerCase() !== 'delete'}
+              >
+                <Text style={styles.modalDeleteButtonText}>
+                  Delete Device
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </>
   );
 }
 
@@ -247,15 +397,27 @@ function DeviceCard({ device, isActive, onSelect, onConnect, theme, connectionSt
 export default function DeviceSelection() {
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
-  const { reconnect, forceReconnect, isConnected, hasReceivedData, deviceStatus } = useMqtt();
+  const { 
+    reconnect, 
+    forceReconnect, 
+    isConnected, 
+    hasReceivedData, 
+    deviceStatus,
+    connectionState,
+    hasEverBeenOnline,
+    activeDeviceId,
+  } = useMqtt();
+  
+  const { deleteThing } = useAuth();
 
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [activeDevice, setActiveDeviceState] = useState(null);
   const [connectingDeviceId, setConnectingDeviceId] = useState(null);
-  const [connectionProgress, setConnectionProgress] = useState(0);
   const [connectionStatus, setConnectionStatus] = useState({});
+  const [showConnectionSuccess, setShowConnectionSuccess] = useState(false);
+  const [connectedDeviceName, setConnectedDeviceName] = useState('');
 
   // ── Load devices ──────────────────────────────────────────────────────────
   const loadDevices = async () => {
@@ -270,11 +432,6 @@ export default function DeviceSelection() {
         if (active && active.publisherId) {
           const activeThing = allThings.find(t => t.id === active.publisherId);
           setActiveDeviceState(activeThing || allThings[0]);
-          // Set connection status for active device
-          setConnectionStatus(prev => ({
-            ...prev,
-            [activeThing?.id || allThings[0].id]: isConnected ? 'connected' : 'disconnected'
-          }));
         } else {
           setActiveDeviceState(allThings[0]);
           await setActiveDevice(allThings[0].id, allThings[0].external_key);
@@ -301,25 +458,32 @@ export default function DeviceSelection() {
     if (activeDevice) {
       setConnectionStatus(prev => ({
         ...prev,
-        [activeDevice.id]: isConnected ? 'connected' : 'disconnected'
+        [activeDevice.id]: connectionState
       }));
     }
-  }, [isConnected, activeDevice]);
+  }, [connectionState, activeDevice]);
 
-  // ── Simulate connection progress ─────────────────────────────────────────
-  const simulateProgress = () => {
-    setConnectionProgress(0);
-    const interval = setInterval(() => {
-      setConnectionProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          return 100;
-        }
-        return prev + Math.random() * 15;
-      });
-    }, 300);
-    return interval;
-  };
+  // ── Monitor when device becomes online ──────────────────────────────────
+  useEffect(() => {
+    // ✅ When active device becomes online, show success popup
+    if (activeDevice && connectionState === 'online' && hasReceivedData && showConnectionSuccess) {
+      Alert.alert(
+        "✅ Device Connected",
+        `${activeDevice.name || 'Device'} is now online and ready to use!`,
+        [
+          {
+            text: "Go to Dashboard",
+            onPress: () => router.replace("/(main)/dashboard")
+          },
+          {
+            text: "Stay Here",
+            style: "cancel"
+          }
+        ]
+      );
+      setShowConnectionSuccess(false);
+    }
+  }, [connectionState, activeDevice, hasReceivedData, showConnectionSuccess]);
 
   // ── Handle device connection ─────────────────────────────────────────────
   const handleConnectDevice = async (device) => {
@@ -330,38 +494,32 @@ export default function DeviceSelection() {
         [device.id]: 'connecting'
       }));
       
-      const progressInterval = simulateProgress();
-      
-      // Save as active device
       await setActiveDevice(device.id, device.external_key);
       setActiveDeviceState(device);
       
-      // Force reconnect with new external key
       await forceReconnect(device.external_key);
       
-      // Complete progress
-      clearInterval(progressInterval);
-      setConnectionProgress(100);
-      
-      // Update status
       setConnectionStatus(prev => ({
         ...prev,
-        [device.id]: 'connected'
+        [device.id]: connectionState || 'waiting'
       }));
       
-      // Wait a moment then navigate
-      setTimeout(() => {
-        Alert.alert(
-          "✅ Connected",
-          `Successfully connected to ${device.name}`,
-          [
-            {
-              text: "Go to Dashboard",
-              onPress: () => router.replace("/(main)/dashboard")
+      setConnectedDeviceName(device.name || 'Device');
+      
+      // ✅ Show waiting alert - device is connecting
+      Alert.alert(
+        "🔄 Connecting",
+        `Connecting to ${device.name || 'Device'}...\n\nPlease wait for the device to come online.`,
+        [
+          {
+            text: "OK",
+            onPress: () => {
+              // ✅ Set flag to show success popup when device becomes online
+              setShowConnectionSuccess(true);
             }
-          ]
-        );
-      }, 500);
+          }
+        ]
+      );
       
     } catch (error) {
       console.error("Error connecting to device:", error);
@@ -373,10 +531,9 @@ export default function DeviceSelection() {
         "Connection Failed",
         `Failed to connect to ${device.name}. Please try again.`
       );
+      setShowConnectionSuccess(false);
     } finally {
       setConnectingDeviceId(null);
-      // Reset progress after a delay
-      setTimeout(() => setConnectionProgress(0), 3000);
     }
   };
 
@@ -384,6 +541,44 @@ export default function DeviceSelection() {
   const handleSelectDevice = (device) => {
     if (connectionStatus[device.id] !== 'connecting') {
       setActiveDeviceState(device);
+    }
+  };
+
+  // ── Handle device deletion ──────────────────────────────────────────────
+  const handleDeleteDevice = async (device) => {
+    try {
+      console.log(`🗑️ Attempting to delete device: ${device.id}`);
+      
+      const result = await deleteThing(device.id);
+      
+      if (result && result.success) {
+        Alert.alert(
+          "✅ Device Deleted",
+          `${device.name || 'Device'} has been deleted successfully.`,
+          [
+            {
+              text: "OK",
+              onPress: () => {
+                loadDevices();
+                if (activeDevice?.id === device.id) {
+                  setActiveDeviceState(null);
+                }
+              }
+            }
+          ]
+        );
+      } else {
+        Alert.alert(
+          "❌ Deletion Failed",
+          `Failed to delete ${device.name || 'device'}. ${result?.error || 'Please try again.'}`
+        );
+      }
+    } catch (error) {
+      console.error("Error deleting device:", error);
+      Alert.alert(
+        "❌ Error",
+        `An error occurred while deleting ${device.name || 'device'}. Please try again.`
+      );
     }
   };
 
@@ -396,6 +591,14 @@ export default function DeviceSelection() {
   const onRefresh = () => {
     setRefreshing(true);
     loadDevices();
+  };
+
+  // ── Get connection status for device ─────────────────────────────────────
+  const getDeviceConnectionStatus = (deviceId) => {
+    if (activeDevice?.id === deviceId) {
+      return connectionState || 'waiting';
+    }
+    return connectionStatus[deviceId] || 'disconnected';
   };
 
   // ── Loading State ──────────────────────────────────────────────────────────
@@ -460,29 +663,46 @@ export default function DeviceSelection() {
         {devices.length} device{devices.length > 1 ? 's' : ''} found
       </Text>
 
-      {activeDevice && connectionStatus[activeDevice.id] === 'connected' && (
-        <View style={[styles.activeDeviceInfo, { backgroundColor: theme.colors.primary + '15' }]}>
-          <Ionicons name="checkmark-circle" size={20} color={theme.colors.primary} />
-          <Text style={[styles.activeDeviceText, { color: theme.colors.text }]}>
-            ✅ Connected to: {activeDevice.name}
-          </Text>
-        </View>
-      )}
-
-      {activeDevice && connectionStatus[activeDevice.id] === 'connecting' && (
-        <View style={[styles.activeDeviceInfo, { backgroundColor: '#FF980015' }]}>
-          <ActivityIndicator size="small" color="#FF9800" />
-          <Text style={[styles.activeDeviceText, { color: '#FF9800' }]}>
-            ⏳ Connecting to: {activeDevice.name}...
-          </Text>
-        </View>
-      )}
-
-      {activeDevice && connectionStatus[activeDevice.id] === 'error' && (
-        <View style={[styles.activeDeviceInfo, { backgroundColor: '#F4433615' }]}>
-          <Ionicons name="alert-circle" size={20} color="#F44336" />
-          <Text style={[styles.activeDeviceText, { color: '#F44336' }]}>
-            ❌ Connection failed: {activeDevice.name}
+      {/* Active Device Status */}
+      {activeDevice && (
+        <View style={[
+          styles.activeDeviceInfo, 
+          { 
+            backgroundColor: 
+              connectionState === 'online' ? '#4CAF5015' :
+              connectionState === 'waiting' ? '#FF980015' :
+              connectionState === 'offline' ? '#F4433615' : 
+              connectionState === 'connecting' ? '#FFC10715' :
+              'rgba(0,0,0,0.05)'
+          }
+        ]}>
+          {connectionState === 'connecting' || connectionState === 'waiting' ? (
+            <ActivityIndicator size="small" color={
+              connectionState === 'waiting' ? '#FF9800' : '#FFC107'
+            } />
+          ) : (
+            <Ionicons 
+              name={connectionState === 'online' ? 'checkmark-circle' : 'alert-circle'} 
+              size={20} 
+              color={
+                connectionState === 'online' ? '#4CAF50' :
+                connectionState === 'offline' ? '#F44336' : '#FF9800'
+              } 
+            />
+          )}
+          <Text style={[styles.activeDeviceText, { 
+            color: 
+              connectionState === 'online' ? '#4CAF50' :
+              connectionState === 'waiting' ? '#FF9800' :
+              connectionState === 'offline' ? '#F44336' : 
+              connectionState === 'connecting' ? '#FFC107' :
+              theme.colors.text
+          }]}>
+            {connectionState === 'online' ? '✅ Device Online' :
+             connectionState === 'waiting' ? '⏳ Waiting for data...' :
+             connectionState === 'offline' ? '❌ Device Offline' :
+             connectionState === 'connecting' ? '🔄 Connecting...' :
+             `Device: ${activeDevice.name}`}
           </Text>
         </View>
       )}
@@ -496,12 +716,14 @@ export default function DeviceSelection() {
             isActive={activeDevice?.id === item.id}
             onSelect={handleSelectDevice}
             onConnect={handleConnectDevice}
+            onDelete={handleDeleteDevice}
             theme={theme}
-            connectionStatus={connectionStatus[item.id] || 'disconnected'}
-            connectionProgress={connectionProgress}
+            connectionStatus={getDeviceConnectionStatus(item.id)}
+            hasReceivedData={hasReceivedData}
+            hasEverBeenOnline={hasEverBeenOnline}
           />
         )}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, { paddingBottom: height * 0.05 }]} // ✅ 5% bottom margin
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -560,7 +782,6 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: 16,
-    paddingBottom: 20,
   },
   deviceCard: {
     borderRadius: 12,
@@ -613,27 +834,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "500",
   },
-  progressWrapper: {
-    marginRight: 4,
-  },
-  progressContainer: {
-    position: "relative",
-    justifyContent: "center",
+  statusDotContainer: {
+    flexDirection: "row",
     alignItems: "center",
+    gap: 6,
   },
-  progressBg: {
-    position: "absolute",
-    backgroundColor: "rgba(0,0,0,0.05)",
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
-  progressFill: {
-    position: "absolute",
-    borderTopColor: "transparent",
-    borderRightColor: "transparent",
-    transform: [{ rotate: "-45deg" }],
-  },
-  progressText: {
-    fontWeight: "bold",
-    zIndex: 1,
+  statusDotLabel: {
+    fontSize: 12,
+    fontWeight: "500",
   },
   deviceDetails: {
     marginBottom: 12,
@@ -645,6 +858,10 @@ const styles = StyleSheet.create({
   },
   detailLabel: { fontSize: 12 },
   detailValue: { fontSize: 12, fontWeight: "500" },
+  buttonRow: {
+    flexDirection: "row",
+    gap: 8,
+  },
   connectButton: {
     paddingVertical: 10,
     borderRadius: 8,
@@ -654,6 +871,13 @@ const styles = StyleSheet.create({
     color: "#FFF",
     fontSize: 14,
     fontWeight: "600",
+  },
+  deleteButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
   },
   buttonLoadingContainer: {
     flexDirection: "row",
@@ -698,5 +922,97 @@ const styles = StyleSheet.create({
   addDeviceCardText: {
     fontSize: 16,
     fontWeight: "600",
+  },
+  // ── Modal Styles ──────────────────────────────────────────────────────
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  modalMessage: {
+    fontSize: 16,
+    marginBottom: 16,
+    lineHeight: 22,
+  },
+  deviceInfoBox: {
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+  },
+  deviceInfoLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  deviceInfoValue: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalWarning: {
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  confirmLabel: {
+    fontSize: 14,
+    marginBottom: 8,
+  },
+  confirmInputContainer: {
+    marginBottom: 20,
+  },
+  confirmInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  modalCancelButton: {
+    backgroundColor: 'rgba(0,0,0,0.05)',
+  },
+  modalDeleteButton: {
+    backgroundColor: '#F44336',
+  },
+  modalButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  modalDeleteButtonText: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

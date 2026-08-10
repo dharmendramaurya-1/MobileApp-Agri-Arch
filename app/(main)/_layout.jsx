@@ -6,7 +6,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router, useNavigation } from "expo-router";
 import { Drawer } from "expo-router/drawer";
 import { useEffect, useState } from "react";
-import { BackHandler } from "react-native";
+import { BackHandler, Modal } from "react-native";
 
 import {
   Alert,
@@ -21,6 +21,8 @@ import {
 } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AlertBadge } from "../../components/AlertBadge";
+import { AlertList } from "../../components/AlertList";
 import Logo from "../../components/Logo";
 import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
@@ -29,10 +31,11 @@ import { user_profile } from "../../src/services/profile/profile";
 
 const { width, height } = Dimensions.get("window");
 
-function CustomHeader({ navigation, onNotificationPress, theme }) {
+function CustomHeader({ navigation, theme }) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [user_name, setUsername] = useState("");
   const [currentvalue, setcurrentvalue] = useState({});
+  const [showAlerts, setShowAlerts] = useState(false);
   const { sensorData } = useMqtt();
 
   useEffect(() => {
@@ -119,23 +122,21 @@ function CustomHeader({ navigation, onNotificationPress, theme }) {
         </View>
 
         <View style={styles.headerRightIcons}>
+          {/* ✅ Alert Badge - Click to show alerts */}
+          <TouchableOpacity
+            onPress={() => setShowAlerts(true)}
+            style={styles.headerIconButton}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <AlertBadge onPress={() => setShowAlerts(true)} />
+          </TouchableOpacity>
+
           <TouchableOpacity
             onPress={openWhatsApp}
             style={styles.headerIconButton}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             <Ionicons name="logo-whatsapp" size={22} color="#25D366" />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={onNotificationPress}
-            style={styles.headerIconButton}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="notifications-outline" size={22} color="#FFF" />
-            <View style={styles.notificationBadge}>
-              <Text style={styles.notificationBadgeText}>3</Text>
-            </View>
           </TouchableOpacity>
         </View>
       </View>
@@ -189,6 +190,16 @@ function CustomHeader({ navigation, onNotificationPress, theme }) {
           </View>
         </View>
       </View>
+
+      {/* ✅ Alert Modal */}
+      <Modal
+        visible={showAlerts}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setShowAlerts(false)}
+      >
+        <AlertList onClose={() => setShowAlerts(false)} />
+      </Modal>
     </View>
   );
 }
@@ -403,10 +414,6 @@ export default function MainLayout() {
   const { theme } = useTheme();
   const navigation = useNavigation();
 
-  const handleNotificationPress = () => {
-    router.push("/(main)/notifications");
-  };
-
   // Handle Android back button
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -443,7 +450,6 @@ export default function MainLayout() {
           header: ({ navigation }) => (
             <CustomHeader
               navigation={navigation}
-              onNotificationPress={handleNotificationPress}
               theme={theme}
             />
           ),
@@ -458,8 +464,7 @@ export default function MainLayout() {
         <Drawer.Screen name="add_crops" options={{ title: "Add Crops" }} />
         <Drawer.Screen name="profile" options={{ title: "Profile" }} />
         
-        {/* ── NOTIFICATIONS & SETTINGS ── */}
-        <Drawer.Screen name="notifications" options={{ title: "Notifications" }} />
+        {/* ── SETTINGS ── */}
         <Drawer.Screen name="settings" options={{ title: "Settings" }} />
         
         {/* ── HISTORY ── */}
@@ -510,19 +515,6 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 20,
   },
-  notificationBadge: {
-    position: "absolute",
-    top: 2,
-    right: 2,
-    backgroundColor: "#F44336",
-    borderRadius: 8,
-    minWidth: 16,
-    height: 16,
-    justifyContent: "center",
-    alignItems: "center",
-    paddingHorizontal: 3,
-  },
-  notificationBadgeText: { color: "#FFF", fontSize: 9, fontWeight: "700" },
   heroSection: { position: "relative", width: "100%" },
   heroImage: { width: "100%", height: "100%", position: "absolute" },
   heroContent: { padding: 12, paddingTop: 8, paddingBottom: 12 },

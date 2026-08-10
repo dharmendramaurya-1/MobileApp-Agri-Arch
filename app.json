@@ -5,11 +5,9 @@
     "version": "1.0.0",
     "scheme": "agriarch",
     "orientation": "portrait",
-    "icon": "./assets/images/logo.jpeg",
+    "icon": "./assets/images/Logo.png",
     "userInterfaceStyle": "light",
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.yourcompany.yourapp",
@@ -19,7 +17,7 @@
       "package": "com.yourcompany.yourapp",
       "versionCode": 1,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/logo.jpeg",
+        "foregroundImage": "./assets/images/Logo.png",
         "backgroundColor": "#ffffff"
       }
     },
@@ -31,18 +29,18 @@
         "projectId": "3f30c682-8fcd-4d7c-a851-e255928970ce"
       }
     },
-   "plugins": [
-  "expo-router",
-  "expo-splash-screen",
-  "expo-web-browser",
-  [
-    "expo-build-properties",
-    {
-      "android": {
-        "usesCleartextTraffic": true
-      }
-    }
-  ]
-]
+    "plugins": [
+      "expo-router",
+      "expo-splash-screen",
+      "expo-web-browser",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ]
   }
 }

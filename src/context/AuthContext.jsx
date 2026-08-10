@@ -44,7 +44,6 @@ export function AuthProvider({ children }) {
       
       if (savedToken && isAuthenticated === "true") {
         setToken(savedToken);
-        // ✅ Restore signup flow flag from storage
         if (signupFlowFlag === "true") {
           setIsSignupFlow(true);
           console.log("✅ Restored signup flow flag from storage");
@@ -89,7 +88,6 @@ export function AuthProvider({ children }) {
         setToken(result.token);
         await AsyncStorage.setItem("authToken", result.token);
         await AsyncStorage.setItem("isAuthenticated", "true");
-        // ✅ Remove signup flag on normal login
         await AsyncStorage.removeItem("isSignupFlow");
         setIsSignupFlow(false);
         
@@ -126,7 +124,6 @@ export function AuthProvider({ children }) {
       setIsLoading(true);
       console.log("🔐 Signup flow login for:", email);
       
-      // ✅ Set signup flow flag BEFORE login
       setIsSignupFlow(true);
       await AsyncStorage.setItem("isSignupFlow", "true");
       console.log("✅ isSignupFlow set to true and saved to storage");
@@ -138,8 +135,6 @@ export function AuthProvider({ children }) {
         setToken(result.token);
         await AsyncStorage.setItem("authToken", result.token);
         await AsyncStorage.setItem("isAuthenticated", "true");
-        
-        // ✅ Keep signup flow flag set
         await AsyncStorage.setItem("isSignupFlow", "true");
         
         console.log("✅ Signup login successful, token stored");
@@ -152,7 +147,6 @@ export function AuthProvider({ children }) {
           data: result.data 
         };
       } else {
-        // ✅ Reset flag on failure
         setIsSignupFlow(false);
         await AsyncStorage.removeItem("isSignupFlow");
         console.log("❌ Signup login failed:", result?.error || "Unknown error");
@@ -232,6 +226,119 @@ export function AuthProvider({ children }) {
     }
   };
 
+  // ── GET API URL ──────────────────────────────────────────────────────────
+  const getApiUrl = () => {
+    // Use environment variable or default
+    return process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.18:3000';
+  };
+
+  // ── DELETE THING ──────────────────────────────────────────────────────────
+  const deleteThing = async (thingId) => {
+    try {
+      if (!token) {
+        console.error("❌ No auth token available");
+        return { success: false, error: "Not authenticated" };
+      }
+
+      const apiUrl = getApiUrl();
+      const url = `${apiUrl}/things/${thingId}`;
+      
+      console.log(`🗑️ Deleting thing: ${thingId}`);
+      console.log(`📍 URL: ${url}`);
+      
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+      
+      console.log(`📡 Response status: ${response.status}`);
+      
+      if (response.status === 200 || response.status === 204) {
+        console.log(`✅ Thing ${thingId} deleted successfully`);
+        
+        // ✅ Remove from local storage things list
+        try {
+          const thingsJson = await AsyncStorage.getItem('things');
+          if (thingsJson) {
+            const things = JSON.parse(thingsJson);
+            const updatedThings = things.filter(t => t.id !== thingId);
+            await AsyncStorage.setItem('things', JSON.stringify(updatedThings));
+          }
+        } catch (storageError) {
+          console.error("Error updating things storage:", storageError);
+        }
+        
+        // ✅ If active device was deleted, clear it
+        try {
+          const publisherId = await AsyncStorage.getItem('publisher_id');
+          if (publisherId === thingId) {
+            await AsyncStorage.removeItem('publisher_id');
+            await AsyncStorage.removeItem('external_key');
+            console.log("✅ Active device cleared from storage");
+          }
+        } catch (activeError) {
+          console.error("Error clearing active device:", activeError);
+        }
+        
+        return { success: true };
+      } else {
+        let errorMessage = `Delete failed with status: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorData.error || errorMessage;
+        } catch (e) {
+          // Ignore JSON parse error
+        }
+        console.error(`❌ Delete failed: ${errorMessage}`);
+        return { success: false, error: errorMessage };
+      }
+    } catch (error) {
+      console.error('❌ Error deleting thing:', error);
+      return { success: false, error: error.message || "Network error occurred" };
+    }
+  };
+
+  // ── GET ALL THINGS ─────────────────────────────────────────────────────────
+  const getAllThingsFromApi = async () => {
+    try {
+      if (!token) {
+        console.error("❌ No auth token available");
+        return { success: false, error: "Not authenticated", data: [] };
+      }
+
+      const apiUrl = getApiUrl();
+      const url = `${apiUrl}/things`;
+      
+      console.log(`📡 Fetching things from: ${url}`);
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+      
+      console.log(`📡 Response status: ${response.status}`);
+      
+      if (response.status === 200) {
+        const data = await response.json();
+        console.log(`✅ Fetched ${data.length || 0} things`);
+        return { success: true, data: data };
+      } else {
+        const errorText = await response.text();
+        console.error(`❌ Failed to fetch things: ${response.status} - ${errorText}`);
+        return { success: false, error: errorText, data: [] };
+      }
+    } catch (error) {
+      console.error('❌ Error fetching things:', error);
+      return { success: false, error: error.message, data: [] };
+    }
+  };
+
   // ✅ isAuthenticated is derived from token
   const isAuthenticated = !!token;
 
@@ -241,14 +348,18 @@ export function AuthProvider({ children }) {
         token,
         isLoading,
         isAuthenticated,
-        isSignupFlow,        // ✅ Expose signup flow flag
-        login,               // ✅ Normal login
-        signupLogin,         // ✅ Signup login (sets isSignupFlow)
-        resetSignupFlow,     // ✅ Reset signup flow flag
+        isSignupFlow,
+        login,
+        signupLogin,
+        resetSignupFlow,
         logout,
         updateToken,
         clearAuth,
         setAuthData,
+        // ✅ NEW FUNCTIONS
+        deleteThing,
+        getAllThingsFromApi,
+        getApiUrl,
       }}
     >
       {children}

@@ -1,4 +1,5 @@
 // app/(auth)/login.jsx
+import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useRef, useState } from "react";
 import {
@@ -12,7 +13,6 @@ import {
   Platform,
   SafeAreaView,
   ScrollView,
-  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -20,6 +20,7 @@ import {
   TouchableWithoutFeedback,
   View,
 } from "react-native";
+import AppStatusBar from "../../components/AppStatusBar";
 import { useAuth } from "../../src/context/AuthContext";
 import { useTheme } from "../../src/context/ThemContext";
 
@@ -186,7 +187,8 @@ export default function LoginScreen() {
             showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.scrollContent}
           >
-            <StatusBar translucent backgroundColor="transparent" barStyle="light-content" />
+            {/* Light status bar over the dark hero image — same component as the root layout */}
+            <AppStatusBar style="light" translucent />
 
             <View style={styles.heroContainer}>
               <Image
@@ -264,10 +266,13 @@ export default function LoginScreen() {
                   <TouchableOpacity
                     style={styles.eyeButton}
                     onPress={() => setShowPassword(!showPassword)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   >
-                    <Text style={{ color: theme.colors.textSecondary, fontSize: 18 }}>
-                      {showPassword ? "👁️" : "👁️‍🗨️"}
-                    </Text>
+                    <Ionicons
+                      name={showPassword ? "eye-off-outline" : "eye-outline"}
+                      size={22}
+                      color={theme.colors.textSecondary}
+                    />
                   </TouchableOpacity>
                 </View>
               </View>

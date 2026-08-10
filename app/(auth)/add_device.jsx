@@ -3,12 +3,15 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import axios from "axios";
 import { CameraView, useCameraPermissions } from "expo-camera";
+import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   Dimensions,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   Platform,
@@ -19,8 +22,9 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useAuth } from "../../src/context/AuthContext";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useMqtt } from "../../src/context/MqttContext";
+import { useTheme } from "../../src/context/ThemContext";
 import { debugStoredData, identifyAndGetExternalKey } from "../../src/services/identify/identify";
 
 const { width } = Dimensions.get("window");
@@ -30,14 +34,14 @@ const BASE_URL = process.env.EXPO_PUBLIC_API_URL;
 const getProfileId = async () => {
   try {
     let profileId = await AsyncStorage.getItem("profile_id");
-    
+
     if (profileId) {
       console.log("✅ Using stored profile ID:", profileId);
       return profileId;
     }
 
     console.log("🔍 No profile ID in storage, fetching from API...");
-    
+
     const authToken = await AsyncStorage.getItem("authToken");
     if (!authToken) {
       throw new Error("No auth token found. Please login again.");
@@ -58,10 +62,10 @@ const getProfileId = async () => {
     if (response.data && response.data.profiles && response.data.profiles.length > 0) {
       const profile = response.data.profiles[0];
       profileId = profile.id;
-      
+
       await AsyncStorage.setItem("profile_id", profileId);
       console.log("✅ Profile ID fetched and stored:", profileId);
-      
+
       return profileId;
     }
 
@@ -112,45 +116,45 @@ const createThing = async (name, type, userExternalKey) => {
 
     if (response.status === 201 || response.status === 200) {
       console.log("📦 Thing created successfully!");
-      
+
       // ─── Wait for server to process with retry logic ──────────────────────────
       console.log("⏳ Waiting for server to process...");
-      
+
       let result = null;
       let attempts = 0;
       const maxAttempts = 8;
       const initialDelay = 2000;
-      
+
       while (attempts < maxAttempts) {
         attempts++;
         const delay = initialDelay * attempts;
         console.log(`🔄 Attempt ${attempts}/${maxAttempts} - Waiting ${delay}ms before checking...`);
-        
+
         await new Promise(resolve => setTimeout(resolve, delay));
-        
+
         console.log(`🔍 Attempt ${attempts}: Identifying and getting server external_key...`);
         result = await identifyAndGetExternalKey();
-        
+
         if (result && result.id && result.externalKey) {
           console.log("✅ Step 3: Device fully configured!");
           console.log("   📌 Publisher ID (from server):", result.id);
           console.log("   📌 External Key (from server):", result.externalKey);
           await debugStoredData();
-          
+
           // ✅ Navigate to add crops
           router.replace("/(auth)/add_crops");
           return { success: true };
         }
-        
+
         console.log(`⚠️ Attempt ${attempts} failed - result:`, result);
-        
+
         // If it's the last attempt, don't wait more
         if (attempts >= maxAttempts) {
           console.log("❌ Max attempts reached, moving to add_crops anyway");
           router.replace("/(auth)/add_crops");
-          return { 
-            success: true, 
-            warning: "Device created but identification pending" 
+          return {
+            success: true,
+            warning: "Device created but identification pending"
           };
         }
       }
@@ -159,60 +163,95 @@ const createThing = async (name, type, userExternalKey) => {
     return { success: true };
   } catch (error) {
     console.error("❌ Create thing error:", error);
-    
+
     if (error.response) {
       const status = error.response.status;
       const data = error.response.data;
-      
+
       console.error("   Status:", status);
       console.error("   Data:", data);
-      
-      return { 
-        success: false, 
+
+      return {
+        success: false,
         error: data?.message || `Server error (${status}). Please try again.`,
-        errorType: "server" 
+        errorType: "server"
       };
     } else if (error.request) {
-      return { 
-        success: false, 
+      return {
+        success: false,
         error: "Network error. Please check your internet connection.",
-        errorType: "network" 
+        errorType: "network"
       };
     } else {
-      return { 
-        success: false, 
+      return {
+        success: false,
         error: error.message || "An unexpected error occurred.",
-        errorType: "unknown" 
+        errorType: "unknown"
       };
     }
   }
 };
 
+// Small benefit bullet used to explain why this screen matters
+const BenefitItem = ({ icon, label, color, textColor }) => (
+  <View style={styles.benefitItem}>
+    <View style={[styles.benefitIcon, { backgroundColor: `${color}1A` }]}>
+      <Ionicons name={icon} size={16} color={color} />
+    </View>
+    <Text style={[styles.benefitText, { color: textColor }]}>{label}</Text>
+  </View>
+);
+
 export default function AddDevice() {
-  const { resetSignupFlow } = useAuth();
+  const { theme } = useTheme();
   const { forceReconnect } = useMqtt();
-  
+
   const [permission, requestPermission] = useCameraPermissions();
   const [qrModalVisible, setQrModalVisible] = useState(false);
   const [manualModalVisible, setManualModalVisible] = useState(false);
   const [scanned, setScanned] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
+  const [torchOn, setTorchOn] = useState(false);
   const scanLockRef = useRef(false);
 
   const [manualName, setManualName] = useState("");
   const [manualExternalKey, setManualExternalKey] = useState("");
   const [manualType, setManualType] = useState("device");
 
+  // Animated scanning line inside the QR frame
+  const scanAnim = useRef(new Animated.Value(0)).current;
+  const scanLoopRef = useRef(null);
+
+  useEffect(() => {
+    if (qrModalVisible) {
+      scanAnim.setValue(0);
+      const loop = Animated.loop(
+        Animated.timing(scanAnim, {
+          toValue: 1,
+          duration: 2200,
+          useNativeDriver: true,
+        })
+      );
+      scanLoopRef.current = loop;
+      loop.start();
+    } else {
+      scanLoopRef.current?.stop();
+      scanLoopRef.current = null;
+    }
+    return () => {
+      scanLoopRef.current?.stop();
+      scanLoopRef.current = null;
+    };
+  }, [qrModalVisible]);
+
   // ─── Scan flow ──────────────────────────────────────────────────────────
   const handleBarCodeScanned = async ({ data }) => {
     if (scanLockRef.current) return;
     if (isCreating) return;
-    
+
     scanLockRef.current = true;
     setScanned(true);
-    setErrorMessage("");
 
     let name = "Unknown Device";
     let type = "device";
@@ -236,11 +275,11 @@ export default function AddDevice() {
     setIsCreating(true);
     try {
       const result = await createThing(name, type, userExternalKey);
-      
+
       if (result.success) {
         // ✅ Store the external key for MQTT
         await AsyncStorage.setItem("external_key", userExternalKey);
-        
+
         // ✅ Try to connect MQTT with the new key
         try {
           console.log("🔄 Connecting MQTT with new key...");
@@ -249,7 +288,7 @@ export default function AddDevice() {
         } catch (error) {
           console.error("❌ MQTT reconnection error:", error);
         }
-        
+
         setQrModalVisible(false);
         // Navigation happens inside createThing
       } else {
@@ -263,7 +302,7 @@ export default function AddDevice() {
     } catch (error) {
       console.error("❌ Error:", error);
       Alert.alert(
-        "Error", 
+        "Error",
         error.message || "An unexpected error occurred. Please try again.",
         [{ text: "OK" }]
       );
@@ -291,11 +330,11 @@ export default function AddDevice() {
     setIsCreating(true);
     try {
       const result = await createThing(manualName, manualType, manualExternalKey);
-      
+
       if (result.success) {
         // ✅ Store the external key for MQTT
         await AsyncStorage.setItem("external_key", manualExternalKey);
-        
+
         // ✅ Try to connect MQTT with the new key
         try {
           console.log("🔄 Connecting MQTT with new key...");
@@ -304,7 +343,7 @@ export default function AddDevice() {
         } catch (error) {
           console.error("❌ MQTT reconnection error:", error);
         }
-        
+
         setManualModalVisible(false);
         setManualName("");
         setManualExternalKey("");
@@ -320,7 +359,7 @@ export default function AddDevice() {
     } catch (error) {
       console.error("❌ Error:", error);
       Alert.alert(
-        "Error", 
+        "Error",
         error.message || "An unexpected error occurred. Please try again.",
         [{ text: "OK" }]
       );
@@ -336,8 +375,8 @@ export default function AddDevice() {
       "You can add a device later from the dashboard. Would you like to proceed to crop selection?",
       [
         { text: "Cancel", style: "cancel" },
-        { 
-          text: "Proceed to Crops", 
+        {
+          text: "Proceed to Crops",
           onPress: async () => {
             try {
               router.replace("/(auth)/add_crops");
@@ -353,7 +392,7 @@ export default function AddDevice() {
 
   const handleQRCode = async () => {
     console.log("1. handleQRCode pressed, permission:", permission);
-    
+
     if (!permission?.granted) {
       const result = await requestPermission();
       console.log("2. requestPermission result:", result);
@@ -363,8 +402,8 @@ export default function AddDevice() {
           "Please allow camera access to scan a QR code.",
           [
             { text: "Cancel", style: "cancel" },
-            { 
-              text: "Open Settings", 
+            {
+              text: "Open Settings",
               onPress: () => {
                 if (Platform.OS === 'ios') {
                   Linking.openURL('app-settings:');
@@ -378,11 +417,11 @@ export default function AddDevice() {
         return;
       }
     }
-    
+
     scanLockRef.current = false;
     setScanned(false);
     setCameraReady(false);
-    setErrorMessage("");
+    setTorchOn(false);
     setQrModalVisible(true);
     console.log("3. opening QR modal");
   };
@@ -391,82 +430,156 @@ export default function AddDevice() {
     setQrModalVisible(false);
     setScanned(false);
     setCameraReady(false);
+    setTorchOn(false);
     scanLockRef.current = false;
   };
 
-  return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.scrollContent}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backButton}
-        >
-          <Ionicons name="arrow-back" size={24} color="#1a1a1a" />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Add Device</Text>
-        <View style={{ width: 40 }} />
-      </View>
+  const primary = theme.colors.primary;
+  const primaryDark = theme.colors.primaryDark;
 
-      {/* Centered content */}
-      <View style={styles.content}>
-        <View style={styles.iconContainer}>
-          <Ionicons name="hardware-chip" size={72} color="#4CAF50" />
+  return (
+    <SafeAreaView
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
+      edges={["top", "bottom"]}
+    >
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header with back button */}
+        <View style={styles.header}>
+          {/* <TouchableOpacity
+            onPress={() => router.back()}
+            style={[styles.backButton, { backgroundColor: theme.colors.surface }]}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
+            <Ionicons name="arrow-back" size={22} color={theme.colors.text} />
+          </TouchableOpacity> */}
+          <View></View>
+
+          <Text style={[styles.headerTitle, { color: theme.colors.text }]}>
+            Add Device
+          </Text>
+
+          {/* Step indicator - explains where you are in setup */}
+          <View style={[styles.stepBadge, { backgroundColor: `${primary}1A` }]}>
+            <Text style={[styles.stepBadgeText, { color: primary }]}>
+              Step 2 of 3
+            </Text>
+          </View>
         </View>
 
-        <Text style={styles.title}>Connect Your Device</Text>
-        <Text style={styles.subtitle}>
-          Scan your device's QR code or enter its details manually to connect it
-          to your mobile app.
-        </Text>
+        {/* Centered content */}
+        <View style={styles.content}>
+          <LinearGradient
+            colors={[primary, primaryDark]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.iconContainer}
+          >
+            <Ionicons name="hardware-chip" size={44} color="#fff" />
+          </LinearGradient>
 
-        {errorMessage ? (
-          <View style={styles.errorContainer}>
-            <Ionicons name="alert-circle" size={20} color="#FF3B30" />
-            <Text style={styles.errorText}>{errorMessage}</Text>
+          <Text style={[styles.title, { color: theme.colors.text }]}>
+            Connect Your Device
+          </Text>
+          <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
+            Link your AgriArch sensor device so your farm can be monitored in
+            real time. Scan the QR code on your device or enter its details
+            manually.
+          </Text>
+
+          {/* Why connect a device */}
+          <View style={[styles.benefitsCard, { backgroundColor: theme.colors.surface }]}>
+            <BenefitItem
+              icon="pulse-outline"
+              label="Live soil, water & weather monitoring"
+              color={primary}
+              textColor={theme.colors.text}
+            />
+            <BenefitItem
+              icon="notifications-outline"
+              label="Smart alerts for irrigation & pumps"
+              color={primary}
+              textColor={theme.colors.text}
+            />
+            <BenefitItem
+              icon="leaf-outline"
+              label="Automated crop recommendations"
+              color={primary}
+              textColor={theme.colors.text}
+            />
           </View>
-        ) : null}
 
-        <TouchableOpacity
-          style={styles.btn}
-          onPress={handleQRCode}
-          activeOpacity={0.85}
-          disabled={isCreating}
-        >
-          <Ionicons name="qr-code" size={20} color="#fff" />
-          <Text style={styles.btnText}>Scan QR Code</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.btn, { shadowColor: primaryDark }]}
+            onPress={handleQRCode}
+            activeOpacity={0.85}
+            disabled={isCreating}
+            accessibilityRole="button"
+          >
+            <LinearGradient
+              colors={[primary, primaryDark]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.btnGradient}
+            >
+              <Ionicons name="qr-code" size={20} color="#fff" />
+              <Text style={styles.btnText}>Scan QR Code</Text>
+            </LinearGradient>
+          </TouchableOpacity>
 
-        <Text style={styles.or}>or</Text>
+          <View style={styles.orRow}>
+            <View style={[styles.orLine, { backgroundColor: theme.colors.border }]} />
+            <Text style={[styles.or, { color: theme.colors.textSecondary }]}>or</Text>
+            <View style={[styles.orLine, { backgroundColor: theme.colors.border }]} />
+          </View>
 
-        <TouchableOpacity
-          style={styles.btnOutline}
-          onPress={() => setManualModalVisible(true)}
-          activeOpacity={0.85}
-          disabled={isCreating}
-        >
-          <Ionicons name="create-outline" size={20} color="#4CAF50" />
-          <Text style={styles.btnOutlineText}>Enter Device Manually</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.btnOutline, { borderColor: primary }]}
+            onPress={() => setManualModalVisible(true)}
+            activeOpacity={0.85}
+            disabled={isCreating}
+            accessibilityRole="button"
+          >
+            <Ionicons name="create-outline" size={20} color={primary} />
+            <Text style={[styles.btnOutlineText, { color: primary }]}>
+              Enter Device Manually
+            </Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.skipButton}
-          onPress={handleSkip}
-          disabled={isCreating}
-        >
-          <Text style={styles.skipText}>Skip for now</Text>
-        </TouchableOpacity>
-      </View>
+          <TouchableOpacity
+            style={styles.skipButton}
+            onPress={handleSkip}
+            disabled={isCreating}
+            accessibilityRole="button"
+          >
+            <Text style={[styles.skipText, { color: theme.colors.textSecondary }]}>
+              Skip for now
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
 
       {/* Loading overlay */}
       {isCreating && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="large" color="#4CAF50" />
-          <Text style={styles.loadingText}>Connecting device...</Text>
+        <View
+          style={[
+            styles.loadingOverlay,
+            {
+              backgroundColor: theme.dark
+                ? "rgba(18,18,18,0.92)"
+                : "rgba(255,255,255,0.92)",
+            },
+          ]}
+        >
+          <ActivityIndicator size="large" color={primary} />
+          <Text style={[styles.loadingText, { color: theme.colors.text }]}>
+            Connecting device...
+          </Text>
         </View>
       )}
 
@@ -480,24 +593,38 @@ export default function AddDevice() {
           <View style={styles.qrHeader}>
             <TouchableOpacity
               onPress={closeQrScanner}
-              style={styles.qrBackButton}
+              style={styles.qrHeaderButton}
+              accessibilityRole="button"
+              accessibilityLabel="Close scanner"
             >
               <Ionicons name="close" size={28} color="#fff" />
             </TouchableOpacity>
             <Text style={styles.qrTitle}>Scan QR Code</Text>
-            <View style={{ width: 40 }} />
+            <TouchableOpacity
+              onPress={() => setTorchOn(!torchOn)}
+              style={styles.qrHeaderButton}
+              accessibilityRole="button"
+              accessibilityLabel={torchOn ? "Turn off flashlight" : "Turn on flashlight"}
+            >
+              <Ionicons
+                name={torchOn ? "flash" : "flash-outline"}
+                size={26}
+                color={torchOn ? "#FFD54F" : "#fff"}
+              />
+            </TouchableOpacity>
           </View>
 
           {permission?.granted ? (
             <CameraView
               style={StyleSheet.absoluteFillObject}
               facing="back"
+              torch={torchOn ? "on" : "off"}
               onCameraReady={() => {
                 console.log("✅ Camera ready");
                 setCameraReady(true);
               }}
               onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
-              barcodeScannerSettings={{ 
+              barcodeScannerSettings={{
                 barcodeTypes: ["qr"],
                 interval: 1000,
               }}
@@ -507,7 +634,7 @@ export default function AddDevice() {
               <Ionicons name="camera-off" size={48} color="#666" />
               <Text style={styles.cameraLoadingText}>Camera not available</Text>
               <TouchableOpacity
-                style={styles.cameraRetryButton}
+                style={[styles.cameraRetryButton, { backgroundColor: primary }]}
                 onPress={handleQRCode}
               >
                 <Text style={styles.cameraRetryText}>Request Permission</Text>
@@ -517,14 +644,35 @@ export default function AddDevice() {
 
           {!cameraReady && permission?.granted && (
             <View style={styles.cameraLoading}>
-              <ActivityIndicator size="large" color="#4CAF50" />
+              <ActivityIndicator size="large" color={primary} />
               <Text style={styles.cameraLoadingText}>Starting camera...</Text>
             </View>
           )}
 
-          {/* Scan Overlay Frame */}
+          {/* Scan Overlay Frame with corner brackets + animated line */}
           <View style={styles.scanOverlay}>
-            <View style={styles.scanFrame} />
+            <View style={styles.scanFrame}>
+              <View style={[styles.corner, styles.cornerTL, { borderColor: primary }]} />
+              <View style={[styles.corner, styles.cornerTR, { borderColor: primary }]} />
+              <View style={[styles.corner, styles.cornerBL, { borderColor: primary }]} />
+              <View style={[styles.corner, styles.cornerBR, { borderColor: primary }]} />
+              <Animated.View
+                style={[
+                  styles.scanLine,
+                  {
+                    backgroundColor: primary,
+                    transform: [
+                      {
+                        translateY: scanAnim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [4, width * 0.7 - 8],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              />
+            </View>
             <Text style={styles.scanInstruction}>
               Align the QR code within the frame
             </Text>
@@ -533,158 +681,264 @@ export default function AddDevice() {
       </Modal>
 
       {/* Manual Entry Modal */}
-      <Modal 
-        visible={manualModalVisible} 
-        animationType="slide" 
+      <Modal
+        visible={manualModalVisible}
+        animationType="slide"
         transparent
         onRequestClose={() => setManualModalVisible(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Enter Device Details</Text>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={styles.modalOverlay}
+        >
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface }]}>
+            <View style={[styles.modalHandle, { backgroundColor: theme.colors.border }]} />
+            <Text style={[styles.modalTitle, { color: theme.colors.text }]}>
+              Enter Device Details
+            </Text>
+            <Text style={[styles.modalSubtitle, { color: theme.colors.textSecondary }]}>
+              The ID is printed on your device label
+            </Text>
 
-            <TextInput
-              placeholder="Device name"
-              placeholderTextColor="#999"
-              value={manualName}
-              onChangeText={setManualName}
-              style={styles.input}
-              editable={!isCreating}
-            />
-            <TextInput
-              placeholder="External key (e.g., SENSOR-001)"
-              placeholderTextColor="#999"
-              value={manualExternalKey}
-              onChangeText={setManualExternalKey}
-              autoCapitalize="characters"
-              style={styles.input}
-              editable={!isCreating}
-            />
-            <TextInput
-              placeholder="Device type (e.g., device, sensor)"
-              placeholderTextColor="#999"
-              value={manualType}
-              onChangeText={setManualType}
-              style={styles.input}
-              editable={!isCreating}
-            />
+            <View
+              style={[
+                styles.inputGroup,
+                {
+                  backgroundColor: theme.colors.inputBackground,
+                  borderColor: theme.colors.border,
+                },
+              ]}
+            >
+              <Ionicons name="cube-outline" size={18} color={theme.colors.textSecondary} />
+              <TextInput
+                placeholder="Device name"
+                placeholderTextColor={theme.colors.textSecondary}
+                value={manualName}
+                onChangeText={setManualName}
+                style={[styles.input, { color: theme.colors.text }]}
+                editable={!isCreating}
+                returnKeyType="next"
+              />
+            </View>
+
+            <View
+              style={[
+                styles.inputGroup,
+                {
+                  backgroundColor: theme.colors.inputBackground,
+                  borderColor: theme.colors.border,
+                },
+              ]}
+            >
+              <Ionicons name="key-outline" size={18} color={theme.colors.textSecondary} />
+              <TextInput
+                placeholder="External key (e.g., SENSOR-001)"
+                placeholderTextColor={theme.colors.textSecondary}
+                value={manualExternalKey}
+                onChangeText={setManualExternalKey}
+                autoCapitalize="characters"
+                style={[styles.input, { color: theme.colors.text }]}
+                editable={!isCreating}
+                returnKeyType="next"
+              />
+            </View>
+
+            <View
+              style={[
+                styles.inputGroup,
+                {
+                  backgroundColor: theme.colors.inputBackground,
+                  borderColor: theme.colors.border,
+                },
+              ]}
+            >
+              <Ionicons name="options-outline" size={18} color={theme.colors.textSecondary} />
+              <TextInput
+                placeholder="Device type (e.g., device, sensor)"
+                placeholderTextColor={theme.colors.textSecondary}
+                value={manualType}
+                onChangeText={setManualType}
+                style={[styles.input, { color: theme.colors.text }]}
+                editable={!isCreating}
+                returnKeyType="done"
+                onSubmitEditing={handleManualEntry}
+              />
+            </View>
 
             <View style={styles.modalButtons}>
               <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
+                style={[styles.modalButton, styles.cancelButton, { borderColor: theme.colors.border }]}
                 onPress={() => setManualModalVisible(false)}
                 disabled={isCreating}
               >
-                <Text style={styles.cancelButtonText}>Cancel</Text>
+                <Text style={[styles.cancelButtonText, { color: theme.colors.text }]}>
+                  Cancel
+                </Text>
               </TouchableOpacity>
+
               <TouchableOpacity
-                style={[styles.modalButton, styles.createButton]}
+                style={[styles.modalButton, { shadowColor: primaryDark }]}
                 onPress={handleManualEntry}
                 disabled={isCreating}
+                accessibilityRole="button"
               >
-                {isCreating ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.createButtonText}>Connect</Text>
-                )}
+                <LinearGradient
+                  colors={[primary, primaryDark]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.createButtonGradient}
+                >
+                  {isCreating ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.createButtonText}>Connect</Text>
+                  )}
+                </LinearGradient>
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
-    </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
+  container: { flex: 1 },
   scrollContent: { flexGrow: 1, paddingBottom: "5%" },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: 60,
-    paddingBottom: 20,
+    paddingTop: 12,
+    paddingBottom: 8,
   },
-  backButton: { padding: 8 },
-  headerTitle: { fontSize: 20, fontWeight: "700", color: "#1a1a1a" },
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  headerTitle: { fontSize: 20, fontWeight: "700" , textAlign: "center", paddingLeft: 76, letterSpacing: 0.3},
+  stepBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+  },
+  stepBadgeText: { fontSize: 12, fontWeight: "700", letterSpacing: 0.3 },
   content: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: 32,
-    paddingVertical: 40,
+    paddingHorizontal: 28,
+    paddingVertical: 32,
   },
   iconContainer: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
+    width: 104,
+    height: 104,
+    borderRadius: 52,
     justifyContent: "center",
     alignItems: "center",
     marginBottom: 24,
-    backgroundColor: "rgba(76, 175, 80, 0.1)",
+    shadowColor: "#1B5E20",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 6,
   },
   title: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: "#1a1a1a",
+    fontSize: 26,
+    fontWeight: "800",
     textAlign: "center",
+    letterSpacing: 0.2,
   },
   subtitle: {
-    fontSize: 14,
-    color: "#666",
+    fontSize: 14.5,
     textAlign: "center",
     marginTop: 8,
-    marginBottom: 32,
-    lineHeight: 20,
+    marginBottom: 24,
+    lineHeight: 21,
+    opacity: 0.85,
   },
-  errorContainer: {
+  benefitsCard: {
+    width: "100%",
+    borderRadius: 16,
+    padding: 16,
+    gap: 12,
+    marginBottom: 24,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  benefitItem: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#FFEBEE",
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 16,
-    width: "100%",
-    gap: 8,
+    gap: 12,
   },
-  errorText: {
-    color: "#FF3B30",
-    fontSize: 14,
+  benefitIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  benefitText: {
     flex: 1,
+    fontSize: 13.5,
+    fontWeight: "500",
   },
   btn: {
     width: "100%",
+    borderRadius: 50,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  btnGradient: {
     flexDirection: "row",
     gap: 8,
     paddingVertical: 16,
-    borderRadius: 12,
+    borderRadius: 50,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#4CAF50",
   },
-  btnText: { color: "#fff", fontSize: 16, fontWeight: "700" },
-  or: { marginVertical: 16, color: "#999" },
+  btnText: { color: "#fff", fontSize: 16, fontWeight: "700", letterSpacing: 0.3 },
+  orRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginVertical: 18,
+    width: "100%",
+  },
+  orLine: { flex: 1, height: 1 },
+  or: { fontSize: 13, fontWeight: "600" },
   btnOutline: {
     width: "100%",
     flexDirection: "row",
     gap: 8,
     paddingVertical: 14,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: "#4CAF50",
+    borderRadius: 50,
+    borderWidth: 1.5,
     alignItems: "center",
     justifyContent: "center",
   },
-  btnOutlineText: { fontSize: 16, fontWeight: "600", color: "#4CAF50" },
+  btnOutlineText: { fontSize: 15, fontWeight: "600" },
   skipButton: {
-    marginTop: 20,
+    marginTop: 18,
     paddingVertical: 12,
   },
   skipText: {
     fontSize: 14,
-    color: "#666",
     textDecorationLine: "underline",
   },
   loadingOverlay: {
@@ -695,9 +949,9 @@ const styles = StyleSheet.create({
     bottom: 0,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.9)",
+    zIndex: 50,
   },
-  loadingText: { marginTop: 10, fontSize: 14, color: "#1a1a1a" },
+  loadingText: { marginTop: 12, fontSize: 14, fontWeight: "500" },
   qrHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -705,14 +959,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 50,
     paddingBottom: 20,
-    backgroundColor: "rgba(0,0,0,0.5)",
+    backgroundColor: "rgba(0,0,0,0.55)",
     position: "absolute",
     top: 0,
     left: 0,
     right: 0,
     zIndex: 30,
   },
-  qrBackButton: { padding: 8 },
+  qrHeaderButton: { padding: 8 },
   qrTitle: { fontSize: 18, fontWeight: "600", color: "#fff" },
   scanOverlay: {
     flex: 1,
@@ -723,14 +977,32 @@ const styles = StyleSheet.create({
   scanFrame: {
     width: width * 0.7,
     height: width * 0.7,
-    borderWidth: 2,
-    borderColor: "#4CAF50",
     borderRadius: 12,
+    overflow: "hidden",
+  },
+  corner: {
+    position: "absolute",
+    width: 32,
+    height: 32,
+    borderWidth: 4,
+    zIndex: 10,
+  },
+  cornerTL: { top: 0, left: 0, borderBottomWidth: 0, borderRightWidth: 0, borderTopLeftRadius: 12 },
+  cornerTR: { top: 0, right: 0, borderBottomWidth: 0, borderLeftWidth: 0, borderTopRightRadius: 12 },
+  cornerBL: { bottom: 0, left: 0, borderTopWidth: 0, borderRightWidth: 0, borderBottomLeftRadius: 12 },
+  cornerBR: { bottom: 0, right: 0, borderTopWidth: 0, borderLeftWidth: 0, borderBottomRightRadius: 12 },
+  scanLine: {
+    position: "absolute",
+    top: 0,
+    left: 10,
+    right: 10,
+    height: 2,
+    borderRadius: 1,
   },
   scanInstruction: {
     color: "#fff",
     fontSize: 14,
-    marginTop: 20,
+    marginTop: 24,
     textAlign: "center",
     paddingHorizontal: 20,
   },
@@ -750,7 +1022,6 @@ const styles = StyleSheet.create({
     marginTop: 20,
     paddingHorizontal: 24,
     paddingVertical: 12,
-    backgroundColor: "#4CAF50",
     borderRadius: 8,
   },
   cameraRetryText: {
@@ -765,38 +1036,66 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   modalContent: {
-    width: "85%",
-    borderRadius: 16,
-    padding: 20,
-    backgroundColor: "#fff",
-    elevation: 5,
+    width: "88%",
+    borderRadius: 24,
+    padding: 24,
+    paddingTop: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  modalHandle: {
+    alignSelf: "center",
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    marginBottom: 16,
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: "700",
-    marginBottom: 16,
     textAlign: "center",
-    color: "#1a1a1a",
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    textAlign: "center",
+    marginTop: 4,
+    marginBottom: 20,
+  },
+  inputGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    height: 50,
+    marginBottom: 12,
   },
   input: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    marginBottom: 12,
-    color: "#1a1a1a",
+    flex: 1,
+    fontSize: 15,
+    paddingHorizontal: 10,
+    paddingVertical: 0,
+    height: "100%",
   },
   modalButtons: { flexDirection: "row", gap: 12, marginTop: 8 },
   modalButton: {
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
+    borderRadius: 50,
+    overflow: "hidden",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  cancelButton: { borderWidth: 1, alignItems: "center", justifyContent: "center", paddingVertical: 14, shadowOpacity: 0, elevation: 0 },
+  cancelButtonText: { fontSize: 15, fontWeight: "600" },
+  createButtonGradient: {
+    paddingVertical: 14,
     alignItems: "center",
     justifyContent: "center",
   },
-  cancelButton: { borderWidth: 1, borderColor: "#ddd" },
-  cancelButtonText: { fontSize: 16, fontWeight: "600", color: "#1a1a1a" },
-  createButton: { backgroundColor: "#4CAF50" },
-  createButtonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  createButtonText: { color: "#fff", fontSize: 15, fontWeight: "700" },
 });

@@ -2,18 +2,18 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRef, useState } from 'react';
 import {
-    Alert,
-    Animated,
-    Dimensions,
-    PanResponder,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Alert,
+  Animated,
+  Dimensions,
+  PanResponder,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 
-// ✅ CORRECT - Context from src/context/
 import { useAlerts } from '../src/context/AlertContext';
 
 const { width, height } = Dimensions.get('window');
@@ -22,16 +22,32 @@ export const AlertList = ({ onClose }) => {
   const { alerts, markAsRead, clearAlerts, markAllAsRead } = useAlerts();
   const [swipedId, setSwipedId] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
+  const [showClearAll, setShowClearAll] = useState(false);
 
-  // ✅ Use default colors instead of theme context to avoid dependency
   const colors = {
-    background: '#f5f5f5',
+    background: '#f5f7fa',
     surface: '#ffffff',
-    text: '#333333',
-    textSecondary: '#666666',
-    border: '#e0e0e0',
+    text: '#1a1a2e',
+    textSecondary: '#6b7280',
+    border: '#e5e7eb',
     primary: '#4CAF50',
+    error: '#ef4444',
+    warning: '#f59e0b',
+    success: '#10b981',
+    info: '#3b82f6',
   };
+
+  // ✅ Filter alerts - only from data topic responses
+  const dataAlerts = alerts.filter(alert => 
+    alert.type === 'device' || 
+    alert.type === 'pump' || 
+    alert.type === 'valve' ||
+    alert.type === 'tank' ||
+    alert.type === 'sensor' ||
+    alert.type === 'mode' ||
+    alert.type === 'system'
+  );
+
   const getSeverityIcon = (severity) => {
     switch (severity) {
       case 'error': return 'alert-circle';
@@ -43,19 +59,19 @@ export const AlertList = ({ onClose }) => {
 
   const getSeverityColor = (severity) => {
     switch (severity) {
-      case 'error': return '#F44336';
-      case 'warning': return '#FF9800';
-      case 'success': return '#4CAF50';
-      default: return '#2196F3';
+      case 'error': return colors.error;
+      case 'warning': return colors.warning;
+      case 'success': return colors.success;
+      default: return colors.info;
     }
   };
 
   const getSeverityBg = (severity) => {
     switch (severity) {
-      case 'error': return '#FFEBEE';
-      case 'warning': return '#FFF3E0';
-      case 'success': return '#E8F5E9';
-      default: return '#E3F2FD';
+      case 'error': return '#fef2f2';
+      case 'warning': return '#fffbeb';
+      case 'success': return '#ecfdf5';
+      default: return '#eff6ff';
     }
   };
 
@@ -117,7 +133,7 @@ export const AlertList = ({ onClose }) => {
     const panResponder = useRef(
       PanResponder.create({
         onMoveShouldSetPanResponder: (_, gestureState) => {
-          return Math.abs(gestureState.dx) > 20;
+          return Math.abs(gestureState.dx) > 10;
         },
         onPanResponderMove: (_, gestureState) => {
           if (gestureState.dx < 0 && gestureState.dx > -150) {
@@ -127,8 +143,9 @@ export const AlertList = ({ onClose }) => {
         onPanResponderRelease: (_, gestureState) => {
           if (gestureState.dx < -80) {
             Animated.spring(pan, {
-              toValue: { x: -100, y: 0 },
+              toValue: { x: -120, y: 0 },
               useNativeDriver: false,
+              friction: 5,
             }).start();
             setIsSwiped(true);
             setSwipedId(alert.id);
@@ -136,6 +153,7 @@ export const AlertList = ({ onClose }) => {
             Animated.spring(pan, {
               toValue: { x: 0, y: 0 },
               useNativeDriver: false,
+              friction: 5,
             }).start();
             setIsSwiped(false);
             setSwipedId(null);
@@ -153,6 +171,7 @@ export const AlertList = ({ onClose }) => {
     };
 
     const isExpanded = expandedId === alert.id;
+    const isUnread = !alert.read;
 
     return (
       <View style={styles.swipeContainer}>
@@ -161,9 +180,10 @@ export const AlertList = ({ onClose }) => {
             styles.alertItemWrapper,
             {
               transform: [{ translateX: pan.x }],
-              backgroundColor: alert.read ? colors.surface : getSeverityBg(alert.severity),
-              borderLeftColor: getSeverityColor(alert.severity),
-              opacity: alert.read ? 0.7 : 1,
+              backgroundColor: isUnread ? getSeverityBg(alert.severity) : colors.surface,
+              borderLeftColor: isUnread ? getSeverityColor(alert.severity) : colors.border,
+              borderLeftWidth: 4,
+              opacity: isUnread ? 1 : 0.6,
             },
           ]}
           {...panResponder.panHandlers}
@@ -171,13 +191,15 @@ export const AlertList = ({ onClose }) => {
           <TouchableOpacity
             style={styles.alertContent}
             onPress={() => {
-              if (!alert.read) markAsRead(alert.id);
+              if (isUnread) markAsRead(alert.id);
               toggleExpand();
             }}
             activeOpacity={0.7}
           >
             <View style={styles.alertHeader}>
-              <View style={styles.alertIconContainer}>
+              <View style={[styles.alertIconContainer, { 
+                backgroundColor: getSeverityColor(alert.severity) + '20' 
+              }]}>
                 <Ionicons
                   name={getSeverityIcon(alert.severity)}
                   size={20}
@@ -187,7 +209,7 @@ export const AlertList = ({ onClose }) => {
               <Text style={[styles.alertTitle, { color: colors.text }]}>
                 {alert.title}
               </Text>
-              {!alert.read && (
+              {isUnread && (
                 <View style={styles.unreadDot} />
               )}
             </View>
@@ -206,24 +228,18 @@ export const AlertList = ({ onClose }) => {
                   {getFullTime(alert.timestamp)}
                 </Text>
               )}
-              <View style={styles.alertActions}>
-                {isExpanded && (
-                  <TouchableOpacity onPress={() => handleDelete(alert.id)} style={styles.deleteSmall}>
-                    <Ionicons name="trash-outline" size={16} color="#F44336" />
-                  </TouchableOpacity>
-                )}
-                <TouchableOpacity onPress={toggleExpand} style={styles.expandButton}>
-                  <Ionicons 
-                    name={isExpanded ? "chevron-up" : "chevron-down"} 
-                    size={16} 
-                    color={colors.textSecondary} 
-                  />
-                </TouchableOpacity>
-              </View>
+              <TouchableOpacity onPress={toggleExpand} style={styles.expandButton}>
+                <Ionicons 
+                  name={isExpanded ? "chevron-up" : "chevron-down"} 
+                  size={18} 
+                  color={colors.textSecondary} 
+                />
+              </TouchableOpacity>
             </View>
           </TouchableOpacity>
         </Animated.View>
 
+        {/* Delete button that appears on swipe */}
         {isSwiped && (
           <TouchableOpacity
             style={styles.deleteButton}
@@ -239,6 +255,8 @@ export const AlertList = ({ onClose }) => {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+      
       {/* ── Header ── */}
       <View style={[styles.header, { borderBottomColor: colors.border }]}>
         <TouchableOpacity onPress={onClose} style={styles.backButton}>
@@ -248,16 +266,16 @@ export const AlertList = ({ onClose }) => {
           🔔 Alerts
         </Text>
         <View style={styles.headerActions}>
-          {alerts.filter(a => !a.read).length > 0 && (
+          {dataAlerts.filter(a => !a.read).length > 0 && (
             <TouchableOpacity onPress={markAllAsRead} style={styles.actionButton}>
               <Text style={[styles.actionText, { color: colors.primary }]}>
                 Read All
               </Text>
             </TouchableOpacity>
           )}
-          {alerts.length > 0 && (
+          {dataAlerts.length > 0 && (
             <TouchableOpacity onPress={handleClearAll} style={styles.actionButton}>
-              <Text style={[styles.actionText, { color: '#F44336' }]}>
+              <Text style={[styles.actionText, { color: colors.error }]}>
                 Clear
               </Text>
             </TouchableOpacity>
@@ -269,7 +287,7 @@ export const AlertList = ({ onClose }) => {
       <View style={[styles.statsBar, { backgroundColor: colors.surface }]}>
         <View style={styles.statItem}>
           <Text style={[styles.statNumber, { color: colors.text }]}>
-            {alerts.length}
+            {dataAlerts.length}
           </Text>
           <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
             Total
@@ -277,8 +295,8 @@ export const AlertList = ({ onClose }) => {
         </View>
         <View style={styles.statDivider} />
         <View style={styles.statItem}>
-          <Text style={[styles.statNumber, { color: '#2196F3' }]}>
-            {alerts.filter(a => !a.read).length}
+          <Text style={[styles.statNumber, { color: colors.info }]}>
+            {dataAlerts.filter(a => !a.read).length}
           </Text>
           <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
             Unread
@@ -286,8 +304,8 @@ export const AlertList = ({ onClose }) => {
         </View>
         <View style={styles.statDivider} />
         <View style={styles.statItem}>
-          <Text style={[styles.statNumber, { color: '#F44336' }]}>
-            {alerts.filter(a => a.severity === 'error').length}
+          <Text style={[styles.statNumber, { color: colors.error }]}>
+            {dataAlerts.filter(a => a.severity === 'error').length}
           </Text>
           <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
             Errors
@@ -295,8 +313,8 @@ export const AlertList = ({ onClose }) => {
         </View>
         <View style={styles.statDivider} />
         <View style={styles.statItem}>
-          <Text style={[styles.statNumber, { color: '#FF9800' }]}>
-            {alerts.filter(a => a.severity === 'warning').length}
+          <Text style={[styles.statNumber, { color: colors.warning }]}>
+            {dataAlerts.filter(a => a.severity === 'warning').length}
           </Text>
           <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
             Warnings
@@ -310,7 +328,7 @@ export const AlertList = ({ onClose }) => {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        {alerts.length === 0 ? (
+        {dataAlerts.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Ionicons name="notifications-off" size={64} color="#ccc" />
             <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
@@ -321,7 +339,7 @@ export const AlertList = ({ onClose }) => {
             </Text>
           </View>
         ) : (
-          alerts.map((alert) => (
+          dataAlerts.map((alert) => (
             <SwipeableAlertItem key={alert.id} alert={alert} />
           ))
         )}
@@ -334,12 +352,13 @@ export const AlertList = ({ onClose }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    paddingTop: height * 0.1, // ✅ 10% margin from top
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
     borderBottomWidth: 1,
   },
   backButton: {
@@ -347,7 +366,7 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   title: {
-    fontSize: 20,
+    fontSize: 22,
     fontWeight: '700',
     flex: 1,
   },
@@ -356,8 +375,10 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   actionButton: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0,0,0,0.05)',
   },
   actionText: {
     fontSize: 12,
@@ -365,61 +386,74 @@ const styles = StyleSheet.create({
   },
   statsBar: {
     flexDirection: 'row',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
     justifyContent: 'space-around',
-    marginBottom: 4,
+    marginHorizontal: 16,
+    marginVertical: 12,
+    borderRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
   },
   statItem: {
     alignItems: 'center',
   },
   statNumber: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '700',
   },
   statLabel: {
     fontSize: 10,
     marginTop: 2,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   statDivider: {
     width: 1,
-    backgroundColor: '#e0e0e0',
+    backgroundColor: '#e5e7eb',
   },
   scrollView: {
     flex: 1,
+    paddingHorizontal: 16,
   },
   scrollContent: {
-    paddingHorizontal: 16,
-    paddingTop: 8,
     paddingBottom: 20,
   },
   swipeContainer: {
-    marginBottom: 8,
+    marginBottom: 10,
     position: 'relative',
   },
   alertItemWrapper: {
-    borderRadius: 10,
-    borderLeftWidth: 4,
+    borderRadius: 12,
     overflow: 'hidden',
-    elevation: 1,
+    backgroundColor: '#fff',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
-    shadowRadius: 2,
+    shadowRadius: 4,
+    elevation: 2,
   },
   alertContent: {
-    padding: 14,
+    padding: 16,
   },
   alertHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: 6,
   },
   alertIconContainer: {
-    marginRight: 8,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
   },
   alertTitle: {
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '600',
     flex: 1,
   },
@@ -427,38 +461,29 @@ const styles = StyleSheet.create({
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#2196F3',
+    backgroundColor: '#3b82f6',
     marginLeft: 8,
   },
   alertMessage: {
-    fontSize: 13,
-    marginLeft: 28,
-    marginBottom: 6,
-    lineHeight: 18,
+    fontSize: 14,
+    marginLeft: 48,
+    marginBottom: 8,
+    lineHeight: 20,
   },
   alertFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginLeft: 28,
-    flexWrap: 'wrap',
+    marginLeft: 48,
   },
   alertTime: {
     fontSize: 11,
-    opacity: 0.6,
+    color: '#6b7280',
   },
   alertFullTime: {
     fontSize: 10,
-    opacity: 0.5,
+    color: '#6b7280',
     marginLeft: 8,
-  },
-  alertActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  deleteSmall: {
-    padding: 4,
   },
   expandButton: {
     padding: 4,
@@ -469,12 +494,13 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 0,
     width: 100,
-    backgroundColor: '#F44336',
+    backgroundColor: '#ef4444',
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 10,
+    borderTopRightRadius: 12,
+    borderBottomRightRadius: 12,
     flexDirection: 'row',
-    gap: 6,
+    gap: 8,
   },
   deleteButtonText: {
     color: '#FFF',
@@ -488,13 +514,15 @@ const styles = StyleSheet.create({
     paddingVertical: 80,
   },
   emptyText: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '600',
     marginTop: 16,
+    color: '#6b7280',
   },
   emptySubtext: {
     fontSize: 14,
     marginTop: 8,
+    color: '#6b7280',
     textAlign: 'center',
   },
   bottomSpacer: {

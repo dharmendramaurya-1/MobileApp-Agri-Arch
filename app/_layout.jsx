@@ -1,7 +1,7 @@
 // app/_layout.tsx
 import { Stack, router, useSegments } from "expo-router";
-import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef } from "react";
+import AppStatusBar from "../components/AppStatusBar";
 import { ActivityIndicator, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -121,7 +121,8 @@ function RootNav() {
 
   return (
     <>
-      <StatusBar style={theme.dark ? "light" : "dark"} />
+      {/* ✅ Single centralized status bar applied to every screen */}
+      <AppStatusBar />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
         <Stack.Screen name="onboarding" />

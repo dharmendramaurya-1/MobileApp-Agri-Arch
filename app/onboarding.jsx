@@ -8,14 +8,13 @@ import {
   Dimensions,
   Image,
   Platform,
-  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import AppStatusBar from "../components/AppStatusBar";
 import { useTheme } from "../src/context/ThemContext";
-import { getstarted } from "../src/services/Getstartedservices";
 
 const { width, height } = Dimensions.get("window");
 
@@ -68,13 +67,6 @@ export default function OnboardingScreen() {
   };
 
   const handleGetStarted = async () => {
-    await getstarted();
-    try {
-      await AsyncStorage.setItem("hasSeenOnboarding", "true");
-      await AsyncStorage.setItem("userIntent", "signup");
-    } catch (error) {
-      console.error("Error saving:", error);
-    }
     router.push("/(auth)/signup");
   };
 
@@ -92,11 +84,8 @@ export default function OnboardingScreen() {
     <View
       style={[styles.container, { backgroundColor: theme.colors.background }]}
     >
-      <StatusBar
-        translucent
-        backgroundColor="transparent"
-        barStyle="light-content"
-      />
+      {/* Light status bar over the dark hero image — same component as the root layout */}
+      <AppStatusBar style="light" translucent />
 
       {/* Full-bleed hero image with better quality */}
       <View style={styles.heroWrapper}>

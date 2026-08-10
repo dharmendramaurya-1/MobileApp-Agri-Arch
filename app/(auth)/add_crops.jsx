@@ -1,11 +1,15 @@
-// app/(auth)/add_crops.jsx - Updated with resetSignupFlow
+// app/(auth)/add_crops.jsx - Wizard UI with resetSignupFlow
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Dimensions,
+  Easing,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -17,6 +21,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../src/context/AuthContext"; // ✅ Import useAuth
 import { useMqtt } from "../../src/context/MqttContext";
 import { useTheme } from "../../src/context/ThemContext";
@@ -25,6 +30,9 @@ import {
   getParameterById,
   getParametersByCropName,
 } from "../../src/services/add_crops/add_crops";
+
+// Wizard step order (used by the slide transition to decide direction)
+const STEP_ORDER = ["crop", "variety", "stage", "details"];
 
 // ============================================
 // SENML FORMAT CONVERTER
@@ -109,6 +117,81 @@ export default function AddCrops() {
     });
     return initial;
   });
+
+  // ─── Step slide transition (forward: left→right, back: right→left) ────
+  const screenW = Dimensions.get("window").width;
+  const [displayStep, setDisplayStep] = useState("crop"); // step in the base panel
+  const [incomingStep, setIncomingStep] = useState(null);   // step sliding in
+  // Two stable Animated values drive the two panels. They are created once and
+  // animated in parallel, so re-renders during the animation (e.g. a loading
+  // flag flipping right after the step change) can never reset the transform
+  // and leave the incoming panel stuck off-screen.
+  const baseX = useRef(new Animated.Value(0)).current;      // base panel translateX
+  const incomingX = useRef(new Animated.Value(0)).current;  // incoming panel translateX
+  const transitionLock = useRef(false);
+  const prevStepRef = useRef("crop");
+
+  useEffect(() => {
+    const prev = prevStepRef.current;
+    if (prev === step) return;
+    prevStepRef.current = step;
+
+    if (transitionLock.current) {
+      // mid-slide change: settle instantly instead of fighting the animation.
+      // stopAnimation() forces the in-flight callback to fire with finished:false
+      // so its stale `step` closure cannot revert displayStep afterwards.
+      baseX.stopAnimation();
+      incomingX.stopAnimation();
+      setDisplayStep(step);
+      setIncomingStep(null);
+      baseX.setValue(0);
+      incomingX.setValue(0);
+      return;
+    }
+
+    const dir =
+      STEP_ORDER.indexOf(step) > STEP_ORDER.indexOf(prev) ? "forward" : "back";
+    transitionLock.current = true;
+
+    setDisplayStep(prev);
+    setIncomingStep(step);
+    baseX.setValue(0);
+    incomingX.setValue(dir === "forward" ? -screenW : screenW);
+
+    requestAnimationFrame(() => {
+      Animated.parallel([
+        Animated.timing(baseX, {
+          toValue: dir === "forward" ? screenW : -screenW,
+          duration: 300,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(incomingX, {
+          toValue: 0,
+          duration: 300,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]).start(({ finished }) => {
+        if (finished) {
+          setDisplayStep(step);
+          setIncomingStep(null);
+          baseX.setValue(0);
+          incomingX.setValue(0);
+        }
+        transitionLock.current = false;
+      });
+    });
+  }, [step]);
+
+  // Stop any running slide if the screen unmounts mid-animation
+  useEffect(
+    () => () => {
+      baseX.stopAnimation();
+      incomingX.stopAnimation();
+    },
+    []
+  );
 
   // ============================================
   // EFFECTS - MOVED TO TOP LEVEL
@@ -275,7 +358,8 @@ export default function AddCrops() {
   // ============================================
   const handleBack = () => {
     if (step === "crop") {
-      router.back();
+      router.push("/(auth)/add_device"); // Navigate back to add_device
+      // router.back();
       return;
     }
 
@@ -305,7 +389,8 @@ export default function AddCrops() {
       );
       const varietyNames = [...new Set(varietyData.map((i) => i.crop_variety_name || "General"))];
 
-      setCropDetails(null);
+      // NOTE: cropDetails is intentionally kept so the details panel stays
+      // fully rendered while it slides out (no blank frame during the back swipe).
       setSelectedStageItem(null);
 
       if (stagesForVariety.length > 1) {
@@ -381,7 +466,7 @@ export default function AddCrops() {
         // ✅ RESET SIGNUP FLOW AFTER SUCCESSFUL PUBLISH
         console.log("🔄 Resetting signup flow after successful publish");
         await resetSignupFlow();
-        
+
         Alert.alert(
           "✅ Success",
           `Crop settings for ${cropDetails.crop_name || selectedCropName} published successfully!`,
@@ -459,22 +544,31 @@ export default function AddCrops() {
         const isLoading = loading && isSelected;
         return (
           <TouchableOpacity
-            style={[styles.card, isSelected && styles.cardSelected, { backgroundColor: theme.colors.card }]}
+            style={[
+              styles.optionCard,
+              { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+              isSelected && { borderColor: primary, backgroundColor: `${primary}0D` },
+            ]}
             onPress={() => handleSelectCrop(item)}
             activeOpacity={0.7}
             disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel={`Select crop ${item}`}
           >
-            <View style={styles.cardHeader}>
-              <View style={styles.radioOuter}>{isSelected && <View style={styles.radioInner} />}</View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.cropName, { color: theme.colors.text }]}>{item}</Text>
-              </View>
-              {isLoading ? (
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-              ) : (
-                <Ionicons name="chevron-forward" size={20} color={theme.colors.textSecondary} />
-              )}
+            <View style={[styles.optionIcon, { backgroundColor: `${primary}1A` }]}>
+              <Ionicons name="leaf-outline" size={20} color={primary} />
             </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.optionTitle, { color: theme.colors.text }]}>{item}</Text>
+              <Text style={[styles.optionSub, { color: theme.colors.textSecondary }]}>
+                Configure growing parameters
+              </Text>
+            </View>
+            {isLoading ? (
+              <ActivityIndicator size="small" color={primary} />
+            ) : (
+              <Ionicons name="chevron-forward" size={20} color={theme.colors.textSecondary} />
+            )}
           </TouchableOpacity>
         );
       }}
@@ -503,21 +597,30 @@ export default function AddCrops() {
         keyExtractor={(item, index) => `${item}-${index}`}
         renderItem={({ item }) => (
           <TouchableOpacity
-            style={[styles.card, { backgroundColor: theme.colors.card }]}
+            style={[
+              styles.optionCard,
+              { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+            ]}
             onPress={() => handleSelectVariety(item)}
             activeOpacity={0.7}
             disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel={`Select variety ${item}`}
           >
-            <View style={styles.cardHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.cropName, { color: theme.colors.text }]}>{item}</Text>
-              </View>
-              {loading && selectedVariety === item ? (
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-              ) : (
-                <Ionicons name="chevron-forward" size={20} color={theme.colors.textSecondary} />
-              )}
+            <View style={[styles.optionIcon, { backgroundColor: `${primary}1A` }]}>
+              <Ionicons name="git-branch-outline" size={20} color={primary} />
             </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.optionTitle, { color: theme.colors.text }]}>{item}</Text>
+              <Text style={[styles.optionSub, { color: theme.colors.textSecondary }]}>
+                {selectedCropName} variety
+              </Text>
+            </View>
+            {loading && selectedVariety === item ? (
+              <ActivityIndicator size="small" color={primary} />
+            ) : (
+              <Ionicons name="chevron-forward" size={20} color={theme.colors.textSecondary} />
+            )}
           </TouchableOpacity>
         )}
         contentContainerStyle={styles.listContent}
@@ -540,23 +643,32 @@ export default function AddCrops() {
         keyExtractor={(item) => String(item.parameter_id)}
         renderItem={({ item }) => (
           <TouchableOpacity
-            style={[styles.card, { backgroundColor: theme.colors.card }]}
+            style={[
+              styles.optionCard,
+              { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+            ]}
             onPress={() => handleSelectStage(item)}
             activeOpacity={0.7}
             disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel={`Select stage ${item.stage_id || "Unknown"}`}
           >
-            <View style={styles.cardHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.cropName, { color: theme.colors.text }]}>
-                  {item.stage_id || "Unknown Stage"}
-                </Text>
-              </View>
-              {loading && selectedStageItem?.parameter_id === item.parameter_id ? (
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-              ) : (
-                <Ionicons name="chevron-forward" size={20} color={theme.colors.textSecondary} />
-              )}
+            <View style={[styles.optionIcon, { backgroundColor: `${primary}1A` }]}>
+              <Ionicons name="trending-up-outline" size={20} color={primary} />
             </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.optionTitle, { color: theme.colors.text }]}>
+                {item.stage_id || "Unknown Stage"}
+              </Text>
+              <Text style={[styles.optionSub, { color: theme.colors.textSecondary }]}>
+                {selectedVariety} · growth stage
+              </Text>
+            </View>
+            {loading && selectedStageItem?.parameter_id === item.parameter_id ? (
+              <ActivityIndicator size="small" color={primary} />
+            ) : (
+              <Ionicons name="chevron-forward" size={20} color={theme.colors.textSecondary} />
+            )}
           </TouchableOpacity>
         )}
         contentContainerStyle={styles.listContent}
@@ -572,32 +684,28 @@ export default function AddCrops() {
     if (!cropDetails) return null;
 
     return (
-      <ScrollView contentContainerStyle={styles.listContent} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={styles.detailsScrollContent} showsVerticalScrollIndicator={false}>
+        {/* Summary card */}
         <View style={[styles.detailsCard, { backgroundColor: theme.colors.surface }]}>
-          <Text style={[styles.detailsTitle, { color: theme.colors.text }]}>Crop Details</Text>
-
-          <View style={styles.detailRow}>
-            <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>Crop</Text>
-            <Text style={[styles.detailValue, { color: theme.colors.text }]}>
-              {cropDetails.crop_name || selectedCropName}
-            </Text>
+          <View style={styles.detailsHeader}>
+            <View style={[styles.detailsHeaderIcon, { backgroundColor: `${primary}1A` }]}>
+              <Ionicons name="leaf" size={22} color={primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.detailsTitle, { color: theme.colors.text }]}>
+                {cropDetails.crop_name || selectedCropName}
+              </Text>
+              <Text style={[styles.detailsChip, { color: theme.colors.textSecondary }]}>
+                {cropDetails.crop_variety_name || selectedVariety || "General"} ·{" "}
+                {cropDetails.stage_id || selectedStageItem?.stage_id || "N/A"}
+              </Text>
+            </View>
           </View>
 
-          <View style={styles.detailRow}>
-            <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>Variety</Text>
-            <Text style={[styles.detailValue, { color: theme.colors.text }]}>
-              {cropDetails.crop_variety_name || selectedVariety || "N/A"}
-            </Text>
-          </View>
+          <View style={[styles.detailsDivider, { backgroundColor: theme.colors.border }]} />
 
           <View style={styles.detailRow}>
-            <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>Stage</Text>
-            <Text style={[styles.detailValue, { color: theme.colors.text }]}>
-              {cropDetails.stage_id || selectedStageItem?.stage_id || "N/A"}
-            </Text>
-          </View>
-
-          <View style={styles.detailRow}>
+            <Ionicons name="thermometer-outline" size={16} color={theme.colors.textSecondary} />
             <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>Temperature</Text>
             <Text style={[styles.detailValue, { color: theme.colors.text }]}>
               {cropDetails.temperature_min || 0}°C - {cropDetails.temperature_max || 0}°C
@@ -605,6 +713,7 @@ export default function AddCrops() {
           </View>
 
           <View style={styles.detailRow}>
+            <Ionicons name="water-outline" size={16} color={theme.colors.textSecondary} />
             <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>Humidity</Text>
             <Text style={[styles.detailValue, { color: theme.colors.text }]}>
               {cropDetails.humidity_min || 0}% - {cropDetails.humidity_max || 0}%
@@ -612,6 +721,7 @@ export default function AddCrops() {
           </View>
 
           <View style={styles.detailRow}>
+            <Ionicons name="flask-outline" size={16} color={theme.colors.textSecondary} />
             <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>pH</Text>
             <Text style={[styles.detailValue, { color: theme.colors.text }]}>
               {cropDetails.ph_min || 0} - {cropDetails.ph_max || 0}
@@ -619,6 +729,7 @@ export default function AddCrops() {
           </View>
 
           <View style={styles.detailRow}>
+            <Ionicons name="cloud-outline" size={16} color={theme.colors.textSecondary} />
             <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>CO₂</Text>
             <Text style={[styles.detailValue, { color: theme.colors.text }]}>
               {cropDetails.co2_min || 0} - {cropDetails.co2_max || 0} ppm
@@ -626,6 +737,7 @@ export default function AddCrops() {
           </View>
 
           <View style={styles.detailRow}>
+            <Ionicons name="sunny-outline" size={16} color={theme.colors.textSecondary} />
             <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>PPFD</Text>
             <Text style={[styles.detailValue, { color: theme.colors.text }]}>
               {cropDetails.ppfd_min || 0} - {cropDetails.ppfd_max || 0} µmol/m²/s
@@ -633,46 +745,81 @@ export default function AddCrops() {
           </View>
 
           <View style={styles.detailRow}>
+            <Ionicons name="contrast-outline" size={16} color={theme.colors.textSecondary} />
             <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>Dimming</Text>
             <Text style={[styles.detailValue, { color: theme.colors.text }]}>{customSettings.dimming || 0}%</Text>
           </View>
         </View>
 
+        {/* Customize + Preview */}
         <View style={styles.actionContainer}>
           <TouchableOpacity
-            style={[styles.actionButton, styles.customizeButton]}
+            style={[styles.actionButton, { shadowColor: "#E65100" }]}
             onPress={() => setShowCustomizeModal(true)}
+            activeOpacity={0.85}
+            accessibilityRole="button"
           >
-            <Ionicons name="settings-outline" size={20} color="#fff" />
-            <Text style={styles.actionButtonText}>Customize</Text>
+            <LinearGradient
+              colors={["#FFB300", "#F57C00"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.actionGradient}
+            >
+              <Ionicons name="settings-outline" size={18} color="#fff" />
+              <Text style={styles.actionButtonText}>Customize</Text>
+            </LinearGradient>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.actionButton, styles.previewButton]}
+            style={[styles.actionButton, { shadowColor: "#1565C0" }]}
             onPress={() => setShowSenMLPreview(true)}
+            activeOpacity={0.85}
+            accessibilityRole="button"
           >
-            <Ionicons name="eye-outline" size={20} color="#fff" />
-            <Text style={styles.actionButtonText}>Preview</Text>
+            <LinearGradient
+              colors={["#42A5F5", "#1E88E5"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.actionGradient}
+            >
+              <Ionicons name="eye-outline" size={18} color="#fff" />
+              <Text style={styles.actionButtonText}>Preview</Text>
+            </LinearGradient>
           </TouchableOpacity>
         </View>
 
+        {/* Publish */}
         <TouchableOpacity
           style={[
-            styles.publishButton,
-            { backgroundColor: isConnected ? "#4CAF50" : "#888", opacity: isConnected ? 1 : 0.6 },
+            styles.publishBtn,
+            isConnected ? { shadowColor: primaryDark } : null,
           ]}
           onPress={handlePublish}
           disabled={!isConnected || isSubmitting}
           activeOpacity={0.85}
+          accessibilityRole="button"
         >
-          {isSubmitting ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <>
-              <Ionicons name="cloud-upload-outline" size={20} color="#fff" />
-              <Text style={styles.publishButtonText}>Publish Settings</Text>
-            </>
-          )}
+          <LinearGradient
+            colors={
+              isConnected
+                ? [primary, primaryDark]
+                : ["#9E9E9E", "#757575"]
+            }
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.publishGradient}
+          >
+            {isSubmitting ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="cloud-upload-outline" size={20} color="#fff" />
+                <Text style={styles.publishButtonText}>
+                  {isConnected ? "Publish Settings" : "Device Not Connected"}
+                </Text>
+              </>
+            )}
+          </LinearGradient>
         </TouchableOpacity>
       </ScrollView>
     );
@@ -699,7 +846,7 @@ export default function AddCrops() {
             <ScrollView showsVerticalScrollIndicator={false}>
               <View style={styles.senmlContainer}>
                 {senmlData.map((item, index) => (
-                  <View key={index} style={styles.senmlItem}>
+                  <View key={index} style={[styles.senmlItem, { borderBottomColor: theme.colors.border }]}>
                     <Text style={[styles.senmlName, { color: theme.colors.textSecondary }]}>
                       {item.bn ? "Base Name" : item.n}
                     </Text>
@@ -796,14 +943,24 @@ export default function AddCrops() {
               })}
 
               <View style={styles.modalButtons}>
-                <TouchableOpacity style={[styles.modalButton, styles.resetButton]} onPress={handleResetSettings}>
-                  <Text style={styles.resetButtonText}>Reset to Default</Text>
+                <TouchableOpacity
+                  style={[styles.modalButton, styles.resetButton, { borderColor: theme.colors.border }]}
+                  onPress={handleResetSettings}
+                >
+                  <Text style={[styles.resetButtonText, { color: theme.colors.textSecondary }]}>Reset to Default</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.modalButton, styles.applyButton, { backgroundColor: theme.colors.primary }]}
+                  style={[styles.modalButton, { shadowColor: primaryDark }]}
                   onPress={handleApplySettings}
                 >
-                  <Text style={styles.applyButtonText}>Apply</Text>
+                  <LinearGradient
+                    colors={[primary, primaryDark]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.applyGradient}
+                  >
+                    <Text style={styles.applyButtonText}>Apply</Text>
+                  </LinearGradient>
                 </TouchableOpacity>
               </View>
             </ScrollView>
@@ -813,44 +970,19 @@ export default function AddCrops() {
     );
   };
 
-  // ============================================
-  // CONNECTION ERROR SCREENS
-  // ============================================
-  if (connectionStatus === "no_key") {
-    return (
-      <View style={[styles.container, styles.centerContainer, { backgroundColor: theme.colors.background }]}>
-        <Ionicons name="warning-outline" size={60} color="#FF9800" />
-        <Text style={[styles.errorTitle, { color: theme.colors.text }]}>No Device Found</Text>
-        <Text style={[styles.errorText, { color: theme.colors.textSecondary }]}>
-          Please add a device first before selecting crops.
-        </Text>
-        <TouchableOpacity style={styles.errorButton} onPress={() => router.push("/(auth)/add_device")}>
-          <Text style={styles.errorButtonText}>Add Device</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
+  // Renders whichever wizard step is requested (used by both slide panels)
+  const renderStepFor = (s) => {
+    if (s === "crop") return renderCropStep();
+    if (s === "variety") return renderVarietyStep();
+    if (s === "stage") return renderStageStep();
+    if (s === "details") return renderDetailsStep();
+    return null;
+  };
 
-  if (connectionStatus === "failed") {
-    return (
-      <View style={[styles.container, styles.centerContainer, { backgroundColor: theme.colors.background }]}>
-        <Ionicons name="close-circle-outline" size={60} color="#F44336" />
-        <Text style={[styles.errorTitle, { color: theme.colors.text }]}>Connection Failed</Text>
-        <Text style={[styles.errorText, { color: theme.colors.textSecondary }]}>
-          Could not connect to MQTT broker. Please try again.
-        </Text>
-        <TouchableOpacity
-          style={[styles.errorButton, { backgroundColor: theme.colors.primary }]}
-          onPress={() => {
-            setConnectionStatus("checking");
-            checkConnection();
-          }}
-        >
-          <Text style={styles.errorButtonText}>Retry Connection</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
+  const primary = theme.colors.primary;
+  const primaryDark = theme.colors.primaryDark;
+
+  const currentStepIndex = STEP_ORDER.indexOf(step) + 1;
 
   const stepTitles = {
     crop: "Select Crop",
@@ -866,51 +998,208 @@ export default function AddCrops() {
     details: "Review, customize, and publish these settings",
   };
 
+  const stepLabels = {
+    crop: "Choose crop",
+    variety: "Choose variety",
+    stage: "Choose stage",
+    details: "Review & publish",
+  };
+
+  // ============================================
+  // CONNECTION ERROR SCREENS
+  // ============================================
+  if (connectionStatus === "no_key") {
+    return (
+      <SafeAreaView style={[styles.container, styles.centerContainer, { backgroundColor: theme.colors.background }]} edges={["top", "bottom"]}>
+        <View style={[styles.errorIconWrap, { backgroundColor: `${primary}1A` }]}>
+          <Ionicons name="warning-outline" size={52} color="#FF9800" />
+        </View>
+        <Text style={[styles.errorTitle, { color: theme.colors.text }]}>No Device Found</Text>
+        <Text style={[styles.errorText, { color: theme.colors.textSecondary }]}>
+          Please add a device first before selecting crops.
+        </Text>
+        <TouchableOpacity
+          style={[styles.primaryBtn, { shadowColor: primaryDark }]}
+          onPress={() => router.push("/(auth)/add_device")}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+        >
+          <LinearGradient
+            colors={[primary, primaryDark]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.primaryBtnGradient}
+          >
+            <Ionicons name="hardware-chip" size={20} color="#fff" />
+            <Text style={styles.primaryBtnText}>Add Device</Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
+
+  if (connectionStatus === "failed") {
+    return (
+      <SafeAreaView style={[styles.container, styles.centerContainer, { backgroundColor: theme.colors.background }]} edges={["top", "bottom"]}>
+        <View style={[styles.errorIconWrap, { backgroundColor: `${theme.colors.error}1A` }]}>
+          <Ionicons name="close-circle-outline" size={52} color={theme.colors.error} />
+        </View>
+        <Text style={[styles.errorTitle, { color: theme.colors.text }]}>Connection Failed</Text>
+        <Text style={[styles.errorText, { color: theme.colors.textSecondary }]}>
+          Could not connect to MQTT broker. Please try again.
+        </Text>
+        <TouchableOpacity
+          style={[styles.primaryBtn, { shadowColor: primaryDark }]}
+          onPress={() => {
+            setConnectionStatus("checking");
+            checkConnection();
+          }}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+        >
+          <LinearGradient
+            colors={[primary, primaryDark]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.primaryBtnGradient}
+          >
+            <Ionicons name="refresh" size={20} color="#fff" />
+            <Text style={styles.primaryBtnText}>Retry Connection</Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      </SafeAreaView>
+    );
+  }
+
   // ============================================
   // MAIN RENDER
   // ============================================
   return (
-    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+    <SafeAreaView
+      style={[styles.container, { backgroundColor: theme.colors.background }]}
+      edges={["top", "bottom"]}
+    >
+      {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={handleBack} style={styles.backButton}>
-          <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
+        <TouchableOpacity
+          onPress={handleBack}
+          style={[styles.backButton, { backgroundColor: theme.colors.surface }]}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <Ionicons name="arrow-back" size={22} color={theme.colors.text} />
         </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: theme.colors.text }]}>{stepTitles[step]}</Text>
-        <View style={{ width: 40 }} />
-      </View>
 
-      <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>{stepSubtitles[step]}</Text>
-
-      <View style={[styles.statusRow, { marginHorizontal: 20, marginBottom: 12 }]}>
-        <View
-          style={[styles.statusDot, { backgroundColor: connectionStatus === "connected" ? "#4CAF50" : "#FF9800" }]}
-        />
-        <Text style={[styles.statusText, { color: theme.colors.textSecondary }]}>
-          {connectionStatus === "connected" ? "● Connected" : "● Connecting..."}
-        </Text>
-      </View>
-
-      {loading && step !== "crop" && step !== "details" ? (
-        <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color={theme.colors.primary} />
+        <View style={styles.headerCenter}>
+          <Text style={[styles.headerTitle, { color: theme.colors.text }]}>{stepTitles[step]}</Text>
         </View>
-      ) : (
-        <>
-          {step === "crop" && renderCropStep()}
-          {step === "variety" && renderVarietyStep()}
-          {step === "stage" && renderStageStep()}
-          {step === "details" && renderDetailsStep()}
-        </>
-      )}
+
+        <View style={styles.headerRight}>
+          <View style={[styles.stepBadge, { backgroundColor: `${primary}1A` }]}>
+            <Text style={[styles.stepBadgeText, { color: primary }]}>Setup · 3/3</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* Progress indicator */}
+      <View style={styles.progressWrap}>
+        <View style={styles.progressTrack}>
+          {STEP_ORDER.map((_, i) => (
+            <View
+              key={i}
+              style={[
+                styles.progressSegment,
+                { backgroundColor: i + 1 <= currentStepIndex ? primary : theme.colors.border },
+              ]}
+            />
+          ))}
+        </View>
+        <View style={styles.progressMeta}>
+          <Text style={[styles.stepLabel, { color: theme.colors.textSecondary }]}>
+            Step {currentStepIndex} of 4 · {stepLabels[step]}
+          </Text>
+          <View
+            style={[
+              styles.statusPill,
+              {
+                backgroundColor:
+                  connectionStatus === "connected" ? "rgba(76,175,80,0.12)" : "rgba(255,152,0,0.12)",
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.statusDot,
+                { backgroundColor: connectionStatus === "connected" ? "#4CAF50" : "#FF9800" },
+              ]}
+            />
+            <Text
+              style={[
+                styles.statusPillText,
+                { color: connectionStatus === "connected" ? "#4CAF50" : "#FF9800" },
+              ]}
+            >
+              {connectionStatus === "connected" ? "Connected" : "Connecting..."}
+            </Text>
+          </View>
+        </View>
+      </View>
+
+      <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>
+        {stepSubtitles[step]}
+      </Text>
+
+      {/* Step content with directional slide (no blink) */}
+      <View style={styles.stepBody}>
+        {/* Base panel — current step (slides out in the travel direction) */}
+        <Animated.View
+          style={[
+            StyleSheet.absoluteFillObject,
+            { transform: [{ translateX: baseX }] },
+          ]}
+        >
+          {renderStepFor(displayStep)}
+        </Animated.View>
+
+        {/* Incoming panel — next step (slides in from the opposite edge) */}
+        {incomingStep && (
+          <Animated.View
+            style={[
+              StyleSheet.absoluteFillObject,
+              { transform: [{ translateX: incomingX }] },
+            ]}
+          >
+            {renderStepFor(incomingStep)}
+          </Animated.View>
+        )}
+
+        {/* Loading overlay — keeps current content visible while fetching */}
+        {loading && step !== "crop" && step !== "details" && (
+          <View
+            style={[
+              styles.loadingOverlay,
+              {
+                backgroundColor: theme.dark
+                  ? "rgba(18,18,18,0.4)"
+                  : "rgba(255,255,255,0.4)",
+              },
+            ]}
+            pointerEvents="none"
+          >
+            <ActivityIndicator size="large" color={primary} />
+          </View>
+        )}
+      </View>
 
       {renderCustomizeModal()}
       {renderSenMLPreview()}
-    </View>
+    </SafeAreaView>
   );
 }
 
 // ============================================
-// STYLES (unchanged)
+// STYLES
 // ============================================
 const styles = StyleSheet.create({
   container: { flex: 1 },
@@ -920,99 +1209,227 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: 60,
-    paddingBottom: 8,
+    paddingTop: 8,
+    paddingBottom: 4,
   },
-  backButton: { padding: 8 },
-  headerTitle: { fontSize: 20, fontWeight: "700" },
-  headerSubtitle: { fontSize: 14, paddingHorizontal: 20, marginBottom: 4 },
-  statusRow: { flexDirection: "row", alignItems: "center" },
-  statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 8 },
-  statusText: { fontSize: 12 },
-  listContent: { paddingHorizontal: 16, paddingBottom: 16 },
-  card: { borderRadius: 12, borderWidth: 1.5, padding: 16, marginBottom: 10 },
-  cardSelected: { borderColor: "#4CAF50", backgroundColor: "rgba(76, 175, 80, 0.06)" },
-  cardHeader: { flexDirection: "row", alignItems: "center", gap: 12 },
-  radioOuter: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: "#4CAF50",
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  radioInner: { width: 12, height: 12, borderRadius: 6, backgroundColor: "#4CAF50" },
-  cropName: { fontSize: 17, fontWeight: "600" },
-  detailsCard: {
+  headerCenter: { flex: 1, alignItems: "center" },
+  headerTitle: { fontSize: 20, fontWeight: "700", letterSpacing: 0.3 },
+  headerRight: { width: 88, alignItems: "flex-end" },
+  stepBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+  },
+  stepBadgeText: { fontSize: 11, fontWeight: "700", letterSpacing: 0.3 },
+  headerSubtitle: {
+    fontSize: 13.5,
+    paddingHorizontal: 20,
+    marginBottom: 10,
+    opacity: 0.9,
+    lineHeight: 19,
+  },
+  progressWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 4,
+  },
+  progressTrack: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  progressSegment: {
+    flex: 1,
+    height: 4,
+    borderRadius: 2,
+  },
+  progressMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 8,
+  },
+  stepLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.2,
+  },
+  statusPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+  },
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  statusPillText: { fontSize: 11, fontWeight: "700" },
+  stepBody: { flex: 1, overflow: "hidden" },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 10,
+  },
+  listContent: { paddingHorizontal: 16, paddingBottom: 16 },
+  detailsScrollContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 40,
+  },
+  optionCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    borderRadius: 16,
+    borderWidth: 1.5,
     padding: 16,
-    borderRadius: 12,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.05)",
+    marginBottom: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  detailsTitle: { fontSize: 16, fontWeight: "700", marginBottom: 12 },
+  optionIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  optionTitle: { fontSize: 16, fontWeight: "700" },
+  optionSub: { fontSize: 12, marginTop: 2, opacity: 0.85 },
+  detailsCard: {
+    borderRadius: 18,
+    padding: 18,
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  detailsHeader: { flexDirection: "row", alignItems: "center", gap: 12 },
+  detailsHeaderIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  detailsTitle: { fontSize: 18, fontWeight: "800" },
+  detailsChip: { fontSize: 12.5, marginTop: 3, fontWeight: "600" },
+  detailsDivider: { height: 1, marginVertical: 14 },
   detailRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(0,0,0,0.05)",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 8,
   },
-  detailLabel: { fontSize: 13 },
-  detailValue: { fontSize: 13, fontWeight: "500" },
-  actionContainer: { flexDirection: "row", gap: 10, marginBottom: 12 },
+  detailLabel: { flex: 1, fontSize: 13.5, fontWeight: "500", marginLeft: 2 },
+  detailValue: { fontSize: 13.5, fontWeight: "700" },
+  actionContainer: { flexDirection: "row", gap: 10, marginBottom: 14 },
   actionButton: {
     flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 12,
-    borderRadius: 10,
-    gap: 8,
+    borderRadius: 50,
+    overflow: "hidden",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 5,
   },
-  customizeButton: { backgroundColor: "#FF9800" },
-  previewButton: { backgroundColor: "#2196F3" },
-  actionButtonText: { color: "#fff", fontSize: 14, fontWeight: "600" },
-  publishButton: {
+  actionGradient: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    gap: 8,
     paddingVertical: 14,
-    borderRadius: 12,
-    gap: 8,
   },
-  publishButtonText: { color: "#fff", fontSize: 16, fontWeight: "700" },
+  actionButtonText: { color: "#fff", fontSize: 14.5, fontWeight: "700" },
+  publishBtn: {
+    borderRadius: 50,
+    overflow: "hidden",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 5,
+    marginBottom: Platform.OS === "ios" ? "6%" : "4%",
+  },
+  publishGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 16,
+  },
+  publishButtonText: { color: "#fff", fontSize: 16, fontWeight: "700", letterSpacing: 0.3 },
+  primaryBtn: {
+    width: "80%",
+    borderRadius: 50,
+    overflow: "hidden",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  primaryBtnGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 15,
+  },
+  primaryBtnText: { color: "#fff", fontSize: 16, fontWeight: "700", letterSpacing: 0.3 },
   modalContainer: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-end" },
-  modalContent: { borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: "90%" },
+  modalContent: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, maxHeight: "90%" },
   modalScrollContent: { paddingBottom: 40 },
   modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 20 },
   modalTitle: { fontSize: 20, fontWeight: "700" },
   sectionLabel: { fontSize: 16, fontWeight: "700", marginTop: 16, marginBottom: 10 },
   customInputContainer: { marginBottom: 12 },
   customInputLabel: { fontSize: 13, marginBottom: 4 },
-  customInput: { borderWidth: 1, borderRadius: 8, padding: 10, fontSize: 14 },
+  customInput: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 14 },
   modalButtons: { flexDirection: "row", gap: 10, marginTop: 16, marginBottom: 20 },
-  modalButton: { flex: 1, paddingVertical: 12, borderRadius: 10, alignItems: "center" },
-  resetButton: { backgroundColor: "#f5f5f5", borderWidth: 1, borderColor: "#ddd" },
-  resetButtonText: { color: "#666", fontWeight: "600" },
-  applyButton: { backgroundColor: "#4CAF50" },
-  applyButtonText: { color: "#fff", fontWeight: "600" },
+  modalButton: { flex: 1, borderRadius: 50, overflow: "hidden" },
+  resetButton: { borderWidth: 1, alignItems: "center", justifyContent: "center", paddingVertical: 13 },
+  resetButtonText: { fontWeight: "600", fontSize: 14 },
+  applyGradient: {
+    paddingVertical: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  applyButtonText: { color: "#fff", fontWeight: "700", fontSize: 14 },
   senmlContainer: { borderRadius: 10, padding: 12 },
   senmlItem: {
     flexDirection: "row",
     justifyContent: "space-between",
     paddingVertical: 6,
     borderBottomWidth: 1,
-    borderBottomColor: "#eee",
   },
   senmlName: { fontSize: 13, fontWeight: "500" },
   senmlValueContainer: { flexDirection: "row", alignItems: "center" },
   senmlValue: { fontSize: 13, fontWeight: "600" },
   emptyContainer: { alignItems: "center", justifyContent: "center", paddingVertical: 40, gap: 12 },
   emptyText: { fontSize: 16, fontWeight: "500" },
-  errorTitle: { fontSize: 20, fontWeight: "700", marginTop: 16 },
-  errorText: { fontSize: 14, textAlign: "center", marginTop: 8, marginBottom: 20 },
-  errorButton: { backgroundColor: "#FF9800", paddingHorizontal: 30, paddingVertical: 12, borderRadius: 10 },
-  errorButtonText: { color: "#FFF", fontSize: 16, fontWeight: "600" },
+  errorIconWrap: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 20,
+  },
+  errorTitle: { fontSize: 22, fontWeight: "800", marginTop: 4 },
+  errorText: { fontSize: 14, textAlign: "center", marginTop: 8, marginBottom: 28, lineHeight: 20, opacity: 0.9 },
 });
