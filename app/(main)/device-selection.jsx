@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
 import { useTheme } from "../../src/context/ThemContext";
+import { ConnectionStatusBanner } from "../../components/ConnectionStatusBanner";
 import {
   getActiveDevice,
   getAllThings,
@@ -39,11 +40,12 @@ function ConnectionStatusIndicator({ status, theme }) {
           bgColor: `${theme.colors.success}15`,
         };
       case 'waiting':
+        // Kept for safety only — no data means Offline, never Waiting.
         return {
-          icon: 'sync-outline',
-          color: '#FF9800',
-          text: 'Waiting...',
-          bgColor: `${theme.colors.warning}15`,
+          icon: 'close-circle',
+          color: '#F44336',
+          text: 'Offline',
+          bgColor: `${theme.colors.error}15`,
         };
       case 'connecting':
         return {
@@ -80,7 +82,7 @@ function ConnectionStatusIndicator({ status, theme }) {
 
   return (
     <View style={[styles.statusContainer, { backgroundColor: config.bgColor }]}>
-      {status === 'connecting' || status === 'waiting' ? (
+      {status === 'connecting' ? (
         <ActivityIndicator size="small" color={config.color} />
       ) : (
         <Ionicons name={config.icon} size={16} color={config.color} />
@@ -102,7 +104,6 @@ function DeviceCard({
   theme, 
   connectionStatus,
   hasReceivedData,
-  hasEverBeenOnline,
 }) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -112,12 +113,10 @@ function DeviceCard({
   const getStatus = () => {
     if (isActive) {
       if (connectionStatus === 'online' && hasReceivedData) return 'online';
-      if (connectionStatus === 'waiting') return 'waiting';
       if (connectionStatus === 'connecting') return 'connecting';
-      if (connectionStatus === 'offline') return 'offline';
       if (connectionStatus === 'error') return 'error';
-      if (hasEverBeenOnline && !hasReceivedData) return 'waiting';
-      return 'waiting';
+      // No data (or anything else) -> Offline directly. No waiting state.
+      return 'offline';
     }
     return 'disconnected';
   };
@@ -146,7 +145,7 @@ function DeviceCard({
   const getStatusColor = () => {
     switch (status) {
       case 'online': return '#4CAF50';
-      case 'waiting': return '#FF9800';
+      case 'waiting': return '#F44336';
       case 'connecting': return '#FFC107';
       case 'offline': return '#F44336';
       case 'error': return '#F44336';
@@ -157,7 +156,7 @@ function DeviceCard({
   const getStatusLabel = () => {
     switch (status) {
       case 'online': return '🟢 Online';
-      case 'waiting': return '🟡 Waiting...';
+      case 'waiting': return '🔴 Offline';
       case 'connecting': return '🟡 Connecting...';
       case 'offline': return '🔴 Offline';
       case 'error': return '🔴 Error';
@@ -174,12 +173,12 @@ function DeviceCard({
             backgroundColor: theme.colors.surface,
             borderColor: isActive && status === 'online' 
               ? '#4CAF50' 
-              : isActive && status === 'waiting'
-              ? '#FF9800'
+              : isActive && status === 'offline'
+              ? '#F44336'
               : status === 'connecting' 
               ? '#FFC107' 
               : theme.colors.border,
-            borderWidth: isActive && (status === 'online' || status === 'waiting') ? 2 : 1,
+            borderWidth: isActive && status === 'online' ? 2 : 1,
             opacity: status === 'connecting' ? 0.8 : 1,
           },
         ]}
@@ -192,7 +191,7 @@ function DeviceCard({
             <Ionicons 
               name={device.type === "device" ? "hardware-chip-outline" : "sensor-outline"} 
               size={24} 
-              color={status === 'online' ? '#4CAF50' : status === 'waiting' ? '#FF9800' : theme.colors.textSecondary} 
+              color={status === 'online' ? '#4CAF50' : status === 'offline' ? '#F44336' : theme.colors.textSecondary} 
             />
           </View>
           <View style={styles.deviceInfo}>
@@ -206,11 +205,6 @@ function DeviceCard({
           {isActive && status === 'online' && (
             <View style={[styles.activeBadge, { backgroundColor: '#4CAF50' }]}>
               <Text style={styles.activeBadgeText}>Active</Text>
-            </View>
-          )}
-          {isActive && status === 'waiting' && (
-            <View style={[styles.activeBadge, { backgroundColor: '#FF9800' }]}>
-              <Text style={styles.activeBadgeText}>Waiting</Text>
             </View>
           )}
           {(status === 'connecting' || status === 'offline') && isActive && (
@@ -260,8 +254,6 @@ function DeviceCard({
               {
                 backgroundColor: status === 'online' 
                   ? '#4CAF50' 
-                  : status === 'waiting' 
-                  ? '#FF9800'
                   : status === 'connecting' 
                   ? '#FFC107' 
                   : theme.colors.primary,
@@ -279,8 +271,6 @@ function DeviceCard({
               </View>
             ) : status === 'online' ? (
               <Text style={styles.connectButtonText}>✓ Connected</Text>
-            ) : status === 'waiting' ? (
-              <Text style={styles.connectButtonText}>⏳ Waiting...</Text>
             ) : (
               <Text style={styles.connectButtonText}>Connect</Text>
             )}
@@ -403,8 +393,8 @@ export default function DeviceSelection() {
     isConnected, 
     hasReceivedData, 
     deviceStatus,
+    deviceStatusFlags,
     connectionState,
-    hasEverBeenOnline,
     activeDeviceId,
   } = useMqtt();
   
@@ -501,7 +491,7 @@ export default function DeviceSelection() {
       
       setConnectionStatus(prev => ({
         ...prev,
-        [device.id]: connectionState || 'waiting'
+        [device.id]: connectionState || 'offline'
       }));
       
       setConnectedDeviceName(device.name || 'Device');
@@ -509,7 +499,7 @@ export default function DeviceSelection() {
       // ✅ Show waiting alert - device is connecting
       Alert.alert(
         "🔄 Connecting",
-        `Connecting to ${device.name || 'Device'}...\n\nPlease wait for the device to come online.`,
+        `Connecting to ${device.name || 'Device'}...\n\nThe device will show as Online once it starts reporting data.`,
         [
           {
             text: "OK",
@@ -596,7 +586,7 @@ export default function DeviceSelection() {
   // ── Get connection status for device ─────────────────────────────────────
   const getDeviceConnectionStatus = (deviceId) => {
     if (activeDevice?.id === deviceId) {
-      return connectionState || 'waiting';
+      return connectionState || 'offline';
     }
     return connectionStatus[deviceId] || 'disconnected';
   };
@@ -663,48 +653,15 @@ export default function DeviceSelection() {
         {devices.length} device{devices.length > 1 ? 's' : ''} found
       </Text>
 
-      {/* Active Device Status */}
+      {/* Active Device Status Banner — DevStat online/offline */}
       {activeDevice && (
-        <View style={[
-          styles.activeDeviceInfo, 
-          { 
-            backgroundColor: 
-              connectionState === 'online' ? '#4CAF5015' :
-              connectionState === 'waiting' ? '#FF980015' :
-              connectionState === 'offline' ? '#F4433615' : 
-              connectionState === 'connecting' ? '#FFC10715' :
-              'rgba(0,0,0,0.05)'
-          }
-        ]}>
-          {connectionState === 'connecting' || connectionState === 'waiting' ? (
-            <ActivityIndicator size="small" color={
-              connectionState === 'waiting' ? '#FF9800' : '#FFC107'
-            } />
-          ) : (
-            <Ionicons 
-              name={connectionState === 'online' ? 'checkmark-circle' : 'alert-circle'} 
-              size={20} 
-              color={
-                connectionState === 'online' ? '#4CAF50' :
-                connectionState === 'offline' ? '#F44336' : '#FF9800'
-              } 
-            />
-          )}
-          <Text style={[styles.activeDeviceText, { 
-            color: 
-              connectionState === 'online' ? '#4CAF50' :
-              connectionState === 'waiting' ? '#FF9800' :
-              connectionState === 'offline' ? '#F44336' : 
-              connectionState === 'connecting' ? '#FFC107' :
-              theme.colors.text
-          }]}>
-            {connectionState === 'online' ? '✅ Device Online' :
-             connectionState === 'waiting' ? '⏳ Waiting for data...' :
-             connectionState === 'offline' ? '❌ Device Offline' :
-             connectionState === 'connecting' ? '🔄 Connecting...' :
-             `Device: ${activeDevice.name}`}
-          </Text>
-        </View>
+        <ConnectionStatusBanner
+          connectionState={connectionState}
+          hasReceivedData={hasReceivedData}
+          deviceStatus={deviceStatus}
+          deviceStatusFlags={deviceStatusFlags}
+          deviceName={activeDevice.name || "Active Device"}
+        />
       )}
 
       <FlatList
@@ -720,7 +677,6 @@ export default function DeviceSelection() {
             theme={theme}
             connectionStatus={getDeviceConnectionStatus(item.id)}
             hasReceivedData={hasReceivedData}
-            hasEverBeenOnline={hasEverBeenOnline}
           />
         )}
         contentContainerStyle={[styles.listContent, { paddingBottom: height * 0.05 }]} // ✅ 5% bottom margin
@@ -766,19 +722,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     paddingHorizontal: 16,
     marginBottom: 16,
-  },
-  activeDeviceInfo: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginHorizontal: 16,
-    padding: 12,
-    borderRadius: 8,
-    marginBottom: 16,
-    gap: 8,
-  },
-  activeDeviceText: {
-    fontSize: 14,
-    fontWeight: "500",
   },
   listContent: {
     paddingHorizontal: 16,

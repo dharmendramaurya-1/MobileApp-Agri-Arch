@@ -50,7 +50,11 @@ export const StatusDisplay = () => {
     return '#E3F2FD';
   };
 
-  const isOffline = connectionState === 'disconnected' || connectionState === 'idle';
+  const isOffline =
+    !hasReceivedData ||
+    connectionState === 'offline' ||
+    connectionState === 'disconnected' ||
+    connectionState === 'idle';
 
   return (
     <ScrollView style={styles.container}>
@@ -62,9 +66,7 @@ export const StatusDisplay = () => {
         {isOffline && (
           <Text style={styles.offlineText}>📡 Device Offline - Showing last known status</Text>
         )}
-        {!hasReceivedData && !isOffline && (
-          <Text style={styles.noData}>⏳ Waiting for data...</Text>
-        )}
+
       </View>
 
       <View style={styles.grid}>
@@ -93,12 +95,10 @@ export const StatusDisplay = () => {
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>
-          {hasReceivedData ? '✅ Live data' : '⏳ Waiting for data...'}
+          {hasReceivedData ? '✅ Live data' : '🔴 No data received'}
         </Text>
         <Text style={styles.footerSub}>
-          {connectionState === 'connected' ? '🟢 Online' : 
-           connectionState === 'connecting' ? '🟡 Connecting...' : 
-           connectionState === 'disconnected' ? '🔴 Offline' : '⚪ Idle'}
+          {hasReceivedData ? '🟢 Online' : '🔴 Offline'}
         </Text>
       </View>
     </ScrollView>
@@ -132,12 +132,6 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 4,
     fontFamily: 'monospace',
-  },
-  noData: {
-    fontSize: 13,
-    color: '#FF9800',
-    marginTop: 4,
-    fontStyle: 'italic',
   },
   offlineText: {
     fontSize: 14,

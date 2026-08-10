@@ -15,7 +15,8 @@ import {
   reconnectMqtt as reconnectMqttClient,
   updateMqttPassword
 } from "../services/mqttClient";
-import { getDefaultDeviceStatus, parseDeviceStatus } from "../utils/deviceStatusParser";
+import { getDefaultDeviceStatus } from "../utils/deviceStatusParser";
+import { parseSenMLToObject } from "../utils/senmlParser";
 import { useAuth } from "./AuthContext";
 
 // ── Defaults ── All null/undefined ─────────────────────────────────────────
@@ -140,54 +141,6 @@ let lastKnownConfigState = {
   auto_mode: false,
 };
 
-// ── Enhanced SenML Parser ────────────────────────────────────────────────────
-function parseSenML(raw) {
-  try {
-    const records = JSON.parse(raw);
-    const result = {};
-    
-    for (const r of records) {
-      if (!r.n) continue;
-      
-      const fieldName = r.n;
-      const value = r.v;
-      const boolValue = r.vb;
-      
-      if (value !== undefined && typeof value === 'number') {
-        switch (fieldName) {
-          case "temp": result.ambientTemperature = value; break;
-          case "humidity": result.ambientHumidity = value; break;
-          case "water_temp": result.waterTemperature = value; break;
-          case "co2": result.co2Level = value; break;
-          case "ec": result.ecValue = value; break;
-          case "ph": result.phValue = value; break;
-          case "level": result.waterLevel = value; break;
-          case "lux": result.lightLevel = value; break;
-          case "device_status": 
-            result.deviceStatus = value;
-            result.deviceStatusFlags = parseDeviceStatus(value);
-            break;
-          case "soil_moisture": result.soilMoisture = value; break;
-        }
-      }
-      
-      if (boolValue !== undefined && typeof boolValue === 'boolean') {
-        switch (fieldName) {
-          case "water_pump": result.water_pump = boolValue; break;
-          case "water_ILvalve": result.water_ILvalve = boolValue; break;
-          case "water_OLvalve": result.water_OLvalve = boolValue; break;
-          case "nutrient_pump": result.nutrient_pump = boolValue; break;
-          case "reboot_ack": result.reboot_ack = boolValue; break;
-        }
-      }
-    }
-    
-    return result;
-  } catch (e) {
-    console.log("⚠️ SenML parse error:", e);
-    return {};
-  }
-}
 
 function parseActuatorToDevices(raw) {
   try {
@@ -296,6 +249,13 @@ export const MqttProvider = ({ children }) => {
   // ✅ Track if device has ever been online
   const [hasEverBeenOnline, setHasEverBeenOnline] = useState(false);
   
+  // ✅ How long to wait for a newly connected device's first response before marking it offline
+  // Scaled by the report interval when known, but never shorter than 60s or longer than 5 min
+  const getInitialResponseTimeout = () => {
+    const intervalMs = reportInterval > 0 ? reportInterval * 1000 : 0;
+    return Math.min(Math.max(intervalMs, 60000), 300000);
+  };
+
   // ✅ Report interval from config - default 30 minutes (1800 seconds)
   const [reportInterval, setReportInterval] = useState(1800);
   const [timeoutDuration, setTimeoutDuration] = useState(3600); // 2x report interval
@@ -303,6 +263,12 @@ export const MqttProvider = ({ children }) => {
   // ✅ Timeout check refs
   const timeoutCheckInterval = useRef(null);
   const lastDataReceivedTime = useRef(null);
+
+  // ✅ Initial response check refs (device add → connect)
+  const initialResponseTimer = useRef(null);
+  const hasReceivedDataRef = useRef(false);
+  const activeDeviceIdRef = useRef(null);
+  const hasEverBeenOnlineRef = useRef(false);
   
   // ✅ Multiple device support
   const [availableDevices, setAvailableDevices] = useState([]);
@@ -315,6 +281,14 @@ export const MqttProvider = ({ children }) => {
   const connectionCheckInterval = useRef(null);
   const hasInitializedRef = useRef(false);
   const unsubscribeRef = useRef(null);
+
+  // Keep latest values available inside timers/callbacks (avoid stale closures)
+  useEffect(() => {
+    activeDeviceIdRef.current = activeDeviceId;
+  }, [activeDeviceId]);
+  useEffect(() => {
+    hasEverBeenOnlineRef.current = hasEverBeenOnline;
+  }, [hasEverBeenOnline]);
   
   const getTopics = (key) => ({
     data: `/messages/${key}/data`,
@@ -459,8 +433,10 @@ export const MqttProvider = ({ children }) => {
     setIsConnected(false);
     setMqttClient(null);
     setHasReceivedData(false);
+    hasReceivedDataRef.current = false;
     setDeviceStatus(null);
     setConnectionState('idle');
+    clearInitialResponseCheck();
   };
 
   // ── Load External Key ────────────────────────────────────────────────────
@@ -527,7 +503,7 @@ export const MqttProvider = ({ children }) => {
       timeoutCheckInterval.current = null;
     }
 
-    if (!hasEverBeenOnline) {
+    if (!hasEverBeenOnlineRef.current) {
       console.log('⏳ Device never online - No timeout check');
       return;
     }
@@ -573,6 +549,40 @@ export const MqttProvider = ({ children }) => {
       }
 
     }, 30000);
+  };
+
+  // ── Initial Response Check ────────────────────────────────────────────────
+  // Started when a device connects (add device → click Connect). If the device
+  // sends no response within the window, it is marked OFFLINE per the initial
+  // value check.
+  const clearInitialResponseCheck = () => {
+    if (initialResponseTimer.current) {
+      clearTimeout(initialResponseTimer.current);
+      initialResponseTimer.current = null;
+    }
+  };
+
+  const startInitialResponseCheck = (timeoutMs = getInitialResponseTimeout()) => {
+    clearInitialResponseCheck();
+    if (hasReceivedDataRef.current) {
+      console.log('⏳ Data already received this session — skipping initial response check');
+      return;
+    }
+    console.log(`⏳ Starting initial response check — waiting ${Math.round(timeoutMs / 1000)}s for device data...`);
+    initialResponseTimer.current = setTimeout(() => {
+      initialResponseTimer.current = null;
+      if (!isMountedRef.current) return;
+      if (!hasReceivedDataRef.current) {
+        console.log('❌ Initial response check expired — device sent NO response, marking OFFLINE');
+        setConnectionState('offline');
+        if (activeDeviceIdRef.current) {
+          setDeviceConnectionStatus(prev => ({
+            ...prev,
+            [activeDeviceIdRef.current]: 'offline'
+          }));
+        }
+      }
+    }, timeoutMs);
   };
 
   // ── Publish ──────────────────────────────────────────────────────────────
@@ -737,6 +747,9 @@ export const MqttProvider = ({ children }) => {
       
       await initializeMqtt();
       
+      // ✅ Initial value check — mark device offline if it never responds
+      startInitialResponseCheck();
+      
       console.log(`✅ Force reconnect completed. isConnected: ${isConnected}`);
       
       if (activeDeviceId && isConnected) {
@@ -897,17 +910,22 @@ export const MqttProvider = ({ children }) => {
         const msgStr = message.toString();
         console.log(`📨 Received on ${topic}: ${msgStr.substring(0, 100)}...`);
         
-        const parsed = parseSenML(msgStr);
+        const parsed = parseSenMLToObject(msgStr);
         console.log("📊 Parsed data:", parsed);
         
         // ✅ Data received! Mark device online
         setHasReceivedData(true);
+        hasReceivedDataRef.current = true;
         setConnectionState('online');
         lastDataReceivedTime.current = Date.now();
         
+        // ✅ Cancel the initial response check — the device responded
+        clearInitialResponseCheck();
+        
         // ✅ If first data ever received
-        if (!hasEverBeenOnline) {
+        if (!hasEverBeenOnlineRef.current) {
           setHasEverBeenOnline(true);
+          hasEverBeenOnlineRef.current = true;
           console.log('✅ First data received from device! Device is ONLINE');
           
           // Start timeout check now
@@ -933,11 +951,19 @@ export const MqttProvider = ({ children }) => {
             if (isOnline) {
               setConnectionState('online');
               setHasEverBeenOnline(true);
+              hasEverBeenOnlineRef.current = true;
               console.log('✅ Device reported ONLINE from status flags (Bit 17)');
             } else {
-              // Device reports offline, but we still received this message
-              // So we don't mark offline immediately - let timeout handle it
+              // ✅ Device reports OFFLINE via its DevStat value (Bit 17 = 0)
+              // Honoring the initial value — mark the device offline
               console.log('⚠️ Device reported OFFLINE from status flags (Bit 17)');
+              setConnectionState('offline');
+              if (activeDeviceIdRef.current) {
+                setDeviceConnectionStatus(prev => ({
+                  ...prev,
+                  [activeDeviceIdRef.current]: 'offline'
+                }));
+              }
             }
           }
           
@@ -982,7 +1008,8 @@ export const MqttProvider = ({ children }) => {
         
         if (newDeviceStatus !== null) {
           setDeviceStatus(newDeviceStatus);
-          console.log(`📡 Device status from data topic: ${newDeviceStatus === 0 ? 'OFFLINE' : 'ONLINE'}`);
+          const statusOnline = parsed.deviceStatusFlags?.online;
+          console.log(`📡 Device status from data topic: ${statusOnline ? 'ONLINE' : 'OFFLINE'} (${newDeviceStatus})`);
         }
         
         if (hasActuatorUpdate) {
@@ -1063,6 +1090,9 @@ export const MqttProvider = ({ children }) => {
           }));
         }
         
+        // ✅ Initial value check — mark device offline if it never responds
+        startInitialResponseCheck();
+        
         client.subscribe(topics.data, (err) => {
           if (!err) {
             console.log(`📡 Subscribed to ${topics.data}`);
@@ -1098,6 +1128,9 @@ export const MqttProvider = ({ children }) => {
           connectionCheckInterval.current = null;
         }
 
+        // ✅ Initial value check — mark device offline if it never responds
+        startInitialResponseCheck();
+        
         client.subscribe(topics.data, (err) => {
           if (!err) {
             console.log(`📡 Subscribed to ${topics.data}`);

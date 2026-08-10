@@ -17,11 +17,11 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import SliderControl from "../../components/SettingsSlider";
 import { useAuth } from "../../src/context/AuthContext"; // ✅ Import useAuth
 import { useMqtt } from "../../src/context/MqttContext";
 import { useTheme } from "../../src/context/ThemContext";
@@ -33,6 +33,11 @@ import {
 
 // Wizard step order (used by the slide transition to decide direction)
 const STEP_ORDER = ["crop", "variety", "stage", "details"];
+
+// Last-known crops list fetched from the API. Keeps the list visible whenever
+// this screen is re-mounted (e.g. navigating back to it), even if the refetch
+// fails or is slow — the crop list can never appear empty after a back nav.
+let cropsCache = null;
 
 // ============================================
 // SENML FORMAT CONVERTER
@@ -61,11 +66,77 @@ function convertToSenML(cropData, customSettings) {
 }
 
 // ============================================
+// CUSTOMIZE SETTINGS — SLIDER SECTIONS
+// Each range section renders one dual-thumb slider (min may equal max);
+// "single" sections render a single 0-100 style slider (Dimming).
+// ============================================
+const SLIDER_SECTIONS = [
+  {
+    section: "🌡️ Temperature",
+    lowKey: "tempLow",
+    highKey: "tempHigh",
+    config: { min: 0, max: 50, step: 1, unit: "°C", decimals: 0 },
+  },
+  {
+    section: "💧 Humidity",
+    lowKey: "humidityLow",
+    highKey: "humidityHigh",
+    config: { min: 0, max: 100, step: 1, unit: "%", decimals: 0 },
+  },
+  {
+    section: "🌊 Water Temperature",
+    lowKey: "waterTempLow",
+    highKey: "waterTempHigh",
+    config: { min: 0, max: 40, step: 1, unit: "°C", decimals: 0 },
+  },
+  {
+    section: "💧 Water Level",
+    lowKey: "waterLevelLow",
+    highKey: "waterLevelHigh",
+    config: { min: 0, max: 100, step: 1, unit: "%", decimals: 0 },
+  },
+  {
+    section: "🧪 pH",
+    lowKey: "phLow",
+    highKey: "phHigh",
+    config: { min: 0, max: 14, step: 0.1, unit: "", decimals: 1 },
+  },
+  {
+    section: "🌬️ CO₂",
+    lowKey: "co2Low",
+    highKey: "co2High",
+    config: { min: 0, max: 2000, step: 50, unit: "ppm", decimals: 0 },
+  },
+  {
+    section: "💡 Light",
+    lowKey: "luxLow",
+    highKey: "luxHigh",
+    config: { min: 0, max: 200000, step: 500, unit: "lux", decimals: 0 },
+  },
+  {
+    section: "🎛️ Dimming",
+    single: true,
+    key: "dimming",
+    config: { min: 0, max: 100, step: 1, unit: "%", decimals: 0 },
+  },
+];
+
+// ============================================
 // MAIN COMPONENT
 // ============================================
 export default function AddCrops() {
   const { theme } = useTheme();
-  const { isConnected, externalKey, forceReconnect, publishSettings, publishSenML } = useMqtt();
+  const {
+    isConnected,
+    externalKey,
+    forceReconnect,
+    publishSettings,
+    publishSenML,
+    connectionState,
+    hasReceivedData,
+    deviceStatus,
+    deviceStatusFlags,
+  } = useMqtt();
   const { resetSignupFlow } = useAuth(); // ✅ Get resetSignupFlow from AuthContext
 
   // Wizard step: 'crop' -> 'variety' -> 'stage' -> 'details'
@@ -122,14 +193,33 @@ export default function AddCrops() {
   const screenW = Dimensions.get("window").width;
   const [displayStep, setDisplayStep] = useState("crop"); // step in the base panel
   const [incomingStep, setIncomingStep] = useState(null);   // step sliding in
-  // Two stable Animated values drive the two panels. They are created once and
-  // animated in parallel, so re-renders during the animation (e.g. a loading
-  // flag flipping right after the step change) can never reset the transform
-  // and leave the incoming panel stuck off-screen.
+  // Two stable Animated values drive the two panels. They run on the JS driver
+  // (useNativeDriver: false): the transform is re-applied to the native views
+  // every frame from the value's current position, so a re-render mid-slide can
+  // never detach the animation and leave the incoming panel stuck off-screen
+  // (the bug that made crop sub-data appear to "not load").
   const baseX = useRef(new Animated.Value(0)).current;      // base panel translateX
   const incomingX = useRef(new Animated.Value(0)).current;  // incoming panel translateX
   const transitionLock = useRef(false);
   const prevStepRef = useRef("crop");
+  const stepRef = useRef(step);     // always the LATEST step (completion callbacks)
+  stepRef.current = step;
+  const settleTimer = useRef(null); // safety net in case a completion is swallowed
+
+  // Instantly settle both panels to the latest step. Every completion path
+  // (success, interruption, mid-slide lock, or the safety timeout) calls this,
+  // so the wizard can never stay stuck showing a stale/empty panel.
+  const settlePanels = () => {
+    if (settleTimer.current) {
+      clearTimeout(settleTimer.current);
+      settleTimer.current = null;
+    }
+    transitionLock.current = false;
+    setDisplayStep(stepRef.current);
+    setIncomingStep(null);
+    baseX.setValue(0);
+    incomingX.setValue(0);
+  };
 
   useEffect(() => {
     const prev = prevStepRef.current;
@@ -138,14 +228,9 @@ export default function AddCrops() {
 
     if (transitionLock.current) {
       // mid-slide change: settle instantly instead of fighting the animation.
-      // stopAnimation() forces the in-flight callback to fire with finished:false
-      // so its stale `step` closure cannot revert displayStep afterwards.
       baseX.stopAnimation();
       incomingX.stopAnimation();
-      setDisplayStep(step);
-      setIncomingStep(null);
-      baseX.setValue(0);
-      incomingX.setValue(0);
+      settlePanels();
       return;
     }
 
@@ -164,24 +249,20 @@ export default function AddCrops() {
           toValue: dir === "forward" ? screenW : -screenW,
           duration: 300,
           easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
         Animated.timing(incomingX, {
           toValue: 0,
           duration: 300,
           easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
+          useNativeDriver: false,
         }),
-      ]).start(({ finished }) => {
-        if (finished) {
-          setDisplayStep(step);
-          setIncomingStep(null);
-          baseX.setValue(0);
-          incomingX.setValue(0);
-        }
-        transitionLock.current = false;
-      });
+      ]).start(() => settlePanels());
     });
+
+    // Safety net: if the animation callback never fires (e.g. the app is
+    // backgrounded mid-slide), force-settle so content is never left hidden.
+    settleTimer.current = setTimeout(settlePanels, 450);
   }, [step]);
 
   // Stop any running slide if the screen unmounts mid-animation
@@ -189,6 +270,7 @@ export default function AddCrops() {
     () => () => {
       baseX.stopAnimation();
       incomingX.stopAnimation();
+      if (settleTimer.current) clearTimeout(settleTimer.current);
     },
     []
   );
@@ -236,15 +318,21 @@ export default function AddCrops() {
   const loadCrops = async () => {
     try {
       setLoading(true);
+      // Instantly render the last-known crops while the fresh fetch runs, so
+      // re-visiting this screen never shows an empty list.
+      if (cropsCache && cropsCache.length > 0) setCrops(cropsCache);
       const result = await getAllCrops();
-      if (result.success) {
-        setCrops(Array.isArray(result.data) ? result.data : []);
-      } else {
+      if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+        cropsCache = result.data;
+        setCrops(result.data);
+      } else if (!cropsCache || cropsCache.length === 0) {
         Alert.alert("Error", result.message || "Failed to load crops");
       }
     } catch (error) {
       console.error("Error loading crops:", error);
-      Alert.alert("Error", "Failed to load crops");
+      if (!cropsCache || cropsCache.length === 0) {
+        Alert.alert("Error", "Failed to load crops");
+      }
     } finally {
       setLoading(false);
     }
@@ -708,7 +796,7 @@ export default function AddCrops() {
             <Ionicons name="thermometer-outline" size={16} color={theme.colors.textSecondary} />
             <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>Temperature</Text>
             <Text style={[styles.detailValue, { color: theme.colors.text }]}>
-              {cropDetails.temperature_min || 0}°C - {cropDetails.temperature_max || 0}°C
+              {customSettings.tempLow}°C - {customSettings.tempHigh}°C
             </Text>
           </View>
 
@@ -716,7 +804,7 @@ export default function AddCrops() {
             <Ionicons name="water-outline" size={16} color={theme.colors.textSecondary} />
             <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>Humidity</Text>
             <Text style={[styles.detailValue, { color: theme.colors.text }]}>
-              {cropDetails.humidity_min || 0}% - {cropDetails.humidity_max || 0}%
+              {customSettings.humidityLow}% - {customSettings.humidityHigh}%
             </Text>
           </View>
 
@@ -724,7 +812,7 @@ export default function AddCrops() {
             <Ionicons name="flask-outline" size={16} color={theme.colors.textSecondary} />
             <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>pH</Text>
             <Text style={[styles.detailValue, { color: theme.colors.text }]}>
-              {cropDetails.ph_min || 0} - {cropDetails.ph_max || 0}
+              {customSettings.phLow} - {customSettings.phHigh}
             </Text>
           </View>
 
@@ -732,7 +820,7 @@ export default function AddCrops() {
             <Ionicons name="cloud-outline" size={16} color={theme.colors.textSecondary} />
             <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>CO₂</Text>
             <Text style={[styles.detailValue, { color: theme.colors.text }]}>
-              {cropDetails.co2_min || 0} - {cropDetails.co2_max || 0} ppm
+              {customSettings.co2Low} - {customSettings.co2High} ppm
             </Text>
           </View>
 
@@ -740,7 +828,7 @@ export default function AddCrops() {
             <Ionicons name="sunny-outline" size={16} color={theme.colors.textSecondary} />
             <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>PPFD</Text>
             <Text style={[styles.detailValue, { color: theme.colors.text }]}>
-              {cropDetails.ppfd_min || 0} - {cropDetails.ppfd_max || 0} µmol/m²/s
+              {Math.round((customSettings.luxLow || 0) / 60)} - {Math.round((customSettings.luxHigh || 0) / 60)} µmol/m²/s
             </Text>
           </View>
 
@@ -877,33 +965,10 @@ export default function AddCrops() {
   const renderCustomizeModal = () => {
     if (!showCustomizeModal) return null;
 
-    const inputFields = [
-      { key: "tempLow", label: "Temperature Low (°C)", section: "🌡️ Temperature" },
-      { key: "tempHigh", label: "Temperature High (°C)", section: "🌡️ Temperature" },
-      { key: "humidityLow", label: "Humidity Low (%)", section: "💧 Humidity" },
-      { key: "humidityHigh", label: "Humidity High (%)", section: "💧 Humidity" },
-      { key: "waterTempLow", label: "Water Temp Low (°C)", section: "🌊 Water Temperature" },
-      { key: "waterTempHigh", label: "Water Temp High (°C)", section: "🌊 Water Temperature" },
-      { key: "waterLevelLow", label: "Water Level Low (%)", section: "💧 Water Level" },
-      { key: "waterLevelHigh", label: "Water Level High (%)", section: "💧 Water Level" },
-      { key: "phLow", label: "pH Low", section: "🧪 pH" },
-      { key: "phHigh", label: "pH High", section: "🧪 pH" },
-      { key: "co2Low", label: "CO₂ Low (ppm)", section: "🌬️ CO₂" },
-      { key: "co2High", label: "CO₂ High (ppm)", section: "🌬️ CO₂" },
-      { key: "luxLow", label: "Light Low (Lux)", section: "💡 Light" },
-      { key: "luxHigh", label: "Light High (Lux)", section: "💡 Light" },
-      { key: "dimming", label: "Dimming (%)", section: "🎛️ Dimming" },
-    ];
-
-    let currentSection = "";
-    const groupedFields = [];
-    inputFields.forEach((field) => {
-      if (field.section !== currentSection) {
-        currentSection = field.section;
-        groupedFields.push({ type: "section", label: currentSection });
-      }
-      groupedFields.push({ type: "field", ...field });
-    });
+    const fmt = (value, config) => {
+      const decimals = config.decimals > 0 && value % 1 !== 0 ? config.decimals : 0;
+      return `${value.toFixed(decimals)}${config.unit ? ` ${config.unit}` : ""}`;
+    };
 
     return (
       <Modal visible={showCustomizeModal} animationType="slide" transparent onRequestClose={() => setShowCustomizeModal(false)}>
@@ -917,27 +982,78 @@ export default function AddCrops() {
             </View>
 
             <ScrollView showsVerticalScrollIndicator contentContainerStyle={styles.modalScrollContent} keyboardShouldPersistTaps="handled">
-              {groupedFields.map((item, index) => {
-                if (item.type === "section") {
+              {SLIDER_SECTIONS.map((sec) => {
+                if (sec.single) {
+                  const val = Number(draft[sec.key]) || 0;
+                  const lo = Math.min(sec.config.min, val);
+                  const hi = Math.max(sec.config.max, val);
                   return (
-                    <Text key={index} style={[styles.sectionLabel, { color: theme.colors.text }]}>
-                      {item.label}
-                    </Text>
+                    <View
+                      key={sec.section}
+                      style={[styles.sliderCard, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.border }]}
+                    >
+                      <View style={styles.sliderHeaderRow}>
+                        <Text style={[styles.sliderSectionTitle, { color: theme.colors.text }]}>{sec.section}</Text>
+                        <Text style={[styles.sliderValueBadge, { color: primary, backgroundColor: `${primary}14` }]}>
+                          {fmt(val, sec.config)}
+                        </Text>
+                      </View>
+                      <SliderControl
+                        single
+                        min={lo}
+                        max={hi}
+                        minValue={val}
+                        step={sec.config.step}
+                        onChange={(v) => updateDraft(sec.key, String(v))}
+                        formatValue={(v) => fmt(v, sec.config)}
+                        tintColor={primary}
+                        thumbColor={theme.colors.surface}
+                        trackColor={theme.colors.border}
+                      />
+                      <View style={styles.sliderScaleRow}>
+                        <Text style={[styles.sliderScaleText, { color: theme.colors.textSecondary }]}>{fmt(lo, sec.config)}</Text>
+                        <Text style={[styles.sliderScaleText, { color: theme.colors.textSecondary }]}>{fmt(hi, sec.config)}</Text>
+                      </View>
+                    </View>
                   );
                 }
+
+                const rawLow = Number(draft[sec.lowKey]) || 0;
+                const rawHigh = Number(draft[sec.highKey]) || 0;
+                const low = Math.min(rawLow, rawHigh);
+                const high = Math.max(rawLow, rawHigh);
+                const lo = Math.min(sec.config.min, low, high);
+                const hi = Math.max(sec.config.max, low, high);
                 return (
-                  <View key={item.key} style={styles.customInputContainer}>
-                    <Text style={[styles.customInputLabel, { color: theme.colors.textSecondary }]}>{item.label}</Text>
-                    <TextInput
-                      style={[
-                        styles.customInput,
-                        { borderColor: theme.colors.border, color: theme.colors.text, backgroundColor: theme.colors.inputBackground },
-                      ]}
-                      value={draft[item.key] || ""}
-                      onChangeText={(text) => updateDraft(item.key, text)}
-                      keyboardType="decimal-pad"
-                      placeholderTextColor={theme.colors.textSecondary}
+                  <View
+                    key={sec.section}
+                    style={[styles.sliderCard, { backgroundColor: theme.colors.inputBackground, borderColor: theme.colors.border }]}
+                  >
+                    <View style={styles.sliderHeaderRow}>
+                      <Text style={[styles.sliderSectionTitle, { color: theme.colors.text }]}>{sec.section}</Text>
+                      <Text style={[styles.sliderValueBadge, { color: primary, backgroundColor: `${primary}14` }]}>
+                        {fmt(low, sec.config)} – {fmt(high, sec.config)}
+                      </Text>
+                    </View>
+                    <SliderControl
+                      min={lo}
+                      max={hi}
+                      minValue={low}
+                      maxValue={high}
+                      step={sec.config.step}
+                      onChange={(l, h) => {
+                        updateDraft(sec.lowKey, String(l));
+                        updateDraft(sec.highKey, String(h));
+                      }}
+                      formatValue={(v) => fmt(v, sec.config)}
+                      tintColor={primary}
+                      thumbColor={theme.colors.surface}
+                      trackColor={theme.colors.border}
                     />
+                    <View style={styles.sliderScaleRow}>
+                      <Text style={[styles.sliderScaleText, { color: theme.colors.textSecondary }]}>MIN {fmt(low, sec.config)}</Text>
+                      <Text style={[styles.sliderScaleText, { color: theme.colors.textSecondary }]}>MAX {fmt(high, sec.config)}</Text>
+                    </View>
                   </View>
                 );
               })}
@@ -983,6 +1099,30 @@ export default function AddCrops() {
   const primaryDark = theme.colors.primaryDark;
 
   const currentStepIndex = STEP_ORDER.indexOf(step) + 1;
+
+  // ── Live device status (MqttContext — DevStat Bit 17 aware) ──────────────
+  const liveStatus = (() => {
+    // Online only when data is present and nothing reports offline.
+    if (
+      deviceStatusFlags?.online === true ||
+      connectionState === "online" ||
+      (hasReceivedData && connectionState !== "offline")
+    ) {
+      return { label: "Online", color: "#4CAF50", bg: "rgba(76,175,80,0.12)" };
+    }
+    if (connectionState === "connecting") {
+      return { label: "Connecting...", color: "#FFC107", bg: "rgba(255,193,7,0.12)" };
+    }
+    // No data (or explicit offline) -> Offline directly. No waiting state.
+    if (
+      connectionState === "offline" ||
+      deviceStatusFlags?.online === false ||
+      !hasReceivedData
+    ) {
+      return { label: "Offline", color: "#F44336", bg: "rgba(244,67,54,0.12)" };
+    }
+    return { label: "Not Connected", color: "#9E9E9E", bg: "rgba(158,158,158,0.12)" };
+  })();
 
   const stepTitles = {
     crop: "Select Crop",
@@ -1119,28 +1259,10 @@ export default function AddCrops() {
           <Text style={[styles.stepLabel, { color: theme.colors.textSecondary }]}>
             Step {currentStepIndex} of 4 · {stepLabels[step]}
           </Text>
-          <View
-            style={[
-              styles.statusPill,
-              {
-                backgroundColor:
-                  connectionStatus === "connected" ? "rgba(76,175,80,0.12)" : "rgba(255,152,0,0.12)",
-              },
-            ]}
-          >
-            <View
-              style={[
-                styles.statusDot,
-                { backgroundColor: connectionStatus === "connected" ? "#4CAF50" : "#FF9800" },
-              ]}
-            />
-            <Text
-              style={[
-                styles.statusPillText,
-                { color: connectionStatus === "connected" ? "#4CAF50" : "#FF9800" },
-              ]}
-            >
-              {connectionStatus === "connected" ? "Connected" : "Connecting..."}
+          <View style={[styles.statusPill, { backgroundColor: liveStatus.bg }]}>
+            <View style={[styles.statusDot, { backgroundColor: liveStatus.color }]} />
+            <Text style={[styles.statusPillText, { color: liveStatus.color }]}>
+              {liveStatus.label}
             </Text>
           </View>
         </View>
@@ -1149,6 +1271,14 @@ export default function AddCrops() {
       <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>
         {stepSubtitles[step]}
       </Text>
+
+      {/* Live device connection status — DevStat Bit 17 online/offline */}
+      {/* <ConnectionStatusBanner
+        connectionState={connectionState}
+        hasReceivedData={hasReceivedData}
+        deviceStatus={deviceStatus}
+        deviceStatusFlags={deviceStatusFlags}
+      /> */}
 
       {/* Step content with directional slide (no blink) */}
       <View style={styles.stepBody}>
@@ -1396,10 +1526,36 @@ const styles = StyleSheet.create({
   modalScrollContent: { paddingBottom: 40 },
   modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 20 },
   modalTitle: { fontSize: 20, fontWeight: "700" },
-  sectionLabel: { fontSize: 16, fontWeight: "700", marginTop: 16, marginBottom: 10 },
-  customInputContainer: { marginBottom: 12 },
-  customInputLabel: { fontSize: 13, marginBottom: 4 },
-  customInput: { borderWidth: 1, borderRadius: 10, padding: 12, fontSize: 14 },
+  sliderSectionTitle: { fontSize: 15, fontWeight: "700" },
+  sliderHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 2,
+  },
+  sliderValueBadge: {
+    fontSize: 13,
+    fontWeight: "700",
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 20,
+    overflow: "hidden",
+  },
+  sliderScaleRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 2,
+    paddingHorizontal: 2,
+  },
+  sliderScaleText: { fontSize: 10.5, fontWeight: "600", letterSpacing: 0.3 },
+  sliderCard: {
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 10,
+    marginBottom: 12,
+  },
   modalButtons: { flexDirection: "row", gap: 10, marginTop: 16, marginBottom: 20 },
   modalButton: { flex: 1, borderRadius: 50, overflow: "hidden" },
   resetButton: { borderWidth: 1, alignItems: "center", justifyContent: "center", paddingVertical: 13 },

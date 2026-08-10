@@ -30,7 +30,11 @@ export const DeviceStatusSummary = ({
     return '#FF9800';
   };
 
-  const isOffline = connectionState === 'disconnected' || connectionState === 'idle';
+  const isOffline =
+    !hasReceivedData ||
+    connectionState === 'offline' ||
+    connectionState === 'disconnected' ||
+    connectionState === 'idle';
 
   return (
     <TouchableOpacity 
@@ -42,9 +46,6 @@ export const DeviceStatusSummary = ({
         <Text style={styles.title}>📊 Device Status</Text>
         {isOffline && (
           <Text style={styles.offlineText}>🔴 Offline</Text>
-        )}
-        {!hasReceivedData && !isOffline && (
-          <Text style={styles.loadingText}>⏳ Loading...</Text>
         )}
       </View>
 
@@ -95,11 +96,6 @@ const styles = StyleSheet.create({
   offlineText: {
     fontSize: 12,
     color: '#F44336',
-    fontWeight: '600',
-  },
-  loadingText: {
-    fontSize: 12,
-    color: '#FF9800',
     fontWeight: '600',
   },
   grid: {
