@@ -3,7 +3,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -21,6 +21,7 @@ import {
 import AddDeviceWizard from "../../components/AddDeviceWizard";
 import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
+import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
 import {
   getActiveDevice,
@@ -84,7 +85,7 @@ function DeviceCard({
     disconnected: {
       color: theme.colors.textSecondary,
       bg: `${theme.colors.textSecondary}16`,
-      label: "Disconnected",
+      label: "Offline",
       icon: "cloud-offline-outline",
     },
   }[status];
@@ -320,6 +321,9 @@ function DeviceCard({
 // ── Main Component ──────────────────────────────────────────────────────────
 export default function Devices() {
   const { theme } = useTheme();
+  const { onScroll, headerHeight } = useScroll();
+  const scrollRef = useRef(null);
+  useScrollReset(scrollRef);
   const {
     isConnected,
     externalKey,
@@ -525,12 +529,18 @@ export default function Devices() {
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <ScrollView
+        ref={scrollRef}
         style={styles.container}
         contentContainerStyle={[
           styles.scrollViewContent,
-          { paddingBottom: Platform.OS === "ios" ? height * 0.14 : height * 0.12 },
+          {
+            paddingBottom: Platform.OS === "ios" ? height * 0.14 : height * 0.12,
+            paddingTop: headerHeight,
+          },
         ]}
         showsVerticalScrollIndicator={false}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -541,7 +551,7 @@ export default function Devices() {
         }
       >
         {/* ── Header ───────────────────────────────────────────────────────── */}
-        <View style={styles.header}>
+        {/* <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={[styles.title, { color: theme.colors.text }]}>Devices</Text>
             <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
@@ -563,17 +573,17 @@ export default function Devices() {
           >
             <Ionicons name="add" size={22} color="#FFF" />
           </TouchableOpacity>
-        </View>
+        </View> */}
 
         {/* ── Offline banner ───────────────────────────────────────────────── */}
-        {isOffline && activeDevice && (
+        {/* {isOffline && activeDevice && (
           <View style={[styles.offlineBanner, { backgroundColor: "#FFEBEE" }]}>
             <Ionicons name="alert-circle" size={20} color="#F44336" />
             <Text style={styles.offlineBannerText}>
               {activeDevice.name} is offline — live data is paused
             </Text>
           </View>
-        )}
+        )} */}
 
         {/* ── Loading / Empty states ───────────────────────────────────────── */}
         {loadingDevices ? (

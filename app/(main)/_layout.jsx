@@ -5,11 +5,12 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useNavigation } from "expo-router";
 import { Drawer } from "expo-router/drawer";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BackHandler, Modal } from "react-native";
 
 import {
   Alert,
+  Animated,
   Dimensions,
   Linking,
   Platform,
@@ -28,6 +29,7 @@ import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
 import { useTheme } from "../../src/context/ThemContext";
 import { user_profile } from "../../src/services/profile/profile";
+import { ScrollProvider, useScroll } from "../../src/context/ScrollContext";
 
 const { width, height } = Dimensions.get("window");
 
@@ -37,6 +39,27 @@ function CustomHeader({ navigation, theme }) {
   const [currentvalue, setcurrentvalue] = useState({});
   const [showAlerts, setShowAlerts] = useState(false);
   const { sensorData } = useMqtt();
+
+  // ── Hero collapse (shutter) driven by the current screen's scroll ──────
+  const { scrollY, setHeaderHeight, heroHeight, setHeroHeight } = useScroll();
+  const heroMeasuredRef = useRef(false);
+
+  // Native-driver collapse: the hero slides up (translateY) and fades in
+  // lockstep with the scroll offset — zero layout animation, so it stays
+  // silky-smooth even on low-end devices. Because translateY is exactly
+  // -scrollY, the scrolled content fills the space the hero vacates
+  // (screens reserve it via ScrollContext.headerHeight padding).
+  const heroTranslateY = scrollY.interpolate({
+    inputRange: [0, heroHeight],
+    outputRange: [0, -heroHeight],
+    extrapolate: "clamp",
+  });
+
+  const heroOpacity = scrollY.interpolate({
+    inputRange: [0, heroHeight * 0.5, heroHeight],
+    outputRange: [1, 0.7, 0],
+    extrapolate: "clamp",
+  });
 
   useEffect(() => {
     const profile = async () => {
@@ -103,12 +126,18 @@ function CustomHeader({ navigation, theme }) {
 
   return (
     <View
-      style={[
-        styles.headerContainer,
-        { paddingTop: Platform.OS === "ios" ? 50 : 40 },
-      ]}
+      style={styles.headerContainer}
+      onLayout={(e) => {
+        const h = e.nativeEvent.layout.height;
+        if (h > 0) setHeaderHeight(h);
+      }}
     >
-      <View style={styles.headerTopRow}>
+      <View
+        style={[
+          styles.headerTopRow,
+          { paddingTop: Platform.OS === "ios" ? 50 : 40 },
+        ]}
+      >
         <TouchableOpacity
           onPress={() => navigation.openDrawer()}
           style={styles.headerIconButton}
@@ -141,7 +170,23 @@ function CustomHeader({ navigation, theme }) {
         </View>
       </View>
 
-      <View style={[styles.heroSection, { minHeight: height * 0.22 }]}>
+      {/* ── Hero section — slides up behind the top bar on scroll ─────────── */}
+      <Animated.View
+        style={[
+          styles.heroSection,
+          {
+            transform: [{ translateY: heroTranslateY }],
+            opacity: heroOpacity,
+          },
+        ]}
+        onLayout={(e) => {
+          const h = e.nativeEvent.layout.height;
+          if (h > 0 && !heroMeasuredRef.current) {
+            heroMeasuredRef.current = true;
+            setHeroHeight(h);
+          }
+        }}
+      >
         <View style={[styles.heroImage, { backgroundColor: "#2E7D32" }]} />
         <View style={styles.heroContent}>
           <View style={styles.weatherTimeRow}>
@@ -189,7 +234,7 @@ function CustomHeader({ navigation, theme }) {
             </View>
           </View>
         </View>
-      </View>
+      </Animated.View>
 
       {/* ✅ Alert Modal */}
       <Modal
@@ -245,21 +290,9 @@ function CustomDrawerContent({ navigation }) {
       ],
     },
     {
-      section: "ENVIRONMENT SENSORS",
+      section: "SENSORS",
       items: [
-        { name: "Ambient Temperature", icon: "thermometer-outline", route: "/(main)/ambient-temperature" },
-        { name: "Ambient Humidity", icon: "water-outline", route: "/(main)/ambient-humidity" },
-        { name: "Light Level", icon: "sunny-outline", route: "/(main)/light-level" },
-        { name: "CO₂ Level", icon: "leaf-outline", route: "/(main)/co2" },
-      ],
-    },
-    {
-      section: "WATER & SOIL SENSORS",
-      items: [
-        { name: "Water Temperature", icon: "thermometer-outline", route: "/(main)/water-temperature" },
-        { name: "Water Level", icon: "water-outline", route: "/(main)/water-level" },
-        { name: "EC Value", icon: "flash-outline", route: "/(main)/ec-value" },
-        { name: "pH Level", icon: "flask-outline", route: "/(main)/ph-level" },
+        { name: "Environmental Sensors", icon: "leaf-outline", route: "/(main)/sensor-tabs" },
       ],
     },
     {
@@ -411,7 +444,22 @@ function CustomDrawerContent({ navigation }) {
 
 export default function MainLayout() {
   const { theme } = useTheme();
+
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ScrollProvider>
+        <MainDrawer theme={theme} />
+      </ScrollProvider>
+    </GestureHandlerRootView>
+  );
+}
+
+function MainDrawer({ theme }) {
   const navigation = useNavigation();
+
+  // NOTE: hero/scroll reset on route change is handled per-screen via
+  // useScrollReset (ScrollContext) + useFocusEffect — it fires reliably on
+  // every drawer tab switch, unlike a listener on the parent navigator here.
 
   // Handle Android back button
   useEffect(() => {
@@ -436,8 +484,7 @@ export default function MainLayout() {
   }, [navigation]);
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <Drawer
+    <Drawer
         screenOptions={{
           drawerPosition: "left",
           drawerStyle: {
@@ -446,6 +493,7 @@ export default function MainLayout() {
             backgroundColor: theme.colors.background,
           },
           headerShown: true,
+          headerTransparent: true,
           header: ({ navigation }) => (
             <CustomHeader
               navigation={navigation}
@@ -469,6 +517,9 @@ export default function MainLayout() {
         <Drawer.Screen name="pump-history" options={{ title: "Pump History" }} />
         <Drawer.Screen name="sensor-history" options={{ title: "Sensor History" }} />
         
+        {/* ── SENSOR TABS (all sensors overview) ── */}
+        <Drawer.Screen name="sensor-tabs" options={{ title: "Environmental Sensors" }} />
+        
         {/* ── ENVIRONMENT SENSORS ── */}
         <Drawer.Screen name="ambient-temperature" options={{ title: "Ambient Temperature" }} />
         <Drawer.Screen name="ambient-humidity" options={{ title: "Ambient Humidity" }} />
@@ -488,18 +539,27 @@ export default function MainLayout() {
         <Drawer.Screen name="sensor/ph-level" options={{ title: "pH Details" }} />
         <Drawer.Screen name="sensor/ec-value" options={{ title: "EC Details" }} />
       </Drawer>
-    </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
-  headerContainer: { backgroundColor: "#2E7D32", paddingBottom: 0 },
+  // Transparent overlay — the drawer renders it above the screen content
+  // (headerTransparent). The green top bar stays pinned; the hero slides
+  // up behind it on scroll. Screens reserve its height as scroll padding.
+  headerContainer: {
+    zIndex: 10,
+  },
   headerTopRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
     paddingBottom: 8,
+    backgroundColor: "#2E7D32",
+    zIndex: 2,
+    // Android: elevation, not zIndex, decides sibling draw order. Keep the
+    // hero (elevation 10) sliding BEHIND this opaque bar, never over it.
+    elevation: 12,
   },
   headerIconButton: { padding: 6, position: "relative" },
   headerRightIcons: {
@@ -513,8 +573,25 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 20,
   },
-  heroSection: { position: "relative", width: "100%" },
-  heroImage: { width: "100%", height: "100%", position: "absolute" },
+  heroSection: {
+    position: "relative",
+    width: "100%",
+    zIndex: 1,
+    borderBottomLeftRadius: 26,
+    borderBottomRightRadius: 26,
+    shadowColor: "#1B5E20",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.28,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  heroImage: {
+    width: "100%",
+    height: "100%",
+    position: "absolute",
+    borderBottomLeftRadius: 26,
+    borderBottomRightRadius: 26,
+  },
   heroContent: { padding: 12, paddingTop: 8, paddingBottom: 12 },
   weatherTimeRow: {
     flexDirection: "row",

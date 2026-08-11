@@ -1,7 +1,7 @@
 // app/(main)/sensor/SensorDetailScreen.jsx
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Dimensions,
@@ -13,14 +13,22 @@ import {
 } from "react-native";
 import { useHistoricalData } from "../../../src/context/HistoricalDataContext";
 import { useMqtt } from "../../../src/context/MqttContext";
+import { useScroll, useScrollReset } from "../../../src/context/ScrollContext";
 import { useTheme } from "../../../src/context/ThemContext";
 import { searchSenML } from "../../../src/services/senmlService";
 
 const { width } = Dimensions.get("window");
 
-export default function SensorDetailScreen({ config }) {
+export default function SensorDetailScreen({
+  config,
+  showHeader = true,
+  contentPaddingTop,
+}) {
   const { theme } = useTheme();
   const { sensorData } = useMqtt();
+  const { onScroll, headerHeight } = useScroll();
+  const scrollRef = useRef(null);
+  useScrollReset(scrollRef);
   const { getSensorWeeklyData, isLoading } = useHistoricalData();
   const [timeRange, setTimeRange] = useState("7d");
   const [historicalData, setHistoricalData] = useState([]);
@@ -135,22 +143,28 @@ export default function SensorDetailScreen({ config }) {
 
   return (
     <ScrollView 
+      ref={scrollRef}
       style={[styles.container, { backgroundColor: theme.colors.background }]}
       showsVerticalScrollIndicator={false}
+      contentContainerStyle={{ paddingTop: contentPaddingTop ?? headerHeight }}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
     >
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backButton}
-        >
-          <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
-        </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: theme.colors.text }]}>
-          {config.name}
-        </Text>
-        <View style={{ width: 40 }} />
-      </View>
+      {/* Header (hidden when embedded in the sensor-tabs screen) */}
+      {showHeader && (
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backButton}
+          >
+            <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
+          </TouchableOpacity>
+          <Text style={[styles.headerTitle, { color: theme.colors.text }]}>
+            {config.name}
+          </Text>
+          <View style={{ width: 40 }} />
+        </View>
+      )}
 
       {/* Main Value Display - Real-time from MQTT */}
       <View style={[styles.valueCard, { backgroundColor: theme.colors.surface }]}>

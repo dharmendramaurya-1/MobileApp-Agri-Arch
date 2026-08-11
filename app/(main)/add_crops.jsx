@@ -21,9 +21,9 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { ConnectionStatusBanner } from "../../components/ConnectionStatusBanner";
 import SliderControl from "../../components/SettingsSlider";
 import { useMqtt } from "../../src/context/MqttContext";
+import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
 import {
   getAllCrops,
@@ -363,6 +363,9 @@ function SenMLPreviewModal({ visible, onClose, cropDetails, customSettings, them
 // ============================================
 export default function AddCrops() {
   const { theme } = useTheme();
+  const { onScroll, headerHeight } = useScroll();
+  const scrollRef = useRef(null);
+  useScrollReset(scrollRef);
   const {
     isConnected,
     externalKey,
@@ -791,8 +794,12 @@ export default function AddCrops() {
   // ============================================
   const renderCropStep = () => (
     <FlatList
+      ref={scrollRef}
       data={crops}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
       keyExtractor={(item, index) => `${item}-${index}`}
+      ListHeaderComponent={renderWizardHeader("crop")}
       renderItem={({ item }) => {
         const isSelected = selectedCropName === item;
         const isLoading = loading && isSelected;
@@ -826,7 +833,7 @@ export default function AddCrops() {
           </TouchableOpacity>
         );
       }}
-      contentContainerStyle={styles.listContent}
+      contentContainerStyle={[styles.listContent, { paddingTop: headerHeight }]}
       showsVerticalScrollIndicator={false}
       ListEmptyComponent={
         !loading && (
@@ -847,8 +854,12 @@ export default function AddCrops() {
 
     return (
       <FlatList
+        ref={scrollRef}
         data={varietyNames}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
         keyExtractor={(item, index) => `${item}-${index}`}
+        ListHeaderComponent={renderWizardHeader("variety")}
         renderItem={({ item }) => (
           <TouchableOpacity
             style={[
@@ -877,7 +888,7 @@ export default function AddCrops() {
             )}
           </TouchableOpacity>
         )}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, { paddingTop: headerHeight }]}
         showsVerticalScrollIndicator={false}
       />
     );
@@ -893,8 +904,12 @@ export default function AddCrops() {
 
     return (
       <FlatList
+        ref={scrollRef}
         data={stagesForVariety}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
         keyExtractor={(item) => String(item.parameter_id)}
+        ListHeaderComponent={renderWizardHeader("stage")}
         renderItem={({ item }) => (
           <TouchableOpacity
             style={[
@@ -925,7 +940,7 @@ export default function AddCrops() {
             )}
           </TouchableOpacity>
         )}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, { paddingTop: headerHeight }]}
         showsVerticalScrollIndicator={false}
       />
     );
@@ -939,9 +954,14 @@ export default function AddCrops() {
 
     return (
       <ScrollView
-        contentContainerStyle={styles.detailsScrollContent}
+        ref={scrollRef}
+        contentContainerStyle={[styles.detailsScrollContent, { paddingTop: headerHeight }]}
         showsVerticalScrollIndicator={false}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
       >
+        {renderWizardHeader("details")}
+
         {/* Summary card */}
         <View style={[styles.detailsCard, { backgroundColor: theme.colors.surface }]}>
           <View style={styles.detailsHeader}>
@@ -1091,10 +1111,76 @@ export default function AddCrops() {
     return null;
   };
 
+  // Shared wizard header (back button, title, progress, subtitle, live
+  // device banner). Rendered INSIDE each step's scrollable content so the
+  // whole section rises to the top as the drawer hero collapses — the same
+  // shutter behavior as the rest of the app.
+  const renderWizardHeader = (s) => {
+    const idx = STEP_ORDER.indexOf(s) + 1;
+    return (
+      <View>
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={handleBack}
+            style={[styles.backButton, { backgroundColor: theme.colors.surface }]}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+          >
+            <Ionicons name="arrow-back" size={22} color={theme.colors.text} />
+          </TouchableOpacity>
+
+          <View style={styles.headerCenter}>
+            <Text style={[styles.headerTitle, { color: theme.colors.text }]}>{stepTitles[s]}</Text>
+          </View>
+
+          <View style={styles.headerRight} />
+        </View>
+
+        {/* Progress indicator */}
+        <View style={styles.progressWrap}>
+          <View style={styles.progressTrack}>
+            {STEP_ORDER.map((_, i) => (
+              <View
+                key={i}
+                style={[
+                  styles.progressSegment,
+                  { backgroundColor: i + 1 <= idx ? primary : theme.colors.border },
+                ]}
+              />
+            ))}
+          </View>
+          <View style={styles.progressMeta}>
+            <Text style={[styles.stepLabel, { color: theme.colors.textSecondary }]}>
+              Step {idx} of 4 · {stepLabels[s]}
+            </Text>
+            <View style={[styles.statusPill, { backgroundColor: liveStatus.bg }]}>
+              <View style={[styles.statusDot, { backgroundColor: liveStatus.color }]} />
+              <Text style={[styles.statusPillText, { color: liveStatus.color }]}>
+                {liveStatus.label}
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>
+          {stepSubtitles[s]}
+        </Text>
+
+        {/* Live device connection status — DevStat Bit 17 online/offline */}
+        {/* <ConnectionStatusBanner
+          connectionState={connectionState}
+          hasReceivedData={hasReceivedData}
+          deviceStatus={deviceStatus}
+          deviceStatusFlags={deviceStatusFlags}
+        /> */}
+      </View>
+    );
+  };
+
   const primary = theme.colors.primary;
   const primaryDark = theme.colors.primaryDark;
-
-  const currentStepIndex = STEP_ORDER.indexOf(step) + 1;
 
   // ── Live device status (MqttContext — DevStat Bit 17 aware) ──────────────
   const liveStatus = (() => {
@@ -1146,7 +1232,7 @@ export default function AddCrops() {
   // ============================================
   if (connectionStatus === "no_key") {
     return (
-      <SafeAreaView style={[styles.container, styles.centerContainer, { backgroundColor: theme.colors.background }]} edges={["top", "bottom"]}>
+      <SafeAreaView style={[styles.container, styles.centerContainer, { backgroundColor: theme.colors.background, paddingTop: headerHeight }]} edges={["top", "bottom"]}>
         <View style={[styles.errorIconWrap, { backgroundColor: `${primary}1A` }]}>
           <Ionicons name="warning-outline" size={52} color="#FF9800" />
         </View>
@@ -1176,7 +1262,7 @@ export default function AddCrops() {
 
   if (connectionStatus === "failed") {
     return (
-      <SafeAreaView style={[styles.container, styles.centerContainer, { backgroundColor: theme.colors.background }]} edges={["top", "bottom"]}>
+      <SafeAreaView style={[styles.container, styles.centerContainer, { backgroundColor: theme.colors.background, paddingTop: headerHeight }]} edges={["top", "bottom"]}>
         <View style={[styles.errorIconWrap, { backgroundColor: `${theme.colors.error}1A` }]}>
           <Ionicons name="close-circle-outline" size={52} color={theme.colors.error} />
         </View>
@@ -1212,67 +1298,16 @@ export default function AddCrops() {
   // ============================================
   return (
     <SafeAreaView
-      style={[styles.container, { backgroundColor: theme.colors.background }]}
+      style={[
+        styles.container,
+        { backgroundColor: theme.colors.background },
+      ]}
       edges={["bottom"]}
     >
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          onPress={handleBack}
-          style={[styles.backButton, { backgroundColor: theme.colors.surface }]}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
-        >
-          <Ionicons name="arrow-back" size={22} color={theme.colors.text} />
-        </TouchableOpacity>
-
-        <View style={styles.headerCenter}>
-          <Text style={[styles.headerTitle, { color: theme.colors.text }]}>{stepTitles[step]}</Text>
-        </View>
-
-        <View style={styles.headerRight} />
-      </View>
-
-      {/* Progress indicator */}
-      <View style={styles.progressWrap}>
-        <View style={styles.progressTrack}>
-          {STEP_ORDER.map((_, i) => (
-            <View
-              key={i}
-              style={[
-                styles.progressSegment,
-                { backgroundColor: i + 1 <= currentStepIndex ? primary : theme.colors.border },
-              ]}
-            />
-          ))}
-        </View>
-        <View style={styles.progressMeta}>
-          <Text style={[styles.stepLabel, { color: theme.colors.textSecondary }]}>
-            Step {currentStepIndex} of 4 · {stepLabels[step]}
-          </Text>
-          <View style={[styles.statusPill, { backgroundColor: liveStatus.bg }]}>
-            <View style={[styles.statusDot, { backgroundColor: liveStatus.color }]} />
-            <Text style={[styles.statusPillText, { color: liveStatus.color }]}>
-              {liveStatus.label}
-            </Text>
-          </View>
-        </View>
-      </View>
-
-      <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>
-        {stepSubtitles[step]}
-      </Text>
-
-      {/* Live device connection status — DevStat Bit 17 online/offline */}
-      <ConnectionStatusBanner
-        connectionState={connectionState}
-        hasReceivedData={hasReceivedData}
-        deviceStatus={deviceStatus}
-        deviceStatusFlags={deviceStatusFlags}
-      />
-
-      {/* Step content with directional slide (no blink) */}
+      {/* Step content with directional slide (no blink) — the wizard header
+          (title, progress, subtitle, device banner) lives inside each step's
+          scrollable via renderWizardHeader, so the whole section rises to the
+          top as the drawer hero collapses. */}
       <View style={styles.stepBody}>
         {/* Base panel — current step (slides out in the travel direction) */}
         <Animated.View
@@ -1348,7 +1383,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 4,
   },
@@ -1369,13 +1403,11 @@ const styles = StyleSheet.create({
   headerRight: { width: 40 },
   headerSubtitle: {
     fontSize: 13.5,
-    paddingHorizontal: 20,
     marginBottom: 10,
     opacity: 0.9,
     lineHeight: 19,
   },
   progressWrap: {
-    paddingHorizontal: 16,
     paddingTop: 6,
     paddingBottom: 4,
   },

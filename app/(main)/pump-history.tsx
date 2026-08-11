@@ -1,8 +1,13 @@
+import { useRef } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
 
 export default function PumpHistory() {
   const { theme } = useTheme();
+  const { onScroll, headerHeight } = useScroll();
+  const scrollRef = useRef(null);
+  useScrollReset(scrollRef);
   const history = [
     {
       id: "1",
@@ -22,7 +27,11 @@ export default function PumpHistory() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={[styles.container, { backgroundColor: theme.colors.background }]}
+      contentContainerStyle={{ paddingTop: headerHeight }}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
     >
       <Text style={[styles.title, { color: theme.colors.text }]}>
         Pump History

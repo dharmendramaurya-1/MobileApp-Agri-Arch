@@ -1,14 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Ionicons } from "@expo/vector-icons";
 import { Dimensions, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMqtt } from "../../src/context/MqttContext";
+import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
 const { height } = Dimensions.get("window");
 
 export default function AmbientHumidity() {
   const { sensorData } = useMqtt();
   const { theme } = useTheme();
+  const { onScroll, headerHeight } = useScroll();
+  const scrollRef = useRef(null);
+  useScrollReset(scrollRef);
   // const currentValue = 65;
   const [currentValue, setcurrentValue] = useState<any>();
   useEffect(() => {
@@ -21,9 +25,12 @@ export default function AmbientHumidity() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={[styles.container, { backgroundColor: theme.colors.background }]}
       showsVerticalScrollIndicator={false}
-      contentContainerStyle={styles.scrollContent}
+      contentContainerStyle={[styles.scrollContent, { paddingTop: headerHeight }]}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
     >
       <View style={styles.header}>
         <View

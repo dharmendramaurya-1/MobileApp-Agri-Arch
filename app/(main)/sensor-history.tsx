@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
     ScrollView,
     StyleSheet,
@@ -8,6 +8,7 @@ import {
     View,
 } from "react-native";
 import { useTheme } from "../../src/context/ThemContext";
+import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 
 // Historical data for all sensors
 const sensorHistoryData = [
@@ -173,6 +174,9 @@ const sensorHistoryData = [
 
 export default function SensorHistory() {
   const { theme } = useTheme();
+  const { onScroll, headerHeight } = useScroll();
+  const scrollRef = useRef(null);
+  useScrollReset(scrollRef);
   const [expandedSensor, setExpandedSensor] = useState<string | null>(null);
 
   const getStatusColor = (status: string) => {
@@ -211,7 +215,11 @@ export default function SensorHistory() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={[styles.container, { backgroundColor: theme.colors.background }]}
+      contentContainerStyle={{ paddingTop: headerHeight }}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
     >
       <View style={styles.header}>
         <Text style={[styles.title, { color: theme.colors.text }]}>

@@ -1,11 +1,15 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMqtt } from "../../src/context/MqttContext";
+import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
 export default function WaterLevel() {
   const { sensorData } = useMqtt();
   const { theme } = useTheme();
+  const { onScroll, headerHeight } = useScroll();
+  const scrollRef = useRef(null);
+  useScrollReset(scrollRef);
   // const currentValue = 75;
   const [currentValue, setcurrentValue] = useState<any>();
 
@@ -20,7 +24,11 @@ export default function WaterLevel() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={[styles.container, { backgroundColor: theme.colors.background }]}
+      contentContainerStyle={{ paddingTop: headerHeight }}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
     >
       <View style={styles.header}>
         <View

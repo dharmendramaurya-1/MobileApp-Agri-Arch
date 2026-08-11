@@ -6,7 +6,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Dimensions,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,10 +14,9 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-// ✅ CORRECT - Components from root components/ folder
-
 // ✅ CORRECT - Context from src/context/
 import { SENSORS } from "../../src/config/sensorConfigs";
+import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useAlerts } from '../../src/context/AlertContext';
 import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
@@ -26,125 +24,34 @@ import { useSystemMode } from "../../src/context/SystemModeContext";
 import { useTheme } from "../../src/context/ThemContext";
 import { user_profile } from "../../src/services/profile/profile";
 
-// ✅ CORRECT - Utils from src/utils/
-import { getDisplayStatus } from '../../src/utils/deviceStatusParser';
-
-const { width } = Dimensions.get("window");
-
 // ── Sensor tiles ───────────────────────────────────────────────────────────
 const SENSOR_CONFIG = SENSORS.map((sensor) => ({
   id: sensor.key,
   name: sensor.name,
-  location: sensor.location,
   dataKey: sensor.dataKey,
   unit: sensor.unit,
   color: sensor.color,
-  route: `/sensor/${sensor.key}`,
+  icon: sensor.icon, // ✅ each sensor's own icon
   maxValue: sensor.maxValue,
 }));
 
-// ── Circular Progress ─────────────────────────────────────────────────────────
-function CircularProgress({ value, size = 70, color = "#4CAF50", maxValue = 100 }) {
-  const isLoading = value === null || value === undefined;
-
-  if (isLoading) {
-    return (
-      <View style={[styles.circularContainer, { width: size, height: size }]}>
-        <View
-          style={[
-            styles.circularBg,
-            {
-              width: size,
-              height: size,
-              borderRadius: size / 2,
-              backgroundColor: `${color}30`,
-            },
-          ]}
-        />
-        <Text style={[styles.circularText, { fontSize: size / 4, color: '#999' }]}>
-          _ _
-        </Text>
-      </View>
-    );
-  }
-
-  const percentage = Math.min(Math.max((value / maxValue) * 100, 0), 100);
+// ── Connection status dot ─────────────────────────────────────────────────────
+function ConnectionDot({ hasReceivedData, deviceStatusFlags, background }) {
+  // ✅ Online only when data received AND device reports online (Bit 17)
+  const isOnline = hasReceivedData && deviceStatusFlags?.online === true;
+  const color = isOnline ? '#4CAF50' : '#F44336';
 
   return (
-    <View style={[styles.circularContainer, { width: size, height: size }]}>
-      <View
-        style={[
-          styles.circularBg,
-          {
-            width: size,
-            height: size,
-            borderRadius: size / 2,
-            backgroundColor: `${color}30`,
-          },
-        ]}
-      />
-      <View
-        style={[
-          styles.circularFill,
-          {
-            width: size - 10,
-            height: size - 10,
-            borderRadius: (size - 10) / 2,
-            borderWidth: 5,
-            borderColor: color,
-          },
-        ]}
-      />
-      <Text style={[styles.circularText, { fontSize: size / 3.5, color }]}>
-        {Math.round(percentage)}%
+    <View style={[styles.connectionRow, { backgroundColor: background }]}>
+      <View style={[styles.connectionDot, { backgroundColor: color }]} />
+      <Text style={[styles.connectionLabel, { color }]}>
+        {isOnline ? 'Online' : 'Offline'}
       </Text>
     </View>
   );
 }
 
-// ── Connection status dot ─────────────────────────────────────────────────────
-function ConnectionDot({ connectionState, hasReceivedData, deviceStatusFlags }) {
-  // ✅ Check online status from 32-bit status flags (Bit 17)
-  const isOnline = deviceStatusFlags?.online;
-
-  // ✅ If data received AND device reports online → Online (Green)
-  if (hasReceivedData && isOnline === true) {
-    return (
-      <View style={styles.connectionRow}>
-        <View style={[styles.connectionDot, { backgroundColor: '#4CAF50' }]} />
-        <Text style={styles.connectionLabel}>Online</Text>
-      </View>
-    );
-  }
-
-  // ✅ If data received but device reports offline → Offline (Red)
-  if (hasReceivedData && isOnline === false) {
-    return (
-      <View style={styles.connectionRow}>
-        <View style={[styles.connectionDot, { backgroundColor: '#F44336' }]} />
-        <Text style={styles.connectionLabel}>Offline</Text>
-      </View>
-    );
-  }
-
-  // ✅ No data received yet → Offline (Red)
-  return (
-    <View style={styles.connectionRow}>
-      <View style={[styles.connectionDot, { backgroundColor: '#F44336' }]} />
-      <Text style={styles.connectionLabel}>Offline</Text>
-    </View>
-  );
-}
-
 // ── Helper ────────────────────────────────────────────────────────────────────
-function chunkArray(arr, size) {
-  const chunks = [];
-  for (let i = 0; i < arr.length; i += size) {
-    chunks.push(arr.slice(i, i + size));
-  }
-  return chunks;
-}
-
 function fmt(value) {
   if (value === null || value === undefined) {
     return "_ _";
@@ -164,6 +71,9 @@ function formatDuration(seconds) {
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const insets = useSafeAreaInsets();
+  const { onScroll, headerHeight } = useScroll();
+  const scrollRef = useRef(null);
+  useScrollReset(scrollRef);
 
   const [u_name, set_u_name] = useState("");
   useEffect(() => {
@@ -186,26 +96,15 @@ export default function Dashboard() {
     sensorData,
     isConnected,
     hasReceivedData,
-    deviceStatus,
     actuatorStatus,
     toggleDeviceStatus,
     deviceConfig,
     publishConfig,
     deviceStatusFlags,
     connectionState,
-    externalKey,
-    activeDeviceId,
-    hasEverBeenOnline,
   } = useMqtt();
 
-  const {
-    isManualMode,
-    isModeLoaded,
-    checkBeforeActuator,
-    modeDisplay,
-    switchToManual,
-    switchToAuto,
-  } = useSystemMode();
+  const { isManualMode, isModeLoaded, checkBeforeActuator } = useSystemMode();
 
   const { addAlert } = useAlerts();
 
@@ -216,9 +115,6 @@ export default function Dashboard() {
   const [modeSwitchPending, setModeSwitchPending] = useState(false);
   const [pumpToggleTime, setPumpToggleTime] = useState(null);
   const pendingActionRef = useRef(null);
-
-  // ── Get display status ──────────────────────────────────────────────────
-  const displayStatus = getDisplayStatus(deviceStatusFlags);
 
   // ── Check if device is offline ──────────────────────────────────────────
   // ✅ Device is offline if:
@@ -437,8 +333,6 @@ export default function Dashboard() {
     router.push("/(main)/settings");
   };
 
-  const sensorRows = chunkArray(SENSOR_CONFIG, 3);
-
   const lastUpdatedLabel = sensorData.lastUpdated
     ? `Updated ${sensorData.lastUpdated.toLocaleTimeString()}`
     : "No data received yet";
@@ -447,12 +341,15 @@ export default function Dashboard() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={[styles.container, { backgroundColor: theme.colors.background }]}
-      contentContainerStyle={[
-        styles.scrollViewContent,
-        { paddingBottom: 20 + insets.bottom },
-      ]}
+      contentContainerStyle={{
+        paddingBottom: 20 + insets.bottom,
+        paddingTop: headerHeight,
+      }}
       showsVerticalScrollIndicator={false}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
     >
       {/* ── Header ────────────────────────────────────────────────────────── */}
       <View style={styles.header}>
@@ -466,10 +363,10 @@ export default function Dashboard() {
             Real-time Farm Analytics Dashboard
           </Text>
           
-          <ConnectionDot 
-            connectionState={connectionState}
+          <ConnectionDot
             hasReceivedData={hasReceivedData}
             deviceStatusFlags={deviceStatusFlags}
+            background={theme.colors.surface}
           />
 
           {/* ✅ Show mode only if device is online */}
@@ -492,15 +389,6 @@ export default function Dashboard() {
             </View>
           )}
 
-          {/* ✅ Show offline status */}
-          {/* {isOffline && (
-            <View style={styles.deviceStatusRow}>
-              <View style={[styles.deviceStatusDot, { backgroundColor: '#F44336' }]} />
-              <Text style={[styles.deviceStatusText, { color: '#F44336' }]}>
-                ● Device Offline
-              </Text>
-            </View>
-          )} */}
         </View>
         <View style={styles.headerRight}>
           <TouchableOpacity onPress={navigateToSettings} style={styles.settingsButton}>
@@ -518,64 +406,10 @@ export default function Dashboard() {
         </View>
       </View>
 
-      {/* ── DevStat / connection status banner ───────────────────────────── */}
-      {/* <ConnectionStatusBanner
-        connectionState={connectionState}
-        hasReceivedData={hasReceivedData}
-        deviceStatus={deviceStatus}
-        deviceStatusFlags={deviceStatusFlags}
-      /> */}
-
       {/* ── Last updated timestamp ────────────────────────────────────────── */}
       <Text style={[styles.lastUpdated, { color: theme.colors.textSecondary }]}>
         {lastUpdatedLabel}
       </Text>
-
-      {/* ── Device Status Summary ─────────────────────────────────────────── */}
-      {/* <DeviceStatusSummary 
-        onPress={() => {}}
-        deviceStatusFlags={deviceStatusFlags}
-        hasReceivedData={hasReceivedData}
-        connectionState={connectionState}
-      /> */}
-
-      {/* ── Water Tank Status ─────────────────────────────────────────────── */}
-      <View style={styles.statsRow}>
-        <View
-          style={[
-            styles.waterTankCard,
-            { backgroundColor: isOffline ? '#999' : theme.colors.primaryLight, flex: 1 },
-          ]}
-        >
-          <Text style={styles.cardTitle}>Water Tank Status</Text>
-          <View style={styles.tankContent}>
-            <CircularProgress
-              value={sensorData.waterLevel}
-              size={60}
-              color="#FFF"
-              maxValue={100}
-            />
-            <View>
-              <Text style={styles.waterLevelValue}>
-                {fmt(sensorData.waterLevel)}%
-              </Text>
-              <Text style={styles.capacityText}>Capacity: 5,000 L</Text>
-              {displayStatus.tankLow !== '_ _' && isDeviceOnline && (
-                <Text style={[styles.tankAlert, { 
-                  color: displayStatus.tankLow === 'YES' ? '#FF5722' : '#4CAF50' 
-                }]}>
-                  {displayStatus.tankLow === 'YES' ? '⚠️ LOW LEVEL' : '✅ Level OK'}
-                </Text>
-              )}
-              {isOffline && (
-                <Text style={[styles.tankAlert, { color: '#FF5722' }]}>
-                  ⚠️ Device Offline
-                </Text>
-              )}
-            </View>
-          </View>
-        </View>
-      </View>
 
       {/* ── Pump Control ──────────────────────────────────────────────────── */}
       <View
@@ -646,226 +480,56 @@ export default function Dashboard() {
       </View>
 
       {/* ── Environmental Sensors Grid ────────────────────────────────────── */}
-      <Text
-        style={[
-          styles.sectionTitle,
-          { color: theme.colors.text, marginHorizontal: 16, marginTop: 8 },
-        ]}
-      >
-        Environmental Sensors
+      <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+        🌿 Environmental Sensors
       </Text>
 
       <View style={styles.sensorsGrid}>
-        {sensorRows.map((row, rowIndex) => (
-          <View key={rowIndex} style={styles.sensorRow}>
-            {row.map((sensor) => {
-              const liveValue = sensorData[sensor.dataKey];
-              const hasValue = liveValue !== null && liveValue !== undefined;
-              return (
-                <TouchableOpacity
-                  key={sensor.id}
-                  style={[
-                    styles.sensorCardSquare,
-                    {
-                      backgroundColor: theme.colors.card,
-                      borderColor: isOffline ? '#ccc' : theme.colors.border,
-                    },
-                  ]}
-                  onPress={() => router.push(sensor.route)}
-                  activeOpacity={0.7}
-                >
-                  <CircularProgress
-                    value={liveValue}
-                    size={50}
-                    color={isOffline || !hasValue ? '#999' : sensor.color}
-                    maxValue={sensor.maxValue || 100}
-                  />
+        {SENSOR_CONFIG.map((sensor) => {
+          const liveValue = sensorData[sensor.dataKey];
+          const hasValue = liveValue !== null && liveValue !== undefined;
+          const active = !isOffline && hasValue;
+          const tint = active ? sensor.color : '#9E9E9E';
 
-                  <Text
-                    style={[styles.sensorName, { color: isOffline || !hasValue ? '#999' : theme.colors.text }]}
-                    numberOfLines={1}
-                  >
-                    {sensor.name}
-                  </Text>
-
-                  <Text
-                    style={[styles.sensorValue, { color: isOffline || !hasValue ? '#999' : sensor.color }]}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                  >
-                    {hasValue ? fmt(liveValue) + sensor.unit : '_ _'}
-                  </Text>
-
-                  <Text
-                    style={[styles.clickText, { color: isOffline || !hasValue ? '#999' : theme.colors.primary }]}
-                  >
-                    tap for details
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-
-            {row.length < 3 &&
-              Array(3 - row.length)
-                .fill(null)
-                .map((_, i) => (
-                  <View
-                    key={`empty-${i}`}
-                    style={styles.sensorCardSquareEmpty}
-                  />
-                ))}
-          </View>
-        ))}
-      </View>
-
-      {/* ── Quick Summary ─────────────────────────────────────────────────── */}
-      <View
-        style={[
-          styles.quickStatsCard,
-          {
-            backgroundColor: theme.colors.surface,
-            borderColor: theme.colors.border,
-          },
-        ]}
-      >
-        <Text style={[styles.overviewTitle, { color: theme.colors.text }]}>
-          Quick Summary
-        </Text>
-
-        <View style={styles.overviewGrid}>
-          {[
-            {
-              label: "Temp",
-              value: fmt(sensorData.ambientTemperature) + "°",
-              color: isOffline ? '#999' : "#FF5722",
-            },
-            {
-              label: "Humidity",
-              value: fmt(sensorData.ambientHumidity) + "%",
-              color: isOffline ? '#999' : "#2196F3",
-            },
-            { 
-              label: "CO₂", 
-              value: fmt(sensorData.co2Level), 
-              color: isOffline ? '#999' : "#9C27B0" 
-            },
-            { 
-              label: "pH", 
-              value: fmt(sensorData.phValue), 
-              color: isOffline ? '#999' : "#4CAF50" 
-            },
-            {
-              label: "Water",
-              value: fmt(sensorData.waterLevel) + "%",
-              color: isOffline ? '#999' : "#2E7D32",
-            },
-            {
-              label: "Soil",
-              value: fmt(sensorData.soilMoisture) + "%",
-              color: isOffline ? '#999' : "#8BC34A",
-            },
-          ].map((item) => (
-            <View key={item.label} style={styles.overviewItem}>
-              <Text
-                style={[
-                  styles.overviewLabel,
-                  { color: theme.colors.textSecondary },
-                ]}
-              >
-                {item.label}
-              </Text>
-              <Text style={[styles.overviewValue, { color: item.color }]}>
-                {item.value}
-              </Text>
-            </View>
-          ))}
-        </View>
-      </View>
-
-      {/* ── Status Flags Quick View ──────────────────────────────────────── */}
-      {/* <View
-        style={[
-          styles.flagCard,
-          {
-            backgroundColor: theme.colors.surface,
-            borderColor: theme.colors.border,
-          },
-        ]}
-      >
-        <Text style={[styles.overviewTitle, { color: theme.colors.text }]}>
-          🚦 Status Flags
-        </Text>
-        <View style={styles.flagGrid}>
-          {[
-            { key: 'tankLow', label: 'Tank Low' },
-            { key: 'tankHigh', label: 'Tank High' },
-            { key: 'waterPump', label: 'Water Pump' },
-            { key: 'nutrientPump', label: 'Nutrient Pump' },
-            { key: 'inletValve', label: 'Inlet Valve' },
-            { key: 'outletValve', label: 'Outlet Valve' },
-            { key: 'mode', label: 'Mode' },
-            { key: 'dimmingLevel', label: 'Dimming' },
-          ].map(item => {
-            const value = displayStatus[item.key];
-            const isOn = value === 'YES' || value === 'ON' || value === 'OPEN' || value === 'AUTO';
-            const isOff = value === 'NO' || value === 'OFF' || value === 'CLOSED' || value === 'MANUAL';
-            const color = isOffline || !hasReceivedData ? '#999' : value === '_ _' ? '#999' : isOn ? '#4CAF50' : isOff ? '#F44336' : '#FF9800';
-            
-            return (
-              <View key={item.key} style={styles.flagItem}>
-                <Text style={[styles.flagLabel, { color: theme.colors.textSecondary }]}>
-                  {item.label}
-                </Text>
-                <Text style={[styles.flagValue, { color }]}>
-                  {!hasReceivedData ? '_ _' : value}
-                </Text>
+          return (
+            <TouchableOpacity
+              key={sensor.id}
+              style={[
+                styles.sensorCard,
+                {
+                  backgroundColor: theme.colors.card,
+                  borderColor: active ? `${tint}55` : theme.colors.border,
+                },
+              ]}
+              onPress={() =>
+                router.push({
+                  pathname: "/(main)/sensor-tabs",
+                  params: { type: sensor.id },
+                })
+              }
+              activeOpacity={0.75}
+            >
+              <View style={[styles.sensorIconChip, { backgroundColor: `${tint}1A` }]}>
+                <Ionicons name={sensor.icon} size={22} color={tint} />
               </View>
-            );
-          })}
-        </View>
-      </View> */}
+              <Text
+                style={[styles.sensorValue, { color: active ? tint : '#9E9E9E' }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                {active ? `${fmt(liveValue)}${sensor.unit}` : '_ _'}
+              </Text>
+              <Text
+                style={[styles.sensorName, { color: active ? theme.colors.text : '#9E9E9E' }]}
+                numberOfLines={1}
+              >
+                {sensor.name}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
 
-      {/* ── Debug Section ─────────────────────────────────────────────────── */}
-      {/* <View style={[styles.debugSection, { 
-        backgroundColor: theme.colors.surface,
-        borderColor: theme.colors.border,
-      }]}>
-        <Text style={[styles.debugTitle, { color: theme.colors.text }]}>
-          🔍 Debug Info
-        </Text>
-        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-          Connected: {isConnected ? '✅ Yes' : '❌ No'}
-        </Text>
-        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-          Has Data: {hasReceivedData ? '✅ Yes' : '❌ No'}
-        </Text>
-        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-          Ever Online: {hasEverBeenOnline ? '✅ Yes' : '❌ No'}
-        </Text>
-        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-          Online Flag: {deviceStatusFlags?.online !== null && deviceStatusFlags?.online !== undefined 
-            ? (deviceStatusFlags.online ? '✅ Online' : '❌ Offline') 
-            : '_ _'}
-        </Text>
-        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-          Connection State: {connectionState || '_ _'}
-        </Text>
-        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-          External Key: {externalKey || '_ _'}
-        </Text>
-        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-          Device ID: {activeDeviceId || '_ _'}
-        </Text>
-        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-          Mode: {isManualMode ? 'MANUAL' : 'AUTO'}
-        </Text>
-        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-          Can Publish: {canPublish ? '✅ Yes' : '❌ No'}
-        </Text>
-        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
-          Device Status: {deviceStatus !== null ? deviceStatus : '_ _'}
-        </Text>
-      </View> */}
     </ScrollView>
   );
 }
@@ -873,7 +537,6 @@ export default function Dashboard() {
 // ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  scrollViewContent: { paddingBottom: "5%" },
 
   header: {
     flexDirection: "row",
@@ -908,8 +571,14 @@ const styles = StyleSheet.create({
   connectionRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 6,
-    gap: 5,
+    alignSelf: "flex-start",
+    marginTop: 8,
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.05)",
   },
   connectionDot: {
     width: 8,
@@ -917,24 +586,8 @@ const styles = StyleSheet.create({
     borderRadius: 4,
   },
   connectionLabel: {
-    fontSize: 11,
-    color: "#888",
-  },
-
-  deviceStatusRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 4,
-    gap: 6,
-  },
-  deviceStatusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  deviceStatusText: {
     fontSize: 12,
-    fontWeight: "500",
+    fontWeight: "600",
   },
 
   modeStatusRow: {
@@ -964,37 +617,17 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
 
-  statsRow: {
-    marginHorizontal: 16,
-    marginBottom: 16,
-  },
-
-  waterTankCard: { padding: 16, borderRadius: 16, overflow: "hidden" },
-  cardTitle: {
-    color: "#FFF",
-    fontSize: 14,
-    fontWeight: "600",
-    marginBottom: 12,
-  },
-  tankContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 16,
-  },
-  waterLevelValue: { color: "#FFF", fontSize: 24, fontWeight: "700" },
-  capacityText: { color: "#FFF", fontSize: 11, opacity: 0.9, marginTop: 2 },
-  tankAlert: { 
-    fontSize: 12, 
-    fontWeight: "700",
-    marginTop: 4,
-  },
-
   pumpCard: {
     padding: 14,
     borderRadius: 16,
     marginHorizontal: 16,
     marginBottom: 16,
     position: 'relative',
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
   },
   pumpHeader: {
     flexDirection: "row",
@@ -1034,105 +667,43 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  sectionTitle: { fontSize: 18, fontWeight: "700", marginBottom: 10 },
-
-  sensorsGrid: { paddingHorizontal: 16, gap: 10 },
-  sensorRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    gap: 10,
-    marginBottom: 10,
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    marginBottom: 12,
+    marginHorizontal: 16,
   },
-  sensorCardSquare: {
-    flex: 1,
-    aspectRatio: 1,
-    padding: 10,
-    borderRadius: 12,
+
+  sensorsGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    rowGap: 12,
+  },
+  sensorCard: {
+    width: "31.5%",
+    paddingVertical: 14,
+    paddingHorizontal: 8,
+    borderRadius: 16,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
     gap: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  sensorCardSquareEmpty: { flex: 1, aspectRatio: 1, opacity: 0 },
-  sensorName: { fontSize: 11, fontWeight: "500", textAlign: "center" },
-  sensorValue: { fontSize: 16, fontWeight: "700", textAlign: "center" },
-  clickText: { fontSize: 8, opacity: 0.6 },
-
-  quickStatsCard: {
-    marginHorizontal: 16,
-    padding: 14,
-    borderRadius: 12,
-    marginTop: 16,
-    borderWidth: 1,
-  },
-  overviewTitle: { fontSize: 14, fontWeight: "700", marginBottom: 10 },
-  overviewGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  overviewItem: {
-    width: "31%",
+  sensorIconChip: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: "center",
-    padding: 6,
-    borderRadius: 8,
-    backgroundColor: "rgba(0,0,0,0.03)",
-  },
-  overviewLabel: { fontSize: 10, marginBottom: 2, textAlign: "center" },
-  overviewValue: { fontSize: 14, fontWeight: "700" },
-
-  circularContainer: {
-    position: "relative",
     justifyContent: "center",
-    alignItems: "center",
-  },
-  circularBg: { position: "absolute" },
-  circularFill: {
-    position: "absolute",
-    borderTopColor: "transparent",
-    borderRightColor: "transparent",
-    transform: [{ rotate: "-45deg" }],
-  },
-  circularText: { fontWeight: "bold", zIndex: 1 },
-
-  flagCard: {
-    marginHorizontal: 16,
-    padding: 14,
-    borderRadius: 12,
-    marginTop: 12,
-    borderWidth: 1,
-  },
-  flagGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  flagItem: {
-    width: '23%',
-    alignItems: 'center',
-    paddingVertical: 4,
-  },
-  flagLabel: {
-    fontSize: 9,
-    textAlign: 'center',
-  },
-  flagValue: {
-    fontSize: 12,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-
-  debugSection: {
-    marginHorizontal: 16,
-    padding: 14,
-    borderRadius: 12,
-    marginTop: 12,
-    marginBottom: 20,
-    borderWidth: 1,
-  },
-  debugTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  debugText: {
-    fontSize: 12,
     marginBottom: 4,
   },
+  sensorName: { fontSize: 11, fontWeight: "600", textAlign: "center" },
+  sensorValue: { fontSize: 16, fontWeight: "800", textAlign: "center" },
 });

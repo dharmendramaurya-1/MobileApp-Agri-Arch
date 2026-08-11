@@ -1,13 +1,17 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dimensions, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMqtt } from "../../src/context/MqttContext";
+import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
 
 const { width, height } = Dimensions.get("window");
 
 export default function AmbientTemperature() {
   const { theme } = useTheme();
+  const { onScroll, headerHeight } = useScroll();
+  const scrollRef = useRef(null);
+  useScrollReset(scrollRef);
   // ✅ Move the hook inside the component
   const { sensorData, isConnected, publishCommand } = useMqtt();
 
@@ -29,9 +33,12 @@ export default function AmbientTemperature() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={[styles.container, { backgroundColor: theme.colors.background }]}
       showsVerticalScrollIndicator={false}
-      contentContainerStyle={styles.scrollContent}
+      contentContainerStyle={[styles.scrollContent, { paddingTop: headerHeight }]}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
     >
       {/* Header */}
       <View style={styles.header}>

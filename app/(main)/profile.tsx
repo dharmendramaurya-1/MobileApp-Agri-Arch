@@ -1,7 +1,7 @@
 // app/(main)/profile.tsx
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useEffect, useState } from "react"; // ✅ Added useEffect import
+import { useEffect, useRef, useState } from "react"; // ✅ Added useEffect import
 import {
   ActivityIndicator,
   Alert,
@@ -14,6 +14,7 @@ import {
 } from "react-native";
 import { useAuth } from "../../src/context/AuthContext";
 import { useTheme } from "../../src/context/ThemContext";
+import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 
 interface MenuItemProps {
   icon: string;
@@ -61,6 +62,9 @@ function MenuItem({ icon, label, onPress, color }: MenuItemProps) {
 export default function ProfileScreen() {
   const { theme, isDark, toggleTheme } = useTheme();
   const { logout } = useAuth();
+  const { onScroll, headerHeight } = useScroll();
+  const scrollRef = useRef(null);
+  useScrollReset(scrollRef);
 
   // ✅ State for username
   const [username, setUsername] = useState<string>("User");
@@ -172,8 +176,11 @@ export default function ProfileScreen() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={[styles.container, { backgroundColor: theme.colors.background }]}
-      contentContainerStyle={styles.content}
+      contentContainerStyle={[styles.content, { paddingTop: headerHeight }]}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
     >
       {/* Profile Header */}
       <View

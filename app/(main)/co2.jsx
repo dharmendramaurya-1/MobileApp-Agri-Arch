@@ -1,6 +1,7 @@
 import { useMqtt } from "@/context/MqttContext";
+import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dimensions, ScrollView, StyleSheet, Text, View } from "react-native";
 import WeeklyTrendChart from "../../components/chat/Weeklytrendchart"; // adjust path to wherever you place it
 import { useTheme } from "../../src/context/ThemContext";
@@ -9,6 +10,9 @@ const { height } = Dimensions.get("window");
 export default function CO2Level() {
   const { sensorData } = useMqtt();
   const { theme } = useTheme();
+  const { onScroll, headerHeight } = useScroll();
+  const scrollRef = useRef(null);
+  useScrollReset(scrollRef);
 
   const [currentValue, setcurrentValue] = useState();
   const unit = "ppm";
@@ -18,9 +22,12 @@ export default function CO2Level() {
   }, [sensorData]);
   return (
     <ScrollView
+      ref={scrollRef}
       style={[styles.container, { backgroundColor: theme.colors.background }]}
       showsVerticalScrollIndicator={false}
-      contentContainerStyle={styles.scrollContent}
+      contentContainerStyle={[styles.scrollContent, { paddingTop: headerHeight }]}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
     >
       <View style={styles.header}>
         <View

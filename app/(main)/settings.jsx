@@ -1,6 +1,6 @@
 // app/(main)/config.jsx
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Dimensions,
@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { useMqtt } from "../../src/context/MqttContext";
+import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
 
 const SCREEN_HEIGHT = Dimensions.get("window").height;
@@ -144,6 +145,9 @@ function IntervalPicker({
 // ── Main Config Screen ──────────────────────────────────────────────────────
 export default function ConfigScreen() {
   const { theme, isDark, toggleTheme } = useTheme();
+  const { onScroll, headerHeight } = useScroll();
+  const scrollRef = useRef(null);
+  useScrollReset(scrollRef);
   
   const { 
     externalKey, 
@@ -240,8 +244,14 @@ export default function ConfigScreen() {
 
   return (
     <ScrollView
+      ref={scrollRef}
       style={[styles.container, { backgroundColor: theme.colors.background }]}
-      contentContainerStyle={{ paddingBottom: SCREEN_HEIGHT * 0.1 }}
+      contentContainerStyle={{
+        paddingBottom: SCREEN_HEIGHT * 0.1,
+        paddingTop: headerHeight,
+      }}
+      onScroll={onScroll}
+      scrollEventThrottle={16}
     >
       {/* Header with Connection Status */}
       <View style={styles.headerRow}>

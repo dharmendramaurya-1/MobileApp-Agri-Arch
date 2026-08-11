@@ -1,7 +1,7 @@
 // app/(main)/system-control.jsx — System Control tab
 // MANUAL/AUTO mode switcher + actuator toggles (pumps, valves, reboot)
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -17,6 +17,7 @@ import {
 } from "react-native";
 import { useAlerts } from "../../src/context/AlertContext";
 import { useMqtt } from "../../src/context/MqttContext";
+import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useSystemMode } from "../../src/context/SystemModeContext";
 import { useTheme } from "../../src/context/ThemContext";
 import { getDisplayStatus } from "../../src/utils/deviceStatusParser";
@@ -90,6 +91,9 @@ function buildStaticDeviceList() {
 
 export default function SystemControl() {
   const { theme } = useTheme();
+  const { onScroll, headerHeight } = useScroll();
+  const scrollRef = useRef(null);
+  useScrollReset(scrollRef);
   const {
     isConnected,
     actuatorStatus,
@@ -338,12 +342,18 @@ export default function SystemControl() {
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <ScrollView
+        ref={scrollRef}
         style={styles.container}
         contentContainerStyle={[
           styles.scrollViewContent,
-          { paddingBottom: Platform.OS === "ios" ? height * 0.06 : height * 0.04 },
+          {
+            paddingBottom: Platform.OS === "ios" ? height * 0.06 : height * 0.04,
+            paddingTop: headerHeight,
+          },
         ]}
         showsVerticalScrollIndicator={false}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
