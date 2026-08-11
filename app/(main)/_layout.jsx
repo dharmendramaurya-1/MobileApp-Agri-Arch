@@ -239,8 +239,7 @@ function CustomDrawerContent({ navigation }) {
       items: [
         { name: "Dashboard", icon: "grid-outline", route: "/(main)/dashboard" },
         { name: "Devices", icon: "hardware-chip-outline", route: "/(main)/devices" },
-        { name: "Add Device", icon: "add-circle-outline", route: "/(main)/add_device" },
-        { name: "Device Selection", icon: "phone-portrait-outline", route: "/(main)/device-selection" },
+        { name: "System Control", icon: "options-outline", route: "/(main)/system-control" },
         { name: "Add Crops", icon: "leaf-outline", route: "/(main)/add_crops" },
         { name: "Profile", icon: "person-outline", route: "/(main)/profile" },
       ],
@@ -459,8 +458,7 @@ export default function MainLayout() {
         {/* ── MAIN SCREENS ── */}
         <Drawer.Screen name="dashboard" options={{ title: "Dashboard" }} />
         <Drawer.Screen name="devices" options={{ title: "Devices" }} />
-        <Drawer.Screen name="add_device" options={{ title: "Add Device" }} />
-        <Drawer.Screen name="device-selection" options={{ title: "Device Selection" }} />
+        <Drawer.Screen name="system-control" options={{ title: "System Control" }} />
         <Drawer.Screen name="add_crops" options={{ title: "Add Crops" }} />
         <Drawer.Screen name="profile" options={{ title: "Profile" }} />
         

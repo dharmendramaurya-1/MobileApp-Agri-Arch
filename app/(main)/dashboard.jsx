@@ -16,7 +16,6 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 // ✅ CORRECT - Components from root components/ folder
-import { DeviceStatusSummary } from '../../components/DeviceStatusSummary';
 
 // ✅ CORRECT - Context from src/context/
 import { SENSORS } from "../../src/config/sensorConfigs";
@@ -494,14 +493,14 @@ export default function Dashboard() {
           )}
 
           {/* ✅ Show offline status */}
-          {isOffline && (
+          {/* {isOffline && (
             <View style={styles.deviceStatusRow}>
               <View style={[styles.deviceStatusDot, { backgroundColor: '#F44336' }]} />
               <Text style={[styles.deviceStatusText, { color: '#F44336' }]}>
                 ● Device Offline
               </Text>
             </View>
-          )}
+          )} */}
         </View>
         <View style={styles.headerRight}>
           <TouchableOpacity onPress={navigateToSettings} style={styles.settingsButton}>
@@ -519,18 +518,26 @@ export default function Dashboard() {
         </View>
       </View>
 
+      {/* ── DevStat / connection status banner ───────────────────────────── */}
+      {/* <ConnectionStatusBanner
+        connectionState={connectionState}
+        hasReceivedData={hasReceivedData}
+        deviceStatus={deviceStatus}
+        deviceStatusFlags={deviceStatusFlags}
+      /> */}
+
       {/* ── Last updated timestamp ────────────────────────────────────────── */}
       <Text style={[styles.lastUpdated, { color: theme.colors.textSecondary }]}>
         {lastUpdatedLabel}
       </Text>
 
       {/* ── Device Status Summary ─────────────────────────────────────────── */}
-      <DeviceStatusSummary 
+      {/* <DeviceStatusSummary 
         onPress={() => {}}
         deviceStatusFlags={deviceStatusFlags}
         hasReceivedData={hasReceivedData}
         connectionState={connectionState}
-      />
+      /> */}
 
       {/* ── Water Tank Status ─────────────────────────────────────────────── */}
       <View style={styles.statsRow}>
@@ -776,7 +783,7 @@ export default function Dashboard() {
       </View>
 
       {/* ── Status Flags Quick View ──────────────────────────────────────── */}
-      <View
+      {/* <View
         style={[
           styles.flagCard,
           {
@@ -816,10 +823,10 @@ export default function Dashboard() {
             );
           })}
         </View>
-      </View>
+      </View> */}
 
       {/* ── Debug Section ─────────────────────────────────────────────────── */}
-      <View style={[styles.debugSection, { 
+      {/* <View style={[styles.debugSection, { 
         backgroundColor: theme.colors.surface,
         borderColor: theme.colors.border,
       }]}>
@@ -858,7 +865,7 @@ export default function Dashboard() {
         <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
           Device Status: {deviceStatus !== null ? deviceStatus : '_ _'}
         </Text>
-      </View>
+      </View> */}
     </ScrollView>
   );
 }

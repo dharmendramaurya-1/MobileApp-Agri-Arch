@@ -1156,7 +1156,7 @@ export default function AddCrops() {
         </Text>
         <TouchableOpacity
           style={[styles.primaryBtn, { shadowColor: primaryDark }]}
-          onPress={() => router.push("/(main)/add_device")}
+          onPress={() => router.push("/(main)/devices")}
           activeOpacity={0.85}
           accessibilityRole="button"
         >

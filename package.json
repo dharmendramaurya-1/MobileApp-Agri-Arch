@@ -3,12 +3,11 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "dependencies": {
-    "@expo/ui": "~0.2.0-beta.9",
     "@expo/vector-icons": "^15.1.1",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-masked-view/masked-view": "0.3.2",
     "@react-native-picker/picker": "2.11.1",
-    "@react-navigation/drawer": "^7.13.8",
+    "@react-navigation/drawer": "^7.5.0",
     "axios": "^1.16.1",
     "expo": "~54.0.0",
     "expo-build-properties": "~1.0.10",
@@ -17,7 +16,6 @@
     "expo-dev-client": "~6.0.21",
     "expo-device": "~8.0.10",
     "expo-font": "~14.0.12",
-    "expo-glass-effect": "~0.1.10",
     "expo-image": "~3.0.11",
     "expo-linear-gradient": "~15.0.8",
     "expo-linking": "~8.0.12",
@@ -44,6 +42,8 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.10",
+    "eslint": "^9.0.0",
+    "eslint-config-expo": "~10.0.0",
     "typescript": "~5.9.2"
   },
   "scripts": {

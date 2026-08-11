@@ -1,1214 +1,1005 @@
-// app/(main)/devices.jsx
+// app/(main)/devices.jsx — Devices tab
+// Add Device wizard + registered device list (connect / delete)
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
+import { router } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Dimensions,
+  Modal,
   Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
-import { useAlerts } from "../../src/context/AlertContext";
+import AddDeviceWizard from "../../components/AddDeviceWizard";
+import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
-import { useSystemMode } from "../../src/context/SystemModeContext";
 import { useTheme } from "../../src/context/ThemContext";
-import { getDisplayStatus } from "../../src/utils/deviceStatusParser";
+import {
+  getActiveDevice,
+  getAllThings,
+  setActiveDevice,
+} from "../../src/services/identify/identify";
 
 const { height } = Dimensions.get("window");
 
-// ✅ Updated DEVICE_CONFIG - ONLY actuator fields from the message
-const DEVICE_CONFIG = {
-  water_pump: {
-    displayName: "Water Pump",
-    icon: "water",
-    description: "Main water circulation pump",
-    category: "pump",
-    actuatorKey: "water_pump",
-  },
-  water_ILvalve: {
-    displayName: "Inlet Valve",
-    icon: "arrow-down-circle",
-    description: "Water inlet control valve",
-    category: "valve",
-    actuatorKey: "water_ILvalve",
-  },
-  water_OLvalve: {
-    displayName: "Outlet Valve",
-    icon: "arrow-up-circle",
-    description: "Water outlet control valve",
-    category: "valve",
-    actuatorKey: "water_OLvalve",
-  },
-  nutrient_pump: {
-    displayName: "Nutrient Pump",
-    icon: "leaf",
-    description: "Nutrient solution pump",
-    category: "pump",
-    actuatorKey: "nutrient_pump",
-  },
-  reboot_ack: {
-    displayName: "Reboot Acknowledged",
-    icon: "refresh",
-    description: "System reboot acknowledgment",
-    category: "system",
-    actuatorKey: "reboot_ack",
-  },
-};
+// ── Registered device card ───────────────────────────────────────────────────
+function DeviceCard({
+  device,
+  isActive,
+  onConnect,
+  onDelete,
+  theme,
+  connectionStatus,
+  hasReceivedData,
+}) {
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
 
-// ✅ Updated DEVICE_ORDER - matching actuator message
-const DEVICE_ORDER = [
-  "water_pump",
-  "water_ILvalve",
-  "water_OLvalve",
-  "nutrient_pump",
-  "reboot_ack",
-];
-
-// Build the static device list (shape only, no live values yet)
-function buildStaticDeviceList() {
-  return DEVICE_ORDER.filter((deviceName) => deviceName in DEVICE_CONFIG).map(
-    (deviceName) => {
-      const config = DEVICE_CONFIG[deviceName];
-      return {
-        id: deviceName,
-        n: deviceName,
-        vb: null,
-        displayName: config.displayName,
-        icon: config.icon,
-        description: config.description,
-        category: config.category,
-      };
+  // Get connection status from MqttContext
+  const getStatus = () => {
+    if (isActive) {
+      if (connectionStatus === "online" && hasReceivedData) return "online";
+      if (connectionStatus === "connecting") return "connecting";
+      if (connectionStatus === "error") return "error";
+      return "offline";
     }
+    return "disconnected";
+  };
+
+  const status = getStatus();
+
+  const statusConfig = {
+    online: {
+      color: "#4CAF50",
+      bg: "rgba(76,175,80,0.12)",
+      label: "Online",
+      icon: "checkmark-circle",
+    },
+    connecting: {
+      color: "#FF9800",
+      bg: "rgba(255,152,0,0.14)",
+      label: "Connecting…",
+      icon: "sync",
+    },
+    offline: {
+      color: "#F44336",
+      bg: "rgba(244,67,54,0.10)",
+      label: "Offline",
+      icon: "close-circle",
+    },
+    error: {
+      color: "#F44336",
+      bg: "rgba(244,67,54,0.10)",
+      label: "Error",
+      icon: "alert-circle",
+    },
+    disconnected: {
+      color: theme.colors.textSecondary,
+      bg: `${theme.colors.textSecondary}16`,
+      label: "Disconnected",
+      icon: "cloud-offline-outline",
+    },
+  }[status];
+
+  const handleConnect = async () => {
+    await onConnect(device);
+  };
+
+  const confirmDelete = async () => {
+    if (deleteConfirmText.toLowerCase() !== "delete") {
+      Alert.alert("Confirmation Required", 'Please type "delete" to confirm.');
+      return;
+    }
+    setShowDeleteModal(false);
+    setDeleteConfirmText("");
+    await onDelete(device);
+  };
+
+  return (
+    <>
+      <TouchableOpacity
+        style={[
+          styles.deviceCard,
+          {
+            backgroundColor: theme.colors.surface,
+            borderColor: isActive ? theme.colors.primary : theme.colors.border,
+            borderWidth: isActive ? 1.5 : 1,
+          },
+        ]}
+        activeOpacity={0.8}
+      >
+        <View style={styles.deviceCardHeader}>
+          <View
+            style={[
+              styles.deviceIconContainer,
+              { backgroundColor: statusConfig.bg },
+            ]}
+          >
+            <Ionicons
+              name={
+                device.type === "device"
+                  ? "hardware-chip-outline"
+                  : "sensor-outline"
+              }
+              size={22}
+              color={statusConfig.color}
+            />
+          </View>
+          <View style={styles.deviceInfo}>
+            <View style={styles.deviceNameRow}>
+              <Text
+                style={[styles.deviceName, { color: theme.colors.text }]}
+                numberOfLines={1}
+              >
+                {device.name || "Unnamed Device"}
+              </Text>
+              {isActive && (
+                <View
+                  style={[
+                    styles.activePill,
+                    { backgroundColor: theme.colors.primary },
+                  ]}
+                >
+                  <Text style={styles.activePillText}>ACTIVE</Text>
+                </View>
+              )}
+            </View>
+            <Text style={[styles.deviceType, { color: theme.colors.textSecondary }]}>
+              {device.type || "device"} · ID {device.id?.substring(0, 8)}…
+            </Text>
+            <View style={[styles.statusPill, { backgroundColor: statusConfig.bg }]}>
+              {status === "connecting" ? (
+                <ActivityIndicator size={10} color={statusConfig.color} />
+              ) : (
+                <Ionicons name={statusConfig.icon} size={12} color={statusConfig.color} />
+              )}
+              <Text style={[styles.statusPillText, { color: statusConfig.color }]}>
+                {statusConfig.label}
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={[styles.deviceCardFooter, { borderTopColor: theme.colors.border }]}>
+          <View style={styles.lastSeen}>
+            <Ionicons name="time-outline" size={14} color={theme.colors.textSecondary} />
+            <Text style={[styles.lastSeenText, { color: theme.colors.textSecondary }]}>
+              {isActive && hasReceivedData ? "Receiving data" : "No data yet"}
+            </Text>
+          </View>
+          <View style={styles.cardActions}>
+            <TouchableOpacity
+              style={[
+                styles.connectBtn,
+                {
+                  backgroundColor: status === "online" ? "#4CAF50" : theme.colors.primary,
+                  opacity: status === "online" || status === "connecting" ? 0.85 : 1,
+                },
+              ]}
+              onPress={handleConnect}
+              disabled={status === "online" || status === "connecting"}
+              activeOpacity={0.85}
+            >
+              {status === "connecting" ? (
+                <ActivityIndicator size="small" color="#FFF" />
+              ) : status === "online" ? (
+                <>
+                  <Ionicons name="checkmark-circle" size={16} color="#FFF" />
+                  <Text style={styles.connectBtnText}>Connected</Text>
+                </>
+              ) : (
+                <>
+                  <Ionicons name="flash" size={16} color="#FFF" />
+                  <Text style={styles.connectBtnText}>Connect</Text>
+                </>
+              )}
+            </TouchableOpacity>
+            {!isActive && (
+              <TouchableOpacity
+                style={[styles.deleteBtn, { borderColor: theme.colors.border }]}
+                onPress={() => setShowDeleteModal(true)}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`Delete ${device.name || "device"}`}
+              >
+                <Ionicons name="trash-outline" size={18} color="#F44336" />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </TouchableOpacity>
+
+      {/* ── Delete Confirmation Modal ── */}
+      <Modal
+        visible={showDeleteModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowDeleteModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { backgroundColor: theme.colors.surface }]}>
+            <View style={styles.modalHeader}>
+              <View style={[styles.modalWarningIcon, { backgroundColor: "#F4433615" }]}>
+                <Ionicons name="warning" size={26} color="#F44336" />
+              </View>
+              <Text style={[styles.modalTitle, { color: theme.colors.text }]}>
+                Delete Device
+              </Text>
+            </View>
+
+            <Text style={[styles.modalMessage, { color: theme.colors.textSecondary }]}>
+              This action cannot be undone. All data associated with{" "}
+              <Text style={{ fontWeight: "700", color: theme.colors.text }}>
+                {device?.name || "this device"}
+              </Text>{" "}
+              will be permanently removed.
+            </Text>
+
+            <View style={[styles.deviceInfoBox, { backgroundColor: `${theme.colors.textSecondary}0D` }]}>
+              <View style={styles.deviceInfoRow}>
+                <Text style={[styles.deviceInfoLabel, { color: theme.colors.textSecondary }]}>
+                  Device ID
+                </Text>
+                <Text style={[styles.deviceInfoValue, { color: theme.colors.text }]} numberOfLines={1}>
+                  {device?.id || "N/A"}
+                </Text>
+              </View>
+            </View>
+
+            <Text style={[styles.confirmLabel, { color: theme.colors.textSecondary }]}>
+              Type <Text style={{ fontWeight: "700", color: "#F44336" }}>&quot;delete&quot;</Text> to confirm:
+            </Text>
+
+            <View style={styles.confirmInputContainer}>
+              <TextInput
+                style={[
+                  styles.confirmInput,
+                  {
+                    color: theme.colors.text,
+                    borderColor:
+                      deleteConfirmText.toLowerCase() === "delete"
+                        ? "#4CAF50"
+                        : theme.colors.border,
+                    backgroundColor: theme.colors.inputBackground,
+                  },
+                ]}
+                placeholder='Type "delete" here…'
+                placeholderTextColor={theme.colors.textSecondary}
+                value={deleteConfirmText}
+                onChangeText={setDeleteConfirmText}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[
+                  styles.modalButton,
+                  styles.modalCancelButton,
+                  { backgroundColor: `${theme.colors.textSecondary}14` },
+                ]}
+                onPress={() => {
+                  setShowDeleteModal(false);
+                  setDeleteConfirmText("");
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.modalButtonText, { color: theme.colors.text }]}>
+                  Cancel
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.modalButton,
+                  styles.modalDeleteButton,
+                  { opacity: deleteConfirmText.toLowerCase() === "delete" ? 1 : 0.5 },
+                ]}
+                onPress={confirmDelete}
+                disabled={deleteConfirmText.toLowerCase() !== "delete"}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.modalDeleteButtonText}>Delete Device</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </>
   );
 }
 
+// ── Main Component ──────────────────────────────────────────────────────────
 export default function Devices() {
   const { theme } = useTheme();
-  const { 
-    isConnected, 
-    actuatorStatus,
-    setActuatorStatus,
-    publishActuatorStatus,
+  const {
+    isConnected,
     externalKey,
-    debugMqttState,
     sensorData,
-    devices: mqttDevices,
-    deviceStatusFlags,
     connectionState,
+    hasReceivedData,
+    forceReconnect,
+    switchToDevice,
   } = useMqtt();
-  
-  const { 
-    mode, 
-    modeDisplay,
-    isManualMode, 
-    isAutoMode, 
-    toggleMode, 
-    isSwitching,
-    isModeLoaded,
-    canPublish,
-    checkBeforeActuator,
-    getModeIcon,
-    getModeColor,
-  } = useSystemMode();
-  
-  const { addAlert } = useAlerts();
-  
+
+  const { deleteThing } = useAuth();
+
+  // ── Registered device state ──
+  const [registeredDevices, setRegisteredDevices] = useState([]);
+  const [loadingDevices, setLoadingDevices] = useState(true);
+  const [activeDevice, setActiveDeviceState] = useState(null);
+  const [deviceConnStatus, setDeviceConnStatus] = useState({});
+  const [showConnectionSuccess, setShowConnectionSuccess] = useState(false);
+  const [connectedDeviceName, setConnectedDeviceName] = useState("");
+  const [showAddWizard, setShowAddWizard] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [updating, setUpdating] = useState(null);
-  const [deviceToggleTimes, setDeviceToggleTimes] = useState({});
-  const [expandedDevice, setExpandedDevice] = useState(null);
-  
-  // ✅ Seed with the static shape right away
-  const [devices, setDevices] = useState(buildStaticDeviceList);
 
-  // ✅ Get display status from 32-bit flags
-  const displayStatus = getDisplayStatus(deviceStatusFlags);
+  // Check if offline
+  const isOffline = connectionState === "disconnected" || connectionState === "idle";
 
-  // ✅ Check if offline
-  const isOffline = connectionState === 'disconnected' || connectionState === 'idle';
+  // ── Load registered devices ──────────────────────────────────────────────
+  const loadDevices = async () => {
+    try {
+      const allThings = await getAllThings();
+
+      if (allThings && allThings.length > 0) {
+        setRegisteredDevices(allThings);
+
+        const active = await getActiveDevice();
+        if (active && active.publisherId) {
+          const activeThing = allThings.find((t) => t.id === active.publisherId);
+          setActiveDeviceState(activeThing || allThings[0]);
+        } else {
+          setActiveDeviceState(allThings[0]);
+          await setActiveDevice(allThings[0].id, allThings[0].external_key);
+        }
+      } else {
+        setRegisteredDevices([]);
+        setActiveDeviceState(null);
+      }
+    } catch (error) {
+      console.error("Error loading devices:", error);
+      Alert.alert("Error", "Failed to load devices. Please try again.");
+    } finally {
+      setLoadingDevices(false);
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
-    if (mqttDevices && mqttDevices.length > 0) {
-      setDevices(mqttDevices);
-    } else if (actuatorStatus && Object.keys(actuatorStatus).length > 0) {
-      const deviceList = DEVICE_ORDER
-        .filter(deviceName => deviceName in DEVICE_CONFIG)
-        .map(deviceName => {
-          const config = DEVICE_CONFIG[deviceName];
-          const status = actuatorStatus[config.actuatorKey];
-          return {
-            id: deviceName,
-            n: deviceName,
-            vb: status === undefined ? null : status,
-            displayName: config.displayName,
-            icon: config.icon,
-            description: config.description,
-            category: config.category,
-          };
-        });
-      setDevices(deviceList);
-    }
-  }, [mqttDevices, actuatorStatus]);
+    loadDevices();
+  }, []);
 
-  // ✅ Monitor actuator changes for alerts
+  // ── Monitor MQTT connection status for active registered device ─────────
   useEffect(() => {
-    if (actuatorStatus) {
-      // Check water pump changes
-      if (actuatorStatus.water_pump !== undefined) {
-        const key = 'water_pump';
-        const time = new Date().toLocaleTimeString();
-        setDeviceToggleTimes(prev => ({
-          ...prev,
-          [key]: time
-        }));
-      }
-      // Check inlet valve changes
-      if (actuatorStatus.water_ILvalve !== undefined) {
-        const key = 'water_ILvalve';
-        const time = new Date().toLocaleTimeString();
-        setDeviceToggleTimes(prev => ({
-          ...prev,
-          [key]: time
-        }));
-      }
-      // Check outlet valve changes
-      if (actuatorStatus.water_OLvalve !== undefined) {
-        const key = 'water_OLvalve';
-        const time = new Date().toLocaleTimeString();
-        setDeviceToggleTimes(prev => ({
-          ...prev,
-          [key]: time
-        }));
-      }
-      // Check nutrient pump changes
-      if (actuatorStatus.nutrient_pump !== undefined) {
-        const key = 'nutrient_pump';
-        const time = new Date().toLocaleTimeString();
-        setDeviceToggleTimes(prev => ({
-          ...prev,
-          [key]: time
-        }));
-      }
+    if (activeDevice) {
+      setDeviceConnStatus((prev) => ({
+        ...prev,
+        [activeDevice.id]: connectionState,
+      }));
     }
-  }, [actuatorStatus]);
+  }, [connectionState, activeDevice]);
 
+  // ── Success popup when the active device comes online ────────────────────
   useEffect(() => {
-    if (isConnected) {
-      console.log("📡 MQTT Connected, actuatorStatus:", actuatorStatus);
-      debugMqttState?.();
-    }
-  }, [isConnected]);
-
-  const handleToggleDevice = async (device) => {
-    if (updating === device.id) return;
-    if (device.vb === null) return; // still loading real status, ignore taps
-
-    // ✅ Check mode before allowing toggle
-    if (!checkBeforeActuator(device.displayName)) {
-      return;
-    }
-
-    // ✅ Check if device is in reboot_ack - show appropriate message
-    if (device.id === "reboot_ack") {
+    if (
+      activeDevice &&
+      connectionState === "online" &&
+      hasReceivedData &&
+      showConnectionSuccess
+    ) {
       Alert.alert(
-        "System Reboot",
-        "Are you sure you want to reboot the system?",
+        "✅ Device Connected",
+        `${connectedDeviceName || activeDevice.name || "Device"} is now online and ready to use!`,
         [
-          { text: "Cancel", style: "cancel" },
+          { text: "Go to Dashboard", onPress: () => router.replace("/(main)/dashboard") },
+          { text: "Stay Here", style: "cancel" },
+        ]
+      );
+      setShowConnectionSuccess(false);
+    }
+  }, [connectionState, activeDevice, hasReceivedData, showConnectionSuccess, connectedDeviceName]);
+
+  // ── Connect a registered device ─────────────────────────────────────────
+  const handleConnectDevice = async (device) => {
+    try {
+      setDeviceConnStatus((prev) => ({ ...prev, [device.id]: "connecting" }));
+
+      await setActiveDevice(device.id, device.external_key);
+      setActiveDeviceState(device);
+
+      await forceReconnect(device.external_key);
+
+      setDeviceConnStatus((prev) => ({
+        ...prev,
+        [device.id]: connectionState || "offline",
+      }));
+
+      setConnectedDeviceName(device.name || "Device");
+
+      Alert.alert(
+        "🔄 Connecting",
+        `Connecting to ${device.name || "Device"}...\n\nThe device will show as Online once it starts reporting data.`,
+        [
           {
-            text: "Reboot",
-            style: "destructive",
+            text: "OK",
             onPress: () => {
-              toggleDeviceStatus(device);
-              addAlert(
-                'system',
-                '🔄 System Reboot Initiated',
-                `System reboot acknowledged at ${new Date().toLocaleTimeString()}`,
-                'warning'
-              );
+              setShowConnectionSuccess(true);
             },
           },
         ]
       );
-      return;
+    } catch (error) {
+      console.error("Error connecting to device:", error);
+      setDeviceConnStatus((prev) => ({ ...prev, [device.id]: "error" }));
+      Alert.alert(
+        "Connection Failed",
+        `Failed to connect to ${device.name}. Please try again.`
+      );
+      setShowConnectionSuccess(false);
     }
-
-    toggleDeviceStatus(device);
   };
 
-  const toggleDeviceStatus = async (device) => {
-    setUpdating(device.id);
-    const newStatus = !device.vb;
-    const time = new Date().toLocaleTimeString();
-
-    // Update local state immediately for UI feedback
-    setDevices((prev) =>
-      prev.map((d) =>
-        d.id === device.id ? { ...d, vb: newStatus } : d
-      )
-    );
-
-    // Update toggle time
-    setDeviceToggleTimes(prev => ({
-      ...prev,
-      [device.id]: time
-    }));
-
+  // ── Delete a registered device ──────────────────────────────────────────
+  const handleDeleteDevice = async (device) => {
     try {
-      const config = DEVICE_CONFIG[device.id];
-      
-      // Get the current full actuator status
-      const currentStatus = actuatorStatus || {};
-      
-      // ✅ Create full status with ALL actuator fields
-      const fullStatus = {
-        water_pump: currentStatus.water_pump || false,
-        water_ILvalve: currentStatus.water_ILvalve || false,
-        water_OLvalve: currentStatus.water_OLvalve || false,
-        nutrient_pump: currentStatus.nutrient_pump || false,
-        reboot_ack: currentStatus.reboot_ack || false,
-        [config.actuatorKey]: newStatus,
-        lastUpdated: new Date(),
-      };
+      console.log(`🗑️ Attempting to delete device: ${device.id}`);
 
-      console.log(`📤 Updating ${device.displayName} to ${newStatus ? "ON" : "OFF"}`);
-      console.log(`📤 Full status being published:`, fullStatus);
-      
-      // Publish the complete status with all values
-      const success = await publishActuatorStatus(fullStatus);
-      
-      if (!success) {
-        // Revert on failure
-        setDevices((prev) =>
-          prev.map((d) =>
-            d.id === device.id ? { ...d, vb: !newStatus } : d
-          )
+      const result = await deleteThing(device.id);
+
+      if (result && result.success) {
+        Alert.alert(
+          "✅ Device Deleted",
+          `${device.name || "Device"} has been deleted successfully.`,
+          [
+            {
+              text: "OK",
+              onPress: () => {
+                loadDevices();
+                if (activeDevice?.id === device.id) {
+                  setActiveDeviceState(null);
+                }
+              },
+            },
+          ]
         );
-        Alert.alert("Error", `Failed to toggle ${device.displayName}`);
       } else {
-        // Add alert for device toggle
-        const deviceName = device.displayName;
-        addAlert(
-          'device',
-          newStatus ? `✅ ${deviceName} ON` : `❌ ${deviceName} OFF`,
-          `${deviceName} ${newStatus ? 'activated' : 'deactivated'} at ${time}`,
-          newStatus ? 'success' : 'info'
+        Alert.alert(
+          "❌ Deletion Failed",
+          `Failed to delete ${device.name || "device"}. ${result?.error || "Please try again."}`
         );
-        
-        // Update actuatorStatus in context with full status
-        await setActuatorStatus(fullStatus);
       }
     } catch (error) {
-      console.error("Toggle error:", error);
-      // Revert on error
-      setDevices((prev) =>
-        prev.map((d) =>
-          d.id === device.id ? { ...d, vb: !newStatus } : d
-        )
+      console.error("Error deleting device:", error);
+      Alert.alert(
+        "❌ Error",
+        `An error occurred while deleting ${device.name || "device"}. Please try again.`
       );
-      Alert.alert("Error", `Failed to toggle ${device.displayName}`);
-    } finally {
-      setTimeout(() => {
-        setUpdating(null);
-      }, 500);
     }
   };
 
+  // ── Device added from wizard ────────────────────────────────────────────
+  const handleDeviceAdded = async (device) => {
+    setShowAddWizard(false);
+    await loadDevices();
+
+    if (device?.id && device?.externalKey) {
+      try {
+        await switchToDevice(device.id, device.externalKey);
+        setConnectedDeviceName(device.name || "Device");
+        setShowConnectionSuccess(true);
+      } catch (error) {
+        console.error("Auto-connect to new device failed:", error);
+      }
+    }
+  };
+
+  // ── Refresh ─────────────────────────────────────────────────────────────
   const onRefresh = async () => {
     setRefreshing(true);
-    console.log("🔄 Refreshing device status...");
-    
-    try {
-      if (externalKey && actuatorStatus) {
-        const fullStatus = {
-          water_pump: actuatorStatus.water_pump || false,
-          water_ILvalve: actuatorStatus.water_ILvalve || false,
-          water_OLvalve: actuatorStatus.water_OLvalve || false,
-          nutrient_pump: actuatorStatus.nutrient_pump || false,
-          reboot_ack: actuatorStatus.reboot_ack || false,
-          lastUpdated: new Date(),
-        };
-        await publishActuatorStatus(fullStatus);
-        console.log("📤 Status refresh requested with full status");
-      }
-    } catch (error) {
-      console.error("Refresh error:", error);
+    await loadDevices();
+  };
+
+  // ── Connection status for a registered device ───────────────────────────
+  const getDeviceConnectionStatus = (deviceId) => {
+    if (activeDevice?.id === deviceId) {
+      return connectionState || "offline";
     }
-    
-    setTimeout(() => {
-      setRefreshing(false);
-    }, 1000);
+    return deviceConnStatus[deviceId] || "disconnected";
   };
 
-  const getDeviceColor = (device) => {
-    if (device.vb === null) return theme.colors.textSecondary;
-    if (!isManualMode || !isModeLoaded) return theme.colors.textSecondary;
-    if (device.id === "reboot_ack") {
-      return device.vb ? "#FF9800" : theme.colors.primary;
-    }
-    return device.vb ? "#4CAF50" : "#757575";
-  };
+  const openAddWizard = () => setShowAddWizard(true);
 
-  const getStatusText = (device) => {
-    if (device.vb === null) return "Loading";
-    if (!isManualMode || !isModeLoaded) return "Locked";
-    if (device.id === "reboot_ack") {
-      return device.vb ? "Restarting" : "Idle";
-    }
-    return device.vb ? "Active" : "Inactive";
-  };
+  const primary = theme.colors.primary;
+  const primaryDark = theme.colors.primaryDark;
 
-  const getDeviceIcon = (device) => {
-    if (device.vb === null) return `${device.icon}-outline`;
-    if (!isManualMode || !isModeLoaded) return `${device.icon}-outline`;
-    if (device.id === "reboot_ack") {
-      return device.vb ? "sync" : "refresh-outline";
-    }
-    return device.vb ? device.icon : `${device.icon}-outline`;
-  };
-
-  const groupedDevices = devices.reduce((acc, device) => {
-    const category = device.category;
-    if (!acc[category]) acc[category] = [];
-    acc[category].push(device);
-    return acc;
-  }, {});
-
-  const categoryTitles = {
-    pump: "Pumps",
-    valve: "Valves",
-    system: "System",
-  };
-
-  // ✅ Toggle device expansion for status flags view
-  const toggleExpand = (deviceId) => {
-    setExpandedDevice(expandedDevice === deviceId ? null : deviceId);
-  };
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <ScrollView
-      style={[styles.container, { backgroundColor: theme.colors.background }]}
-      contentContainerStyle={[
-        styles.scrollViewContent,
-        { paddingBottom: Platform.OS === "ios" ? height * 0.1 : height * 0.08 }
-      ]}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-          colors={[theme.colors.primary]}
-          tintColor={theme.colors.primary}
-        />
-      }
-    >
-      {/* ── Offline Banner ────────────────────────────────────────────────── */}
-      {isOffline && (
-        <View style={[styles.offlineBanner, { backgroundColor: '#FFEBEE' }]}>
-          <Ionicons name="alert-circle" size={20} color="#F44336" />
-          <Text style={styles.offlineBannerText}>
-            Device Offline - Controls Disabled
-          </Text>
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={[
+          styles.scrollViewContent,
+          { paddingBottom: Platform.OS === "ios" ? height * 0.14 : height * 0.12 },
+        ]}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            colors={[primary]}
+            tintColor={primary}
+          />
+        }
+      >
+        {/* ── Header ───────────────────────────────────────────────────────── */}
+        <View style={styles.header}>
+          <View style={styles.headerLeft}>
+            <Text style={[styles.title, { color: theme.colors.text }]}>Devices</Text>
+            <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
+              {loadingDevices
+                ? "Loading…"
+                : registeredDevices.length > 0
+                ? `${registeredDevices.length} registered${
+                    activeDevice?.name ? ` · ${activeDevice.name}` : ""
+                  }`
+                : "No devices connected yet"}
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.headerAddButton, { backgroundColor: primary }]}
+            onPress={openAddWizard}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="Add a new device"
+          >
+            <Ionicons name="add" size={22} color="#FFF" />
+          </TouchableOpacity>
         </View>
-      )}
 
-      {/* ── Status Flags Summary ──────────────────────────────────────────── */}
-      <View style={[styles.flagsSummary, { 
-        backgroundColor: theme.colors.surface,
-        borderColor: theme.colors.border,
-      }]}>
-        <Text style={[styles.flagsTitle, { color: theme.colors.text }]}>
-          🚦 System Status Flags
-        </Text>
-        <View style={styles.flagsGrid}>
-          {[
-            { key: 'tankLow', label: 'Tank Low', icon: 'water-outline' },
-            { key: 'tankHigh', label: 'Tank High', icon: 'water-outline' },
-            { key: 'ecHigh', label: 'EC High', icon: 'flask-outline' },
-            { key: 'ecLow', label: 'EC Low', icon: 'flask-outline' },
-            { key: 'phHigh', label: 'pH High', icon: 'beaker-outline' },
-            { key: 'phLow', label: 'pH Low', icon: 'beaker-outline' },
-            { key: 'luxLow', label: 'Lux Low', icon: 'sunny-outline' },
-            { key: 'luxHigh', label: 'Lux High', icon: 'sunny-outline' },
-            { key: 'co2High', label: 'CO₂ High', icon: 'leaf-outline' },
-            { key: 'co2Low', label: 'CO₂ Low', icon: 'leaf-outline' },
-            { key: 'mode', label: 'Mode', icon: 'settings-outline' },
-            { key: 'dimmingLevel', label: 'Dimming', icon: 'contrast-outline' },
-          ].map(item => {
-            const value = displayStatus[item.key];
-            const isOn = value === 'YES' || value === 'ON' || value === 'OPEN' || value === 'AUTO';
-            const isOff = value === 'NO' || value === 'OFF' || value === 'CLOSED' || value === 'MANUAL';
-            const color = value === '_ _' ? '#999' : isOn ? '#4CAF50' : isOff ? '#F44336' : '#FF9800';
-            
-            return (
-              <View key={item.key} style={styles.flagItem}>
-                <Ionicons name={item.icon} size={14} color={color} />
-                <Text style={[styles.flagLabel, { color: theme.colors.textSecondary }]}>
-                  {item.label}
-                </Text>
-                <Text style={[styles.flagValue, { color }]}>
-                  {value}
+        {/* ── Offline banner ───────────────────────────────────────────────── */}
+        {isOffline && activeDevice && (
+          <View style={[styles.offlineBanner, { backgroundColor: "#FFEBEE" }]}>
+            <Ionicons name="alert-circle" size={20} color="#F44336" />
+            <Text style={styles.offlineBannerText}>
+              {activeDevice.name} is offline — live data is paused
+            </Text>
+          </View>
+        )}
+
+        {/* ── Loading / Empty states ───────────────────────────────────────── */}
+        {loadingDevices ? (
+          <View style={styles.loadingBox}>
+            <ActivityIndicator size="large" color={primary} />
+            <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+              Loading devices…
+            </Text>
+          </View>
+        ) : registeredDevices.length === 0 ? (
+          <View style={styles.emptyState}>
+            <LinearGradient
+              colors={[`${primary}1F`, `${primaryDark}1F`]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.emptyIconWrap}
+            >
+              <Ionicons name="hardware-chip-outline" size={48} color={primary} />
+            </LinearGradient>
+            <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
+              No Devices Connected
+            </Text>
+            <Text style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}>
+              Add your first AgriArch sensor device to start monitoring your farm in real time.
+            </Text>
+            <TouchableOpacity
+              style={[styles.emptyButton, { shadowColor: primaryDark }]}
+              onPress={openAddWizard}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+            >
+              <LinearGradient
+                colors={[primary, primaryDark]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.emptyButtonGradient}
+              >
+                <Ionicons name="add-circle" size={20} color="#FFF" />
+                <Text style={styles.emptyButtonText}>Add Your First Device</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <>
+            {/* ── My Devices ────────────────────────────────────────────────── */}
+            <View style={styles.sectionHeader}>
+              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+                My Devices
+              </Text>
+              <View style={[styles.countBadge, { backgroundColor: `${primary}1A` }]}>
+                <Text style={[styles.countBadgeText, { color: primary }]}>
+                  {registeredDevices.length}
                 </Text>
               </View>
-            );
-          })}
-        </View>
-      </View>
+            </View>
 
-      {/* ── Mode Control Header ───────────────────────────────────────────── */}
-      <View style={styles.modeHeader}>
-        <TouchableOpacity
-          style={[
-            styles.modeButton,
-            { 
-              backgroundColor: !isModeLoaded 
-                ? '#888' 
-                : isManualMode ? '#4CAF50' : '#FF9800',
-              shadowColor: !isModeLoaded 
-                ? '#888' 
-                : isManualMode ? '#4CAF50' : '#FF9800',
-              shadowOpacity: !isModeLoaded ? 0.1 : 0.3,
-              shadowRadius: 8,
-              elevation: 4,
-              opacity: isSwitching ? 0.7 : 1,
-            }
-          ]}
-          onPress={toggleMode}
-          activeOpacity={0.8}
-          disabled={isSwitching || !isModeLoaded || isOffline}
-        >
-          <View style={styles.modeButtonContent}>
-            {isSwitching ? (
-              <>
-                <ActivityIndicator size="small" color="#FFF" />
-                <Text style={styles.modeButtonText}>Switching Mode...</Text>
-              </>
-            ) : !isModeLoaded ? (
-              <>
-                <Ionicons name="time-outline" size={20} color="#FFF" />
-                <Text style={styles.modeButtonText}>Loading Mode...</Text>
-              </>
-            ) : (
-              <>
-                <Ionicons 
-                  name={isManualMode ? "hand-left-outline" : "sync-outline"} 
-                  size={20} 
-                  color="#FFF" 
-                />
-                <Text style={styles.modeButtonText}>
-                  {isManualMode ? `🔧 ${modeDisplay.toUpperCase()} MODE` : `🤖 ${modeDisplay.toUpperCase()} MODE`}
+            {registeredDevices.map((item) => (
+              <DeviceCard
+                key={item.id}
+                device={item}
+                isActive={activeDevice?.id === item.id}
+                onConnect={handleConnectDevice}
+                onDelete={handleDeleteDevice}
+                theme={theme}
+                connectionStatus={getDeviceConnectionStatus(item.id)}
+                hasReceivedData={hasReceivedData}
+              />
+            ))}
+
+            {/* Dashed add card */}
+            <TouchableOpacity
+              style={[styles.addDeviceCard, { borderColor: theme.colors.primary }]}
+              onPress={openAddWizard}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+            >
+              <View style={[styles.addDeviceCardIcon, { backgroundColor: `${primary}1A` }]}>
+                <Ionicons name="add" size={22} color={primary} />
+              </View>
+              <View style={styles.addDeviceCardTextWrap}>
+                <Text style={[styles.addDeviceCardTitle, { color: theme.colors.text }]}>
+                  Add New Device
                 </Text>
-                <View style={styles.modeIndicator}>
-                  <View style={[styles.modeDot, { backgroundColor: isManualMode ? '#4CAF50' : '#FF9800' }]} />
-                  <Text style={styles.modeStatusText}>
-                    {isManualMode ? "Control Enabled" : "Auto Control"}
-                  </Text>
-                </View>
-              </>
-            )}
-          </View>
-          {!isSwitching && isModeLoaded && (
-            <Ionicons name="chevron-forward" size={20} color="#FFF" opacity={0.7} />
-          )}
-        </TouchableOpacity>
-        
-        {isModeLoaded && !isManualMode && (
-          <View style={[styles.modeWarning, { backgroundColor: '#FFF3E0' }]}>
-            <Ionicons name="warning-outline" size={16} color="#FF9800" />
-            <Text style={[styles.modeWarningText, { color: '#E65100' }]}>
-              Manual control disabled. Switch to MANUAL mode to control devices.
-            </Text>
-          </View>
+                <Text style={[styles.addDeviceCardSub, { color: theme.colors.textSecondary }]}>
+                  Scan a QR code or enter the ID manually
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+          </>
         )}
-        
-        {!isModeLoaded && (
-          <View style={[styles.modeWarning, { backgroundColor: '#E3F2FD' }]}>
-            <Ionicons name="information-outline" size={16} color="#1976D2" />
-            <Text style={[styles.modeWarningText, { color: '#0D47A1' }]}>
-              Waiting for system mode from device...
-            </Text>
-          </View>
-        )}
-      </View>
 
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <View style={styles.header}>
-        <View>
-          <Text style={[styles.title, { color: theme.colors.text }]}>
-            Device Control
-          </Text>
-          <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
-            {isConnected ? "Connected" : "Disconnected"} • {devices.length} Devices
-          </Text>
-          {isModeLoaded && (
-            <View style={styles.modeStatusRow}>
-              <Text style={[styles.modeStatusLabel, { color: theme.colors.textSecondary }]}>
-                Mode: 
-              </Text>
-              <Text style={[styles.modeStatusValue, { color: isManualMode ? '#4CAF50' : '#FF9800' }]}>
-                {isManualMode ? '🔧 MANUAL' : '🤖 AUTO'}
-              </Text>
-            </View>
-          )}
-          {isOffline && (
-            <Text style={[styles.offlineStatus, { color: '#F44336' }]}>
-              ⚠️ Device Offline
-            </Text>
-          )}
-        </View>
-        <View style={styles.statusDot}>
-          <View
-            style={[
-              styles.dot,
-              { backgroundColor: isConnected && !isOffline ? "#4CAF50" : "#F44336" },
-            ]}
-          />
-        </View>
-      </View>
-
-      {/* ── Device Groups ─────────────────────────────────────────────────── */}
-      {Object.entries(groupedDevices).map(([category, devicesList]) => (
-        <View key={category} style={styles.categorySection}>
-          <Text style={[styles.categoryTitle, { color: theme.colors.text }]}>
-            {categoryTitles[category] || category}
-          </Text>
-
-          {devicesList.map((device) => {
-            const isStatusLoading = device.vb === null;
-            const controlsDisabled =
-              updating === device.id ||
-              !isManualMode ||
-              !isModeLoaded ||
-              isStatusLoading ||
-              isOffline;
-            const isExpanded = expandedDevice === device.id;
-            const toggleTime = deviceToggleTimes[device.id];
-
-            return (
-              <TouchableOpacity
-                key={device.id}
-                style={[
-                  styles.deviceCard,
-                  {
-                    backgroundColor: theme.colors.card,
-                    borderColor: !isManualMode || !isModeLoaded || isOffline
-                      ? theme.colors.border 
-                      : device.vb ? "#4CAF50" : theme.colors.border,
-                    borderWidth: !isManualMode || !isModeLoaded || isOffline ? 1 : device.vb ? 2 : 1,
-                    opacity: !isManualMode || !isModeLoaded || isOffline ? 0.6 : 1,
-                  },
-                ]}
-                onPress={() => toggleExpand(device.id)}
-                activeOpacity={0.7}
-              >
-                {/* ── Mode Badge ── */}
-                <View style={styles.deviceModeBadge}>
-                  <Text style={styles.deviceModeBadgeText}>
-                    {!isModeLoaded ? '⏳' : isManualMode ? '🔧 Manual' : '🤖 Auto'}
-                  </Text>
-                </View>
-
-                {/* ── Device Left ── */}
-                <View style={styles.deviceLeft}>
-                  <View
-                    style={[
-                      styles.iconContainer,
-                      { 
-                        backgroundColor: !isManualMode || !isModeLoaded || isOffline
-                          ? `${theme.colors.textSecondary}20` 
-                          : `${getDeviceColor(device)}20` 
-                      },
-                    ]}
-                  >
-                    <Ionicons
-                      name={getDeviceIcon(device)}
-                      size={28}
-                      color={!isManualMode || !isModeLoaded || isOffline ? theme.colors.textSecondary : getDeviceColor(device)}
-                    />
-                  </View>
-                  <View style={styles.deviceInfo}>
-                    <Text style={[styles.deviceName, { color: theme.colors.text }]}>
-                      {device.displayName}
-                    </Text>
-                    <Text
-                      style={[
-                        styles.deviceDescription,
-                        { color: theme.colors.textSecondary },
-                      ]}
-                    >
-                      {device.description}
-                    </Text>
-                    <View
-                      style={[
-                        styles.statusBadge,
-                        {
-                          backgroundColor: !isManualMode || !isModeLoaded || isOffline
-                            ? "rgba(117, 117, 117, 0.15)"
-                            : device.vb
-                            ? "rgba(76, 175, 80, 0.15)"
-                            : "rgba(117, 117, 117, 0.15)",
-                        },
-                      ]}
-                    >
-                      {isStatusLoading ? (
-                        <ActivityIndicator
-                          size="small"
-                          color={theme.colors.textSecondary}
-                          style={styles.statusLoadingSpinner}
-                        />
-                      ) : (
-                        <View
-                          style={[
-                            styles.statusDotSmall,
-                            { 
-                              backgroundColor: !isManualMode || !isModeLoaded || isOffline
-                                ? "#757575" 
-                                : device.vb ? "#4CAF50" : "#757575" 
-                            },
-                          ]}
-                        />
-                      )}
-                      <Text
-                        style={[
-                          styles.statusText,
-                          {
-                            color: !isManualMode || !isModeLoaded || isOffline
-                              ? "#757575" 
-                              : device.vb ? "#4CAF50" : "#757575",
-                            fontWeight: device.vb && isManualMode && isModeLoaded ? "600" : "400",
-                          },
-                        ]}
-                      >
-                        {isOffline ? 'Offline' : getStatusText(device)}
-                      </Text>
-                    </View>
-                    {toggleTime && isConnected && (
-                      <Text style={[styles.toggleTime, { color: theme.colors.textSecondary }]}>
-                        Last toggled: {toggleTime}
-                      </Text>
-                    )}
-                  </View>
-                </View>
-
-                {/* ── Device Right ── */}
-                <View style={styles.deviceRight}>
-                  {isStatusLoading ? (
-                    <View style={styles.switchLoadingBox}>
-                      <ActivityIndicator size="small" color={theme.colors.textSecondary} />
-                    </View>
-                  ) : (
-                    <Switch
-                      value={device.vb}
-                      onValueChange={() => handleToggleDevice(device)}
-                      trackColor={{
-                        false: theme.colors.border,
-                        true: isManualMode && isModeLoaded && !isOffline ? "#4CAF50" : theme.colors.border,
-                      }}
-                      thumbColor={
-                        !isManualMode || !isModeLoaded || isOffline
-                          ? theme.colors.textSecondary 
-                          : updating === device.id
-                          ? theme.colors.primary
-                          : "#FFF"
-                      }
-                      disabled={controlsDisabled}
-                    />
-                  )}
-                  {updating === device.id && (
-                    <View style={styles.loadingIndicator}>
-                      <Ionicons
-                        name="sync-outline"
-                        size={18}
-                        color={theme.colors.primary}
-                      />
-                    </View>
-                  )}
-                </View>
-
-                {/* ── Expand/Collapse Indicator ── */}
-                <View style={styles.expandIcon}>
-                  <Ionicons
-                    name={isExpanded ? "chevron-up" : "chevron-down"}
-                    size={20}
-                    color={theme.colors.textSecondary}
-                  />
-                </View>
-
-                {/* ── Expanded Status Flags ── */}
-                {isExpanded && deviceStatusFlags && (
-                  <View style={[styles.expandedContent, { 
-                    borderTopColor: theme.colors.border,
-                    marginTop: 12,
-                    paddingTop: 12,
-                  }]}>
-                    <Text style={[styles.expandedTitle, { color: theme.colors.textSecondary }]}>
-                      Related Status Flags
-                    </Text>
-                    <View style={styles.expandedFlags}>
-                      {Object.entries(displayStatus)
-                        .filter(([key]) => key !== 'rawStatus')
-                        .slice(0, 8)
-                        .map(([key, value]) => {
-                          const isOn = value === 'YES' || value === 'ON' || value === 'OPEN' || value === 'AUTO';
-                          const isOff = value === 'NO' || value === 'OFF' || value === 'CLOSED' || value === 'MANUAL';
-                          const color = value === '_ _' ? '#999' : isOn ? '#4CAF50' : isOff ? '#F44336' : '#FF9800';
-                          const label = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
-                          
-                          return (
-                            <View key={key} style={styles.expandedFlagItem}>
-                              <Text style={[styles.expandedFlagLabel, { color: theme.colors.textSecondary }]}>
-                                {label}
-                              </Text>
-                              <Text style={[styles.expandedFlagValue, { color }]}>
-                                {value}
-                              </Text>
-                            </View>
-                          );
-                        })}
-                    </View>
-                  </View>
-                )}
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      ))}
-
-      {/* ── Sensor Data Summary ───────────────────────────────────────────── */}
-      {sensorData && Object.keys(sensorData).length > 0 && (
-        <View style={[styles.sensorSummary, { 
-          backgroundColor: theme.colors.surface,
-          borderColor: theme.colors.border,
-        }]}>
-          <Text style={[styles.sensorSummaryTitle, { color: theme.colors.text }]}>
-            📊 Live Sensor Data
-          </Text>
-          <View style={styles.sensorGrid}>
-            <View style={styles.sensorItem}>
-              <Text style={[styles.sensorLabel, { color: theme.colors.textSecondary }]}>🌡️ Temp</Text>
-              <Text style={[styles.sensorValue, { color: theme.colors.text }]}>
-                {sensorData.ambientTemperature?.toFixed(1) || '--'}°C
-              </Text>
-            </View>
-            <View style={styles.sensorItem}>
-              <Text style={[styles.sensorLabel, { color: theme.colors.textSecondary }]}>💧 Humidity</Text>
-              <Text style={[styles.sensorValue, { color: theme.colors.text }]}>
-                {sensorData.ambientHumidity?.toFixed(1) || '--'}%
-              </Text>
-            </View>
-            <View style={styles.sensorItem}>
-              <Text style={[styles.sensorLabel, { color: theme.colors.textSecondary }]}>🌊 Water Level</Text>
-              <Text style={[styles.sensorValue, { color: theme.colors.text }]}>
-                {sensorData.waterLevel?.toFixed(0) || '--'}%
-              </Text>
-            </View>
-          </View>
-        </View>
-      )}
-
-      {/* ── Last Updated Info ────────────────────────────────────────────── */}
-      {actuatorStatus.lastUpdated && (
-        <Text style={[styles.lastUpdated, { color: theme.colors.textSecondary }]}>
-          Last updated: {new Date(actuatorStatus.lastUpdated).toLocaleTimeString()}
-        </Text>
-      )}
-
-      {/* ── MQTT Status Footer ────────────────────────────────────────────── */}
-      <View
-        style={[
-          styles.footer,
-          {
-            backgroundColor: theme.colors.surface,
-            borderColor: theme.colors.border,
-          },
-        ]}
-      >
-        <View style={styles.footerRow}>
-          <View style={styles.footerStatus}>
+        {/* ── Live Sensor Summary ──────────────────────────────────────────── */}
+        {registeredDevices.length > 0 &&
+          sensorData &&
+          Object.keys(sensorData).length > 0 &&
+          (sensorData.ambientTemperature != null ||
+            sensorData.ambientHumidity != null ||
+            sensorData.waterLevel != null) && (
             <View
               style={[
-                styles.footerDot,
-                { backgroundColor: isConnected && !isOffline ? "#4CAF50" : "#F44336" },
-              ]}
-            />
-            <Text
-              style={[
-                styles.footerText,
-                { color: theme.colors.textSecondary },
+                styles.sensorSummary,
+                {
+                  backgroundColor: theme.colors.surface,
+                  borderColor: theme.colors.border,
+                },
               ]}
             >
-              {isOffline ? 'Device Offline' : isConnected ? "MQTT Connected" : "MQTT Disconnected"}
-            </Text>
-          </View>
-          {externalKey && (
-            <Text style={[styles.deviceIdText, { color: theme.colors.textSecondary }]}>
-              ID: {externalKey.slice(0, 8)}...
-            </Text>
+              <Text style={[styles.sensorSummaryTitle, { color: theme.colors.text }]}>
+                📊 Live Sensor Data
+              </Text>
+              <View style={styles.sensorGrid}>
+                <View style={styles.sensorItem}>
+                  <Text style={[styles.sensorLabel, { color: theme.colors.textSecondary }]}>
+                    🌡️ Temp
+                  </Text>
+                  <Text style={[styles.sensorValue, { color: theme.colors.text }]}>
+                    {sensorData.ambientTemperature?.toFixed(1) || "--"}°C
+                  </Text>
+                </View>
+                <View style={styles.sensorItem}>
+                  <Text style={[styles.sensorLabel, { color: theme.colors.textSecondary }]}>
+                    💧 Humidity
+                  </Text>
+                  <Text style={[styles.sensorValue, { color: theme.colors.text }]}>
+                    {sensorData.ambientHumidity?.toFixed(1) || "--"}%
+                  </Text>
+                </View>
+                <View style={styles.sensorItem}>
+                  <Text style={[styles.sensorLabel, { color: theme.colors.textSecondary }]}>
+                    🌊 Water Level
+                  </Text>
+                  <Text style={[styles.sensorValue, { color: theme.colors.text }]}>
+                    {sensorData.waterLevel?.toFixed(0) || "--"}%
+                  </Text>
+                </View>
+              </View>
+            </View>
           )}
-        </View>
-        <TouchableOpacity onPress={onRefresh} style={styles.refreshButton}>
-          <Ionicons name="refresh-outline" size={18} color={theme.colors.primary} />
-          <Text style={[styles.refreshText, { color: theme.colors.primary }]}>
-            Refresh
-          </Text>
-        </TouchableOpacity>
-      </View>
-    </ScrollView>
+
+        {/* ── MQTT Status Footer ───────────────────────────────────────────── */}
+        {registeredDevices.length > 0 && (
+          <View
+            style={[
+              styles.footer,
+              {
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.border,
+              },
+            ]}
+          >
+            <View style={styles.footerRow}>
+              <View style={styles.footerStatus}>
+                <View
+                  style={[
+                    styles.footerDot,
+                    { backgroundColor: isConnected && !isOffline ? "#4CAF50" : "#F44336" },
+                  ]}
+                />
+                <Text style={[styles.footerText, { color: theme.colors.textSecondary }]}>
+                  {isOffline ? "Device Offline" : isConnected ? "MQTT Connected" : "MQTT Disconnected"}
+                </Text>
+              </View>
+              {externalKey && (
+                <Text style={[styles.deviceIdText, { color: theme.colors.textSecondary }]}>
+                  ID: {externalKey.slice(0, 8)}…
+                </Text>
+              )}
+            </View>
+            <TouchableOpacity onPress={onRefresh} style={styles.refreshButton}>
+              <Ionicons name="refresh-outline" size={18} color={primary} />
+              <Text style={[styles.refreshText, { color: primary }]}>Refresh</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </ScrollView>
+
+      {/* ── Floating Action Button ────────────────────────────────────────── */}
+      <TouchableOpacity
+        style={[styles.fab, { shadowColor: primaryDark }]}
+        onPress={openAddWizard}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel="Add a new device"
+      >
+        <LinearGradient
+          colors={[primary, primaryDark]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.fabGradient}
+        >
+          <Ionicons name="add" size={30} color="#FFF" />
+        </LinearGradient>
+      </TouchableOpacity>
+
+      {/* ── Add Device Wizard (fullscreen modal) ──────────────────────────── */}
+      <AddDeviceWizard
+        visible={showAddWizard}
+        onClose={() => setShowAddWizard(false)}
+        onDeviceAdded={handleDeviceAdded}
+      />
+    </View>
   );
 }
 
+// ── Styles ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
+  container: { flex: 1 },
+  scrollViewContent: { padding: 16, paddingTop: Platform.OS === "ios" ? 8 : 16 },
+
+  // ── Header ─────────────────────────────────────────────────────────────
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 16,
   },
-  scrollViewContent: {
-    padding: 16,
-    paddingTop: Platform.OS === "ios" ? 8 : 16,
+  headerLeft: { flex: 1, marginRight: 12 },
+  title: { fontSize: 28, fontWeight: "700" },
+  subtitle: { fontSize: 13, marginTop: 4, opacity: 0.9 },
+  headerAddButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#1B5E20",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  
-  // ── Offline Banner ──────────────────────────────────────────────────────
+
+  // ── Offline banner ─────────────────────────────────────────────────────
   offlineBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
     padding: 12,
     borderRadius: 10,
     marginBottom: 12,
   },
   offlineBannerText: {
-    color: '#F44336',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  offlineStatus: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginTop: 2,
+    color: "#F44336",
+    fontWeight: "600",
+    fontSize: 13,
+    flex: 1,
   },
 
-  // ── Flags Summary ──────────────────────────────────────────────────────
-  flagsSummary: {
-    padding: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginBottom: 16,
+  // ── Loading / empty ────────────────────────────────────────────────────
+  loadingBox: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 60,
   },
-  flagsTitle: {
+  loadingText: { marginTop: 12, fontSize: 14 },
+  emptyState: {
+    alignItems: "center",
+    paddingVertical: 40,
+    paddingHorizontal: 12,
+  },
+  emptyIconWrap: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 18,
+  },
+  emptyTitle: { fontSize: 20, fontWeight: "800", textAlign: "center" },
+  emptySubtitle: {
     fontSize: 14,
-    fontWeight: '700',
-    marginBottom: 10,
+    textAlign: "center",
+    marginTop: 8,
+    marginBottom: 26,
+    lineHeight: 21,
+    paddingHorizontal: 8,
   },
-  flagsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
+  emptyButton: {
+    borderRadius: 50,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 5,
   },
-  flagItem: {
-    width: '23%',
-    alignItems: 'center',
-    paddingVertical: 4,
-    flexDirection: 'column',
-  },
-  flagLabel: {
-    fontSize: 8,
-    textAlign: 'center',
-    marginTop: 2,
-  },
-  flagValue: {
-    fontSize: 11,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-
-  // ── Mode Header ────────────────────────────────────────────────────────
-  modeHeader: {
-    marginBottom: 20,
-  },
-  modeButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: 16,
-    borderRadius: 14,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-  },
-  modeButtonContent: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  modeButtonText: {
-    color: "#FFF",
-    fontSize: 16,
-    fontWeight: "700",
-    letterSpacing: 0.5,
-  },
-  modeIndicator: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: "rgba(255,255,255,0.2)",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  modeDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  modeStatusText: {
-    color: "#FFF",
-    fontSize: 11,
-    fontWeight: "500",
-  },
-  modeWarning: {
+  emptyButtonGradient: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    padding: 10,
-    borderRadius: 10,
-    marginTop: 8,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 50,
   },
-  modeWarningText: {
-    fontSize: 12,
-    flex: 1,
-    fontWeight: "500",
-  },
+  emptyButtonText: { color: "#FFF", fontSize: 16, fontWeight: "700" },
 
-  // ── Header ─────────────────────────────────────────────────────────────
-  header: {
+  // ── Section headers ────────────────────────────────────────────────────
+  sectionHeader: {
     flexDirection: "row",
+    alignItems: "center",
     justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 24,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "700",
-  },
-  subtitle: {
-    fontSize: 13,
-    marginTop: 4,
-  },
-  modeStatusRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 4,
-    gap: 6,
-  },
-  modeStatusLabel: {
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  modeStatusValue: {
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  statusDot: {
-    padding: 8,
-  },
-  dot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-  },
-
-  // ── Category ───────────────────────────────────────────────────────────
-  categorySection: {
-    marginBottom: 24,
-  },
-  categoryTitle: {
-    fontSize: 16,
-    fontWeight: "600",
+    marginTop: 8,
     marginBottom: 12,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    opacity: 0.8,
   },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  countBadge: {
+    minWidth: 26,
+    height: 26,
+    borderRadius: 13,
+    paddingHorizontal: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  countBadgeText: { fontSize: 13, fontWeight: "700" },
 
-  // ── Device Card ────────────────────────────────────────────────────────
+  // ── Registered device cards ────────────────────────────────────────────
   deviceCard: {
+    borderRadius: 16,
     padding: 16,
-    borderRadius: 14,
-    marginBottom: 10,
+    marginBottom: 12,
+    borderWidth: 1,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
     elevation: 2,
-    position: 'relative',
   },
-  deviceModeBadge: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+  deviceCardHeader: { flexDirection: "row", alignItems: "flex-start" },
+  deviceIconContainer: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  deviceInfo: { flex: 1 },
+  deviceNameRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  deviceName: { fontSize: 16, fontWeight: "600", flexShrink: 1 },
+  activePill: {
     paddingHorizontal: 8,
     paddingVertical: 3,
-    borderRadius: 10,
-    zIndex: 10,
+    borderRadius: 8,
   },
-  deviceModeBadgeText: {
-    color: '#FFF',
-    fontSize: 8,
-    fontWeight: '600',
-    letterSpacing: 0.3,
-  },
-  deviceLeft: {
+  activePillText: { color: "#FFF", fontSize: 9, fontWeight: "800", letterSpacing: 0.5 },
+  deviceType: { fontSize: 12, marginTop: 3 },
+  statusPill: {
     flexDirection: "row",
     alignItems: "center",
-    flex: 1,
-    paddingRight: 40,
-  },
-  iconContainer: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 14,
-  },
-  deviceInfo: {
-    flex: 1,
-  },
-  deviceName: {
-    fontSize: 16,
-    fontWeight: "600",
-    marginBottom: 2,
-  },
-  deviceDescription: {
-    fontSize: 12,
-    marginBottom: 4,
-  },
-  statusBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
+    gap: 5,
     alignSelf: "flex-start",
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginTop: 8,
   },
-  statusDotSmall: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    marginRight: 6,
-  },
-  statusLoadingSpinner: {
-    marginRight: 6,
-    transform: [{ scale: 0.5 }],
-  },
-  statusText: {
-    fontSize: 11,
-    letterSpacing: 0.3,
-  },
-  toggleTime: {
-    fontSize: 9,
-    marginTop: 2,
-    opacity: 0.6,
-  },
-  deviceRight: {
+  statusPillText: { fontSize: 11, fontWeight: "600" },
+  deviceCardFooter: {
     flexDirection: "row",
     alignItems: "center",
-    position: 'absolute',
-    right: 50,
-    top: '50%',
-    transform: [{ translateY: -15 }],
-  },
-  switchLoadingBox: {
-    width: 51,
-    height: 31,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  loadingIndicator: {
-    position: "absolute",
-    right: -20,
-  },
-  expandIcon: {
-    position: 'absolute',
-    bottom: 8,
-    right: 8,
-  },
-
-  // ── Expanded Content ──────────────────────────────────────────────────
-  expandedContent: {
-    borderTopWidth: 1,
-    marginTop: 12,
+    justifyContent: "space-between",
+    marginTop: 14,
     paddingTop: 12,
+    borderTopWidth: 1,
   },
-  expandedTitle: {
-    fontSize: 11,
-    fontWeight: '600',
-    marginBottom: 8,
+  lastSeen: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1 },
+  lastSeenText: { fontSize: 12 },
+  cardActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+  connectBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 10,
   },
-  expandedFlags: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
-  },
-  expandedFlagItem: {
-    width: '30%',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-  },
-  expandedFlagLabel: {
-    fontSize: 9,
-  },
-  expandedFlagValue: {
-    fontSize: 9,
-    fontWeight: '600',
+  connectBtnText: { color: "#FFF", fontSize: 13, fontWeight: "700" },
+  deleteBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
 
-  // ── Sensor Summary ─────────────────────────────────────────────────────
+  // ── Dashed add card ────────────────────────────────────────────────────
+  addDeviceCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderStyle: "dashed",
+    marginTop: 4,
+  },
+  addDeviceCardIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  addDeviceCardTextWrap: { flex: 1 },
+  addDeviceCardTitle: { fontSize: 15, fontWeight: "700" },
+  addDeviceCardSub: { fontSize: 12, marginTop: 2 },
+
+  // ── Sensor summary ─────────────────────────────────────────────────────
   sensorSummary: {
     padding: 16,
     borderRadius: 14,
     borderWidth: 1,
-    marginTop: 8,
+    marginTop: 18,
     marginBottom: 12,
   },
-  sensorSummaryTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    marginBottom: 12,
-  },
-  sensorGrid: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-  },
-  sensorItem: {
-    alignItems: "center",
-    gap: 4,
-  },
-  sensorLabel: {
-    fontSize: 11,
-    fontWeight: "500",
-  },
-  sensorValue: {
-    fontSize: 16,
-    fontWeight: "700",
-  },
+  sensorSummaryTitle: { fontSize: 14, fontWeight: "600", marginBottom: 12 },
+  sensorGrid: { flexDirection: "row", justifyContent: "space-around" },
+  sensorItem: { alignItems: "center", gap: 4 },
+  sensorLabel: { fontSize: 11, fontWeight: "500" },
+  sensorValue: { fontSize: 16, fontWeight: "700" },
 
   // ── Footer ─────────────────────────────────────────────────────────────
-  lastUpdated: {
-    fontSize: 12,
-    textAlign: "center",
-    marginTop: 8,
-    marginBottom: 12,
-    opacity: 0.7,
-  },
   footer: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1217,32 +1008,12 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     marginTop: 8,
-    marginBottom: 8,
   },
-  footerRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    flex: 1,
-  },
-  footerStatus: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  footerDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  footerText: {
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  deviceIdText: {
-    fontSize: 10,
-    opacity: 0.6,
-  },
+  footerRow: { flexDirection: "row", alignItems: "center", gap: 12, flex: 1 },
+  footerStatus: { flexDirection: "row", alignItems: "center", gap: 8 },
+  footerDot: { width: 8, height: 8, borderRadius: 4 },
+  footerText: { fontSize: 12, fontWeight: "500" },
+  deviceIdText: { fontSize: 10, opacity: 0.6 },
   refreshButton: {
     flexDirection: "row",
     alignItems: "center",
@@ -1251,8 +1022,94 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 8,
   },
-  refreshText: {
-    fontSize: 12,
-    fontWeight: "500",
+  refreshText: { fontSize: 12, fontWeight: "500" },
+
+  // ── FAB ────────────────────────────────────────────────────────────────
+  fab: {
+    position: "absolute",
+    right: 20,
+    bottom: 24,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 8,
   },
+  fabGradient: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // ── Delete modal ───────────────────────────────────────────────────────
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+  modalContent: {
+    borderRadius: 20,
+    padding: 24,
+    width: "100%",
+    maxWidth: 400,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 14,
+  },
+  modalWarningIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  modalTitle: { fontSize: 20, fontWeight: "700" },
+  modalMessage: {
+    fontSize: 14,
+    marginBottom: 16,
+    lineHeight: 21,
+  },
+  deviceInfoBox: {
+    padding: 12,
+    borderRadius: 10,
+    marginBottom: 16,
+  },
+  deviceInfoRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+  },
+  deviceInfoLabel: { fontSize: 12, fontWeight: "500" },
+  deviceInfoValue: { fontSize: 13, fontWeight: "600", flexShrink: 1 },
+  confirmLabel: { fontSize: 14, marginBottom: 8 },
+  confirmInputContainer: { marginBottom: 20 },
+  confirmInput: {
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    fontSize: 16,
+  },
+  modalButtons: { flexDirection: "row", gap: 12 },
+  modalButton: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 10,
+    alignItems: "center",
+  },
+  modalCancelButton: {},
+  modalDeleteButton: { backgroundColor: "#F44336" },
+  modalButtonText: { fontSize: 15, fontWeight: "600" },
+  modalDeleteButtonText: { color: "#FFF", fontSize: 15, fontWeight: "700" },
 });

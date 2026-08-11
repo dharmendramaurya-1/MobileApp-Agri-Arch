@@ -2,14 +2,14 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { Text, TouchableOpacity } from "react-native";
-import { useTheme } from "../context/ThemContext";
+import { useTheme } from "../../src/context/ThemContext";
 
 export function AddDeviceButton() {
   const { theme } = useTheme();
   
   return (
     <TouchableOpacity
-      onPress={() => router.push("/(main)/add-device")}
+      onPress={() => router.push("/(main)/devices")}
       style={{
         marginRight: 16,
         backgroundColor: theme.colors.primary,
