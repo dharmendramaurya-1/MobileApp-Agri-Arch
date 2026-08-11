@@ -170,17 +170,19 @@ function parseActuatorToDevices(raw) {
 }
 
 // ── Payload Builders ──────────────────────────────────────────────────────────
+
+// ✅ UPDATED: Actuator payload with shortened names
 function buildActuatorPayload(status) {
   const payload = [
     { bn: "urn:dev:9003718EEB3F:", bt: Math.floor(Date.now() / 1000) }
   ];
   
   const actuatorFields = [
-    { n: "water_pump", vb: status.water_pump },
-    { n: "water_ILvalve", vb: status.water_ILvalve },
-    { n: "water_OLvalve", vb: status.water_OLvalve },
-    { n: "nutrient_pump", vb: status.nutrient_pump },
-    { n: "reboot_ack", vb: status.reboot_ack }
+    { n: "WatPmp", vb: status.water_pump },      // ✅ Changed
+    { n: "Wat_ILV", vb: status.water_ILvalve },  // ✅ Changed
+    { n: "Wat_OLV", vb: status.water_OLvalve },  // ✅ Changed
+    { n: "NUT_PMP", vb: status.nutrient_pump },  // ✅ Changed
+    { n: "BootAck", vb: status.reboot_ack }      // ✅ Changed
   ];
   
   for (const field of actuatorFields) {
@@ -192,35 +194,37 @@ function buildActuatorPayload(status) {
   return payload;
 }
 
+// ✅ UPDATED: Settings payload with shortened names
 function buildSettingsPayload(settings, externalKey) {
   return [
     { bn: `urn:dev:${externalKey}:`, bt: Math.floor(Date.now() / 1000) },
-    { n: "TL", v: settings.tempLow },
-    { n: "TH", v: settings.tempHigh },
-    { n: "HL", v: settings.humidityLow },
-    { n: "HH", v: settings.humidityHigh },
-    { n: "WTL", v: settings.waterTempLow },
-    { n: "WTH", v: settings.waterTempHigh },
-    { n: "WLL", v: settings.waterLevelLow || 20 },
-    { n: "WLH", v: settings.waterLevelHigh || 80 },
-    { n: "pHL", v: settings.phLow },
-    { n: "pHH", v: settings.phHigh },
-    { n: "co2L", v: settings.co2Low },
-    { n: "co2H", v: settings.co2High },
-    { n: "LL", v: settings.luxLow },
-    { n: "LH", v: settings.luxHigh },
+    { n: "AMBTL", v: settings.tempLow },          // ✅ Changed from TL
+    { n: "AMTHI", v: settings.tempHigh },         // ✅ Changed from TH
+    { n: "HUMLO", v: settings.humidityLow },      // ✅ Changed from HL
+    { n: "HUMHI", v: settings.humidityHigh },     // ✅ Changed from HH
+    { n: "WTLO", v: settings.waterTempLow },      // ✅ Changed from WTL
+    { n: "WTHI", v: settings.waterTempHigh },     // ✅ Changed from WTH
+    { n: "WLLP", v: settings.waterLevelLow || 20 },  // ✅ Changed from WLL
+    { n: "WLHP", v: settings.waterLevelHigh || 80 }, // ✅ Changed from WLH
+    { n: "pHLO", v: settings.phLow },             // ✅ Changed from pHL
+    { n: "pHHI", v: settings.phHigh },            // ✅ Changed from pHH
+    { n: "Co2LO", v: settings.co2Low },           // ✅ Changed from co2L
+    { n: "Co2HI", v: settings.co2High },          // ✅ Changed from co2H
+    { n: "LUXLO", v: settings.luxLow },           // ✅ Changed from LL
+    { n: "LUXHI", v: settings.luxHigh },          // ✅ Changed from LH
     { n: "ECL", v: settings.ecLow },
     { n: "ECH", v: settings.ecHigh },
-    { n: "DL", v: settings.dimming || 75 },
+    { n: "Dimm", v: settings.dimming || 75 },     // ✅ Changed from DL
   ];
 }
 
+// ✅ UPDATED: Config payload with shortened names
 function buildConfigPayload(deviceId, config) {
   return [
     { bn: `urn:dev:${deviceId}:cfg/`, bt: Math.floor(Date.now() / 1000) },
-    { n: "report_interval", v: config.report_interval },
-    { n: "sampling_interval", v: config.sampling_interval },
-    { n: "auto_mode", vb: config.auto_mode },
+    { n: "RPT_INT", v: config.report_interval },   // ✅ Changed from report_interval
+    { n: "SAMP_INT", v: config.sampling_interval }, // ✅ Changed from sampling_interval
+    { n: "AutoMode", vb: config.auto_mode },       // ✅ Changed from auto_mode
   ];
 }
 
@@ -250,7 +254,6 @@ export const MqttProvider = ({ children }) => {
   const [hasEverBeenOnline, setHasEverBeenOnline] = useState(false);
   
   // ✅ How long to wait for a newly connected device's first response before marking it offline
-  // Scaled by the report interval when known, but never shorter than 60s or longer than 5 min
   const getInitialResponseTimeout = () => {
     const intervalMs = reportInterval > 0 ? reportInterval * 1000 : 0;
     return Math.min(Math.max(intervalMs, 60000), 300000);
@@ -264,7 +267,7 @@ export const MqttProvider = ({ children }) => {
   const timeoutCheckInterval = useRef(null);
   const lastDataReceivedTime = useRef(null);
 
-  // ✅ Initial response check refs (device add → connect)
+  // ✅ Initial response check refs
   const initialResponseTimer = useRef(null);
   const hasReceivedDataRef = useRef(false);
   const activeDeviceIdRef = useRef(null);
@@ -282,7 +285,7 @@ export const MqttProvider = ({ children }) => {
   const hasInitializedRef = useRef(false);
   const unsubscribeRef = useRef(null);
 
-  // Keep latest values available inside timers/callbacks (avoid stale closures)
+  // Keep latest values available inside timers/callbacks
   useEffect(() => {
     activeDeviceIdRef.current = activeDeviceId;
   }, [activeDeviceId]);
@@ -552,9 +555,6 @@ export const MqttProvider = ({ children }) => {
   };
 
   // ── Initial Response Check ────────────────────────────────────────────────
-  // Started when a device connects (add device → click Connect). If the device
-  // sends no response within the window, it is marked OFFLINE per the initial
-  // value check.
   const clearInitialResponseCheck = () => {
     if (initialResponseTimer.current) {
       clearTimeout(initialResponseTimer.current);
@@ -747,7 +747,6 @@ export const MqttProvider = ({ children }) => {
       
       await initializeMqtt();
       
-      // ✅ Initial value check — mark device offline if it never responds
       startInitialResponseCheck();
       
       console.log(`✅ Force reconnect completed. isConnected: ${isConnected}`);
@@ -919,20 +918,15 @@ export const MqttProvider = ({ children }) => {
         setConnectionState('online');
         lastDataReceivedTime.current = Date.now();
         
-        // ✅ Cancel the initial response check — the device responded
         clearInitialResponseCheck();
         
-        // ✅ If first data ever received
         if (!hasEverBeenOnlineRef.current) {
           setHasEverBeenOnline(true);
           hasEverBeenOnlineRef.current = true;
           console.log('✅ First data received from device! Device is ONLINE');
-          
-          // Start timeout check now
           startTimeoutCheck();
         }
         
-        // ✅ Update device connection status
         if (activeDeviceId) {
           setDeviceConnectionStatus(prev => ({
             ...prev,
@@ -940,12 +934,10 @@ export const MqttProvider = ({ children }) => {
           }));
         }
         
-        // ✅ If we have device status flags, update them
         if (parsed.deviceStatusFlags) {
           setDeviceStatusFlags(parsed.deviceStatusFlags);
           console.log("📊 Device Status Flags:", parsed.deviceStatusFlags);
           
-          // ✅ Check online status from 32-bit status (Bit 17)
           const isOnline = parsed.deviceStatusFlags.online;
           if (isOnline !== null && isOnline !== undefined) {
             if (isOnline) {
@@ -954,8 +946,6 @@ export const MqttProvider = ({ children }) => {
               hasEverBeenOnlineRef.current = true;
               console.log('✅ Device reported ONLINE from status flags (Bit 17)');
             } else {
-              // ✅ Device reports OFFLINE via its DevStat value (Bit 17 = 0)
-              // Honoring the initial value — mark the device offline
               console.log('⚠️ Device reported OFFLINE from status flags (Bit 17)');
               setConnectionState('offline');
               if (activeDeviceIdRef.current) {
@@ -967,7 +957,6 @@ export const MqttProvider = ({ children }) => {
             }
           }
           
-          // ✅ Check mode from 32-bit status (Bit 16)
           const isAuto = parsed.deviceStatusFlags.mode;
           if (isAuto !== null && isAuto !== undefined) {
             console.log(`📡 Device mode from status flags: ${isAuto ? 'AUTO' : 'MANUAL'} (Bit 16)`);
@@ -1061,12 +1050,10 @@ export const MqttProvider = ({ children }) => {
           }
         }
         
-        // ✅ Reset timeout check - start fresh
         if (timeoutCheckInterval.current) {
           clearInterval(timeoutCheckInterval.current);
           timeoutCheckInterval.current = null;
         }
-        // Start checking for data timeout with current timeout duration
         setTimeout(() => {
           if (isMountedRef.current && isConnected && hasEverBeenOnline) {
             startTimeoutCheck();
@@ -1090,7 +1077,6 @@ export const MqttProvider = ({ children }) => {
           }));
         }
         
-        // ✅ Initial value check — mark device offline if it never responds
         startInitialResponseCheck();
         
         client.subscribe(topics.data, (err) => {
@@ -1128,7 +1114,6 @@ export const MqttProvider = ({ children }) => {
           connectionCheckInterval.current = null;
         }
 
-        // ✅ Initial value check — mark device offline if it never responds
         startInitialResponseCheck();
         
         client.subscribe(topics.data, (err) => {

@@ -17,7 +17,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 // ✅ CORRECT - Components from root components/ folder
 import { DeviceStatusSummary } from '../../components/DeviceStatusSummary';
-import { ConnectionStatusBanner } from '../../components/ConnectionStatusBanner';
 
 // ✅ CORRECT - Context from src/context/
 import { SENSORS } from "../../src/config/sensorConfigs";
@@ -105,9 +104,12 @@ function CircularProgress({ value, size = 70, color = "#4CAF50", maxValue = 100 
 }
 
 // ── Connection status dot ─────────────────────────────────────────────────────
-function ConnectionDot({ connectionState, hasReceivedData }) {
-  // ✅ Data present -> Online (green). No data -> Offline (red). No waiting state.
-  if (hasReceivedData && connectionState !== 'offline') {
+function ConnectionDot({ connectionState, hasReceivedData, deviceStatusFlags }) {
+  // ✅ Check online status from 32-bit status flags (Bit 17)
+  const isOnline = deviceStatusFlags?.online;
+
+  // ✅ If data received AND device reports online → Online (Green)
+  if (hasReceivedData && isOnline === true) {
     return (
       <View style={styles.connectionRow}>
         <View style={[styles.connectionDot, { backgroundColor: '#4CAF50' }]} />
@@ -115,6 +117,18 @@ function ConnectionDot({ connectionState, hasReceivedData }) {
       </View>
     );
   }
+
+  // ✅ If data received but device reports offline → Offline (Red)
+  if (hasReceivedData && isOnline === false) {
+    return (
+      <View style={styles.connectionRow}>
+        <View style={[styles.connectionDot, { backgroundColor: '#F44336' }]} />
+        <Text style={styles.connectionLabel}>Offline</Text>
+      </View>
+    );
+  }
+
+  // ✅ No data received yet → Offline (Red)
   return (
     <View style={styles.connectionRow}>
       <View style={[styles.connectionDot, { backgroundColor: '#F44336' }]} />
@@ -208,10 +222,19 @@ export default function Dashboard() {
   const displayStatus = getDisplayStatus(deviceStatusFlags);
 
   // ── Check if device is offline ──────────────────────────────────────────
-  const isOffline = connectionState === 'offline' || !hasReceivedData;
+  // ✅ Device is offline if:
+  // 1. No data received yet, OR
+  // 2. Device reports offline (Bit 17 = 0)
+  const isOffline = !hasReceivedData || 
+                    (deviceStatusFlags?.online === false) || 
+                    connectionState === 'offline' ||
+                    connectionState === 'disconnected';
+
+  // ── Check if device is online ────────────────────────────────────────────
+  const isDeviceOnline = hasReceivedData && deviceStatusFlags?.online === true;
 
   // ── Check if publish is allowed ─────────────────────────────────────────
-  const canPublish = isConnected && hasReceivedData && isManualMode && !isSwitchingMode;
+  const canPublish = isConnected && isDeviceOnline && isManualMode && !isSwitchingMode;
 
   // ── Update pump status from actuatorStatus ──────────────────────────────
   useEffect(() => {
@@ -244,7 +267,6 @@ export default function Dashboard() {
         setModeSwitchPending(false);
         setIsSwitchingMode(false);
         
-        // ✅ After mode switch, perform the pending action
         if (pendingActionRef.current) {
           const action = pendingActionRef.current;
           pendingActionRef.current = null;
@@ -360,7 +382,6 @@ export default function Dashboard() {
       return;
     }
 
-    // ✅ Check if in AUTO mode - Show popup with option to switch
     if (!isManualMode && isModeLoaded) {
       Alert.alert(
         "🤖 Auto Mode Active",
@@ -378,7 +399,6 @@ export default function Dashboard() {
           { 
             text: "🔧 Switch to Manual Now", 
             onPress: async () => {
-              // ✅ Directly switch to manual mode
               await switchToManualModeWithCallback('togglePump');
             },
             style: "default"
@@ -450,9 +470,11 @@ export default function Dashboard() {
           <ConnectionDot 
             connectionState={connectionState}
             hasReceivedData={hasReceivedData}
+            deviceStatusFlags={deviceStatusFlags}
           />
 
-          {isModeLoaded && !isOffline && (
+          {/* ✅ Show mode only if device is online */}
+          {isDeviceOnline && isModeLoaded && (
             <View style={styles.modeStatusRow}>
               <Text style={[styles.modeStatusLabel, { color: theme.colors.textSecondary }]}>
                 System Mode:
@@ -468,6 +490,16 @@ export default function Dashboard() {
                   ⏳ Switching...
                 </Text>
               )}
+            </View>
+          )}
+
+          {/* ✅ Show offline status */}
+          {isOffline && (
+            <View style={styles.deviceStatusRow}>
+              <View style={[styles.deviceStatusDot, { backgroundColor: '#F44336' }]} />
+              <Text style={[styles.deviceStatusText, { color: '#F44336' }]}>
+                ● Device Offline
+              </Text>
             </View>
           )}
         </View>
@@ -486,14 +518,6 @@ export default function Dashboard() {
           </TouchableOpacity>
         </View>
       </View>
-
-      {/* ── DevStat / connection status banner ───────────────────────────── */}
-      <ConnectionStatusBanner
-        connectionState={connectionState}
-        hasReceivedData={hasReceivedData}
-        deviceStatus={deviceStatus}
-        deviceStatusFlags={deviceStatusFlags}
-      />
 
       {/* ── Last updated timestamp ────────────────────────────────────────── */}
       <Text style={[styles.lastUpdated, { color: theme.colors.textSecondary }]}>
@@ -529,20 +553,15 @@ export default function Dashboard() {
                 {fmt(sensorData.waterLevel)}%
               </Text>
               <Text style={styles.capacityText}>Capacity: 5,000 L</Text>
-              {displayStatus.tankLow !== '_ _' && !isOffline && hasReceivedData && (
+              {displayStatus.tankLow !== '_ _' && isDeviceOnline && (
                 <Text style={[styles.tankAlert, { 
                   color: displayStatus.tankLow === 'YES' ? '#FF5722' : '#4CAF50' 
                 }]}>
                   {displayStatus.tankLow === 'YES' ? '⚠️ LOW LEVEL' : '✅ Level OK'}
                 </Text>
               )}
-              {isOffline && hasEverBeenOnline && (
+              {isOffline && (
                 <Text style={[styles.tankAlert, { color: '#FF5722' }]}>
-                  ⚠️ Device Offline
-                </Text>
-              )}
-              {!hasReceivedData && (
-                <Text style={[styles.tankAlert, { color: '#F44336' }]}>
                   ⚠️ Device Offline
                 </Text>
               )}
@@ -564,29 +583,24 @@ export default function Dashboard() {
         <View style={styles.pumpHeader}>
           <View>
             <Text style={styles.pumpTitle}>Water Pump</Text>
-            {pumpToggleTime && !isOffline && hasReceivedData && (
+            {pumpToggleTime && isDeviceOnline && (
               <Text style={styles.pumpTimeText}>
                 Last toggle: {pumpToggleTime}
               </Text>
             )}
-            {isOffline && hasEverBeenOnline && (
+            {isOffline && (
               <Text style={styles.pumpTimeText}>
                 ⚠️ Offline - No control
               </Text>
             )}
-            {!isManualMode && isModeLoaded && !isOffline && hasReceivedData && (
+            {!isManualMode && isModeLoaded && isDeviceOnline && (
               <Text style={styles.pumpTimeText}>
                 🔒 Auto Mode - Click to switch
               </Text>
             )}
-            {!hasReceivedData && (
-              <Text style={styles.pumpTimeText}>
-                ⚠️ Offline - No control
-              </Text>
-            )}
           </View>
 
-          {isModeLoaded && !isOffline && hasReceivedData && (
+          {isDeviceOnline && isModeLoaded && (
             <View style={styles.pumpModeBadge}>
               <Text style={styles.pumpModeBadgeText}>
                 {isManualMode ? '🔧 Manual' : '🤖 Auto'}
@@ -612,7 +626,7 @@ export default function Dashboard() {
           </TouchableOpacity>
         </View>
         <Text style={styles.pumpStatus}>
-          {!hasReceivedData || isOffline ? "Device Offline" :
+          {isOffline ? "Device Offline" :
            !isManualMode ? "Auto Mode - Switch to Manual to control" :
            `Pump is ${displayPumpStatus === "ON" ? "RUNNING" : "OFF"}`}
           {isPublishing && " (Sending...)"}
@@ -822,6 +836,11 @@ export default function Dashboard() {
           Ever Online: {hasEverBeenOnline ? '✅ Yes' : '❌ No'}
         </Text>
         <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
+          Online Flag: {deviceStatusFlags?.online !== null && deviceStatusFlags?.online !== undefined 
+            ? (deviceStatusFlags.online ? '✅ Online' : '❌ Offline') 
+            : '_ _'}
+        </Text>
+        <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
           Connection State: {connectionState || '_ _'}
         </Text>
         <Text style={[styles.debugText, { color: theme.colors.textSecondary }]}>
@@ -893,6 +912,22 @@ const styles = StyleSheet.create({
   connectionLabel: {
     fontSize: 11,
     color: "#888",
+  },
+
+  deviceStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 4,
+    gap: 6,
+  },
+  deviceStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  deviceStatusText: {
+    fontSize: 12,
+    fontWeight: "500",
   },
 
   modeStatusRow: {
@@ -1076,7 +1111,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // ── Debug Section ──────────────────────────────────────────────────────
   debugSection: {
     marginHorizontal: 16,
     padding: 14,
