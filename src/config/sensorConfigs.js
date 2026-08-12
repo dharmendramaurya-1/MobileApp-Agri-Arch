@@ -214,29 +214,29 @@ const SENSOR_DATA = [
     recommendIcon: "alert-circle",
     recommendText: "Soil moisture is dropping — irrigation advised",
   },
-  {
-    key: "device-status",
-    dataKey: "deviceStatus",
-    _apiName: "tempdevice_status", // ✅ From API: "urn:dev:9003718EEB3F:tempdevice_status"
-    name: "Device Status",
-    title: "Device Status",
-    location: "System",
-    unit: "",
-    icon: "hardware-chip-outline",
-    color: "#607D8B",
-    maxValue: 1,
-    min: 0,
-    max: 1,
-    statusLabel: "Online",
-    range: "0 - 1",
-    stats: [
-      { label: "Status", value: "Online", color: "#4CAF50" },
-      { label: "Uptime", value: "99.9%", color: "#2196F3" },
-      { label: "Last Seen", value: "Now", color: "#FF9800" },
-    ],
-    recommendIcon: "checkmark-circle",
-    recommendText: "Device is online and functioning normally",
-  },
+  // {
+  //   key: "device-status",
+  //   dataKey: "deviceStatus",
+  //   _apiName: "tempdevice_status", // ✅ From API: "urn:dev:9003718EEB3F:tempdevice_status"
+  //   name: "Device Status",
+  //   title: "Device Status",
+  //   location: "System",
+  //   unit: "",
+  //   icon: "hardware-chip-outline",
+  //   color: "#607D8B",
+  //   maxValue: 1,
+  //   min: 0,
+  //   max: 1,
+  //   statusLabel: "Online",
+  //   range: "0 - 1",
+  //   stats: [
+  //     { label: "Status", value: "Online", color: "#4CAF50" },
+  //     { label: "Uptime", value: "99.9%", color: "#2196F3" },
+  //     { label: "Last Seen", value: "Now", color: "#FF9800" },
+  //   ],
+  //   recommendIcon: "checkmark-circle",
+  //   recommendText: "Device is online and functioning normally",
+  // },
 ];
 
 /**

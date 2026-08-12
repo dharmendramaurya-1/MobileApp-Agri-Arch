@@ -36,9 +36,9 @@ const SENSOR_CONFIG = SENSORS.map((sensor) => ({
 }));
 
 // ── Connection status dot ─────────────────────────────────────────────────────
-function ConnectionDot({ connectionState, hasReceivedData, deviceStatusFlags, background }) {
-  // ✅ Green: Device is online and data received
-  const isOnline = hasReceivedData && deviceStatusFlags?.online === true;
+function ConnectionDot({ connectionState, hasReceivedData, isLiveData, deviceStatusFlags, background }) {
+  // ✅ Green: Device is online and LIVE data received this session
+  const isOnline = isLiveData && hasReceivedData && deviceStatusFlags?.online === true;
   
   // ✅ Orange: Connecting, waiting, or no data yet
   const isWaiting = connectionState === 'connecting' || 
@@ -121,6 +121,7 @@ export default function Dashboard() {
     sensorData,
     isConnected,
     hasReceivedData,
+    isLiveData,
     actuatorStatus,
     toggleDeviceStatus,
     deviceConfig,
@@ -156,8 +157,11 @@ export default function Dashboard() {
   const [pumpToggleTime, setPumpToggleTime] = useState(null);
 
   // ── Check device status ──────────────────────────────────────────────────
-  // ✅ Green: Online and data received
-  const isDeviceOnline = hasReceivedData && deviceStatusFlags?.online === true;
+  // ✅ Green: LIVE data received this session + device reports online. The
+  // isLiveData guard means cached (restored) data NEVER shows a green
+  // "Online" status — the user always sees the CURRENT connection state.
+  // (isLiveData implies hasReceivedData — it's only set by a live message.)
+  const isDeviceOnline = isLiveData && deviceStatusFlags?.online === true;
   
   // ✅ Orange: Waiting for data or connecting
   const isDeviceWaiting = connectionState === 'connecting' || 
@@ -293,7 +297,9 @@ export default function Dashboard() {
   };
 
   const lastUpdatedLabel = sensorData.lastUpdated
-    ? `Updated ${sensorData.lastUpdated.toLocaleTimeString()}`
+    ? (isDeviceOnline
+        ? `Updated ${sensorData.lastUpdated.toLocaleTimeString()}`
+        : `Last known: ${sensorData.lastUpdated.toLocaleTimeString()}`)
     : "No data received yet";
 
   const displayPumpStatus = optimisticPumpStatus || pumpStatus;
@@ -342,6 +348,7 @@ export default function Dashboard() {
           <ConnectionDot
             connectionState={connectionState}
             hasReceivedData={hasReceivedData}
+            isLiveData={isLiveData}
             deviceStatusFlags={deviceStatusFlags}
             background={theme.colors.surface}
           />
@@ -425,9 +432,21 @@ export default function Dashboard() {
       </View>
 
       {/* ── Last updated timestamp ────────────────────────────────────────── */}
-      <Text style={[styles.lastUpdated, { color: theme.colors.textSecondary }]}>
-        {lastUpdatedLabel}
-      </Text>
+      <View style={styles.lastUpdatedRow}>
+        <Text style={[styles.lastUpdated, { color: theme.colors.textSecondary }]}>
+          {lastUpdatedLabel}
+        </Text>
+        {/* ✅ Cached-data badge — makes it obvious these are the LAST known
+            values, and the device hasn't reported fresh data yet. */}
+        {sensorData.lastUpdated && !isDeviceOnline && (
+          <View style={[styles.lastKnownBadge, { backgroundColor: `${'#FF9800'}1A` }]}>
+            <Ionicons name="cloud-download-outline" size={12} color="#FF9800" />
+            <Text style={[styles.lastKnownBadgeText, { color: '#FF9800' }]}>
+              Last known data
+            </Text>
+          </View>
+        )}
+      </View>
 
       {/* ── Pump Control ──────────────────────────────────────────────────── */}
       <View
@@ -498,10 +517,13 @@ export default function Dashboard() {
 
         <Text style={styles.pumpStatus}>
           {isDeviceOffline ? "Device Offline" :
-           isDeviceWaiting ? "⏳ Connecting to device..." :
            isModeSwitching ? "Switching Mode..." :
            isAutoMode ? `🤖 Auto Mode - Switch to Manual to control (${currentModeDisplay})` :
-           `Pump is ${displayPumpStatus === "ON" ? "RUNNING" : "OFF"}`}
+           isDeviceWaiting
+             ? (actuatorStatus?.water_pump !== null && actuatorStatus?.water_pump !== undefined
+                ? `Pump is ${displayPumpStatus === "ON" ? "RUNNING" : "OFF"} (last known)`
+                : "⏳ Connecting to device...")
+             : `Pump is ${displayPumpStatus === "ON" ? "RUNNING" : "OFF"}`}
           {isPublishing && " (Sending...)"}
         </Text>
 
@@ -520,8 +542,12 @@ export default function Dashboard() {
         {SENSOR_CONFIG.map((sensor) => {
           const liveValue = sensorData[sensor.dataKey];
           const hasValue = liveValue !== null && liveValue !== undefined;
+          // ✅ Cached values are shown even while reconnecting — the value is
+          // tinted orange (last-known) until the device is confirmed online.
           const active = isDeviceOnline && hasValue;
-          const tint = active ? sensor.color : (isDeviceWaiting ? '#FF9800' : '#9E9E9E');
+          const tint = hasValue
+            ? (active ? sensor.color : (isDeviceWaiting ? '#FF9800' : '#9E9E9E'))
+            : (isDeviceWaiting ? '#FF9800' : '#9E9E9E');
 
           return (
             <TouchableOpacity
@@ -530,7 +556,7 @@ export default function Dashboard() {
                 styles.sensorCard,
                 {
                   backgroundColor: theme.colors.card,
-                  borderColor: active ? `${tint}55` : (isDeviceWaiting ? '#FF980055' : theme.colors.border),
+                  borderColor: hasValue ? `${tint}55` : (isDeviceWaiting ? '#FF980055' : theme.colors.border),
                 },
               ]}
               onPress={() =>
@@ -545,14 +571,14 @@ export default function Dashboard() {
                 <Ionicons name={sensor.icon} size={22} color={tint} />
               </View>
               <Text
-                style={[styles.sensorValue, { color: active ? tint : (isDeviceWaiting ? '#FF9800' : '#9E9E9E') }]}
+                style={[styles.sensorValue, { color: tint }]}
                 numberOfLines={1}
                 adjustsFontSizeToFit
               >
-                {active ? `${fmt(liveValue)}${sensor.unit}` : (isDeviceWaiting ? '...' : '_ _')}
+                {hasValue ? `${fmt(liveValue)}${sensor.unit}` : (isDeviceWaiting ? '...' : '_ _')}
               </Text>
               <Text
-                style={[styles.sensorName, { color: active ? theme.colors.text : (isDeviceWaiting ? '#FF9800' : '#9E9E9E') }]}
+                style={[styles.sensorName, { color: hasValue ? theme.colors.text : (isDeviceWaiting ? '#FF9800' : '#9E9E9E') }]}
                 numberOfLines={1}
               >
                 {sensor.name}
@@ -657,11 +683,28 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
 
-  lastUpdated: {
-    fontSize: 11,
+  lastUpdatedRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
     marginHorizontal: 20,
     marginBottom: 12,
+  },
+  lastUpdated: {
+    fontSize: 11,
     opacity: 0.7,
+  },
+  lastKnownBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  lastKnownBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
   },
 
   pumpCard: {

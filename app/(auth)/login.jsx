@@ -87,7 +87,7 @@ export default function LoginScreen() {
             },
             { 
               text: "Forgot Password?", 
-              onPress: () => router.push("/(auth)/forgot-password") 
+              onPress: () => handleForgotPassword() 
             }
           ]
         );
@@ -134,6 +134,24 @@ export default function LoginScreen() {
       default:
         Alert.alert("Login Failed", result.error || "An unexpected error occurred", [{ text: "OK" }]);
     }
+  };
+
+  // ✅ Forgot password — no backend endpoint yet, route users to support
+  const handleForgotPassword = () => {
+    Alert.alert(
+      "Forgot Password?",
+      "Password reset is coming soon. Please contact support to regain access to your account.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Contact Support",
+          onPress: () =>
+            Linking.openURL(
+              "mailto:support@agriarch.io?subject=Forgot%20Password"
+            ),
+        },
+      ]
+    );
   };
 
   const handleLogin = async () => {
@@ -279,7 +297,7 @@ export default function LoginScreen() {
 
               <TouchableOpacity 
                 style={styles.forgotPassword}
-                onPress={() => router.push("/(auth)/forgot-password")}
+                onPress={handleForgotPassword}
               >
                 <Text style={[styles.forgotPasswordText, { color: GREEN }]}>
                   Forgot password?
