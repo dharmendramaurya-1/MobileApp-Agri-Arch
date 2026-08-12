@@ -16,10 +16,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 // ✅ CORRECT - Context from src/context/
 import { SENSORS } from "../../src/config/sensorConfigs";
-import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useAlerts } from '../../src/context/AlertContext';
 import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
+import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useSystemMode } from "../../src/context/SystemModeContext";
 import { useTheme } from "../../src/context/ThemContext";
 import { user_profile } from "../../src/services/profile/profile";
@@ -31,21 +31,45 @@ const SENSOR_CONFIG = SENSORS.map((sensor) => ({
   dataKey: sensor.dataKey,
   unit: sensor.unit,
   color: sensor.color,
-  icon: sensor.icon, // ✅ each sensor's own icon
+  icon: sensor.icon,
   maxValue: sensor.maxValue,
 }));
 
 // ── Connection status dot ─────────────────────────────────────────────────────
-function ConnectionDot({ hasReceivedData, deviceStatusFlags, background }) {
-  // ✅ Online only when data received AND device reports online (Bit 17)
+function ConnectionDot({ connectionState, hasReceivedData, deviceStatusFlags, background }) {
+  // ✅ Green: Device is online and data received
   const isOnline = hasReceivedData && deviceStatusFlags?.online === true;
-  const color = isOnline ? '#4CAF50' : '#F44336';
+  
+  // ✅ Orange: Connecting, waiting, or no data yet
+  const isWaiting = connectionState === 'connecting' || 
+                    connectionState === 'waiting' || 
+                    connectionState === 'idle' ||
+                    (!hasReceivedData && connectionState !== 'offline');
+  
+  // ✅ Red: Offline or disconnected
+  const isOffline = connectionState === 'offline' || 
+                    connectionState === 'disconnected' ||
+                    connectionState === 'error';
+
+  let color = '#9E9E9E'; // Default grey
+  let label = 'Unknown';
+
+  if (isOnline) {
+    color = '#4CAF50'; // Green
+    label = 'Online';
+  } else if (isWaiting) {
+    color = '#FF9800'; // Orange
+    label = 'Connecting...';
+  } else if (isOffline) {
+    color = '#F44336'; // Red
+    label = 'Offline';
+  }
 
   return (
     <View style={[styles.connectionRow, { backgroundColor: background }]}>
       <View style={[styles.connectionDot, { backgroundColor: color }]} />
       <Text style={[styles.connectionLabel, { color }]}>
-        {isOnline ? 'Online' : 'Offline'}
+        {label}
       </Text>
     </View>
   );
@@ -63,6 +87,7 @@ function fmt(value) {
 }
 
 function formatDuration(seconds) {
+  if (!seconds || seconds < 0) return 'N/A';
   if (seconds < 60) return `${seconds}s`;
   if (seconds % 60 === 0) return `${seconds / 60} min`;
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
@@ -104,32 +129,53 @@ export default function Dashboard() {
     connectionState,
   } = useMqtt();
 
-  const { isManualMode, isModeLoaded, checkBeforeActuator } = useSystemMode();
+  // ✅ System Mode Context
+  const {
+    mode,
+    modeDisplay,
+    isManualMode,
+    isAutoMode,
+    isModeLoaded,
+    isSwitching: isModeSwitching,
+    modeLocked,
+    checkBeforeActuator,
+    switchToManual,
+    switchToAuto,
+    toggleMode,
+    canPublish: systemCanPublish,
+    getModeIcon,
+    getModeColor,
+    getModeDisplay,
+  } = useSystemMode();
 
   const { addAlert } = useAlerts();
 
   const [pumpStatus, setPumpStatus] = useState("OFF");
   const [isPublishing, setIsPublishing] = useState(false);
   const [optimisticPumpStatus, setOptimisticPumpStatus] = useState(null);
-  const [isSwitchingMode, setIsSwitchingMode] = useState(false);
-  const [modeSwitchPending, setModeSwitchPending] = useState(false);
   const [pumpToggleTime, setPumpToggleTime] = useState(null);
-  const pendingActionRef = useRef(null);
 
-  // ── Check if device is offline ──────────────────────────────────────────
-  // ✅ Device is offline if:
-  // 1. No data received yet, OR
-  // 2. Device reports offline (Bit 17 = 0)
-  const isOffline = !hasReceivedData || 
-                    (deviceStatusFlags?.online === false) || 
-                    connectionState === 'offline' ||
-                    connectionState === 'disconnected';
-
-  // ── Check if device is online ────────────────────────────────────────────
+  // ── Check device status ──────────────────────────────────────────────────
+  // ✅ Green: Online and data received
   const isDeviceOnline = hasReceivedData && deviceStatusFlags?.online === true;
+  
+  // ✅ Orange: Waiting for data or connecting
+  const isDeviceWaiting = connectionState === 'connecting' || 
+                          connectionState === 'waiting' || 
+                          connectionState === 'idle' ||
+                          (!hasReceivedData && connectionState !== 'offline');
+  
+  // ✅ Red: Offline or error
+  const isDeviceOffline = connectionState === 'offline' || 
+                          connectionState === 'disconnected' ||
+                          connectionState === 'error';
 
-  // ── Check if publish is allowed ─────────────────────────────────────────
-  const canPublish = isConnected && isDeviceOnline && isManualMode && !isSwitchingMode;
+  // ── Combined publish permission ─────────────────────────────────────────
+  const canPublish = isConnected && 
+                     isDeviceOnline && 
+                     systemCanPublish && 
+                     !isModeSwitching && 
+                     !isPublishing;
 
   // ── Update pump status from actuatorStatus ──────────────────────────────
   useEffect(() => {
@@ -154,81 +200,10 @@ export default function Dashboard() {
     }
   }, [actuatorStatus, addAlert]);
 
-  // ── Monitor deviceConfig for mode switch confirmation ────────────────────
-  useEffect(() => {
-    if (deviceConfig && modeSwitchPending) {
-      if (deviceConfig.auto_mode === false) {
-        console.log("✅ Mode switch confirmed - Now in MANUAL mode");
-        setModeSwitchPending(false);
-        setIsSwitchingMode(false);
-        
-        if (pendingActionRef.current) {
-          const action = pendingActionRef.current;
-          pendingActionRef.current = null;
-          if (action === 'togglePump') {
-            performPumpToggle();
-          }
-        }
-      }
-    }
-  }, [deviceConfig, modeSwitchPending]);
-
-  // ── SWITCH TO MANUAL MODE WITH CALLBACK ──────────────────────────────────
-  const switchToManualModeWithCallback = useCallback(async (callback) => {
-    if (isSwitchingMode || isPublishing) return;
-
-    if (isOffline) {
-      Alert.alert("Device Offline", "Cannot switch mode while device is offline.");
-      return;
-    }
-
-    if (!deviceConfig) {
-      Alert.alert("Error", "Device configuration not available.");
-      return;
-    }
-
-    setIsSwitchingMode(true);
-    setModeSwitchPending(true);
-
-    try {
-      const manualModeConfig = {
-        report_interval: deviceConfig.report_interval || 120,
-        sampling_interval: deviceConfig.sampling_interval || 30,
-        auto_mode: false,
-      };
-
-      const success = await publishConfig(manualModeConfig);
-
-      if (success) {
-        pendingActionRef.current = callback;
-        
-        Alert.alert(
-          "🔄 Switching Mode",
-          "Switching to MANUAL mode...\n\n" +
-          "Please wait for confirmation from the device.\n" +
-          "Your action will be performed automatically after mode switch.",
-          [{ text: "OK" }]
-        );
-        
-        return true;
-      } else {
-        setModeSwitchPending(false);
-        setIsSwitchingMode(false);
-        Alert.alert("Failed", "Could not switch to MANUAL mode.");
-        return false;
-      }
-    } catch (error) {
-      console.error("Error switching to manual mode:", error);
-      setModeSwitchPending(false);
-      setIsSwitchingMode(false);
-      return false;
-    }
-  }, [isSwitchingMode, isPublishing, isOffline, deviceConfig, publishConfig]);
-
   // ── PERFORM PUMP TOGGLE ─────────────────────────────────────────────────────
   const performPumpToggle = useCallback(async () => {
     if (isPublishing) return;
-    if (isOffline) {
+    if (isDeviceOffline) {
       Alert.alert("Device Offline", "Cannot control pump while device is offline.");
       return;
     }
@@ -266,66 +241,50 @@ export default function Dashboard() {
     } finally {
       setIsPublishing(false);
     }
-  }, [actuatorStatus, isPublishing, isOffline, toggleDeviceStatus, addAlert]);
+  }, [actuatorStatus, isPublishing, isDeviceOffline, toggleDeviceStatus, addAlert]);
 
-  // ── PUMP CONTROL WITH MODE CHECK ──────────────────────────────────────────
+  // ── PUMP CONTROL WITH SYSTEM MODE ──────────────────────────────────────────
   const togglePump = useCallback(async () => {
-    if (isPublishing || isSwitchingMode) return;
+    // Check if already busy
+    if (isPublishing || isModeSwitching) {
+      Alert.alert("⏳ Busy", "Please wait for current operation to complete.");
+      return;
+    }
 
-    if (isOffline) {
+    // Check device online
+    if (isDeviceOffline) {
       Alert.alert("Device Offline", "Cannot control pump while device is offline.");
       return;
     }
 
-    if (!isManualMode && isModeLoaded) {
-      Alert.alert(
-        "🤖 Auto Mode Active",
-        "Cannot control pump while system is in AUTO mode.\n\n" +
-        "Current Mode: AUTO\n" +
-        `Report Interval: ${formatDuration(deviceConfig?.report_interval || 120)}\n` +
-        `Sampling Interval: ${formatDuration(deviceConfig?.sampling_interval || 30)}\n\n` +
-        "Please switch to MANUAL mode to control devices.\n\n" +
-        "Select an option below:",
-        [
-          { 
-            text: "Cancel", 
-            style: "cancel" 
-          },
-          { 
-            text: "🔧 Switch to Manual Now", 
-            onPress: async () => {
-              await switchToManualModeWithCallback('togglePump');
-            },
-            style: "default"
-          },
-          { 
-            text: "⚙️ Go to Settings", 
-            onPress: () => {
-              router.push("/(main)/settings");
-            },
-            style: "default"
-          }
-        ],
-        { cancelable: true }
-      );
+    // Check if device is waiting (orange)
+    if (isDeviceWaiting) {
+      Alert.alert("⏳ Connecting", "Device is connecting. Please wait...");
       return;
     }
 
-    if (!checkBeforeActuator("Water Pump")) {
+    // Check if mode is loaded
+    if (!isModeLoaded) {
+      Alert.alert("⏳ Loading", "Please wait for system mode to load.");
       return;
     }
 
+    // ✅ Use SystemModeContext's checkBeforeActuator
+    const canControl = checkBeforeActuator("Water Pump");
+    if (!canControl) {
+      return;
+    }
+
+    // ✅ In MANUAL mode - perform pump toggle
     await performPumpToggle();
   }, [
-    isManualMode,
-    isModeLoaded,
     isPublishing,
-    isSwitchingMode,
-    isOffline,
-    deviceConfig,
+    isModeSwitching,
+    isDeviceOffline,
+    isDeviceWaiting,
+    isModeLoaded,
     checkBeforeActuator,
     performPumpToggle,
-    switchToManualModeWithCallback,
   ]);
 
   // ── Navigate to Settings ──────────────────────────────────────────────────
@@ -338,6 +297,22 @@ export default function Dashboard() {
     : "No data received yet";
 
   const displayPumpStatus = optimisticPumpStatus || pumpStatus;
+
+  // ── Get mode display info from SystemModeContext ──────────────────────
+  const modeIcon = getModeIcon ? getModeIcon() : (isManualMode ? '🔧' : '🤖');
+  const modeColor = getModeColor ? getModeColor() : (isManualMode ? '#4CAF50' : '#FF9800');
+  const currentModeDisplay = getModeDisplay ? getModeDisplay() : modeDisplay;
+
+  // ── Get status color for pump card ──────────────────────────────────────
+  const getPumpCardColor = () => {
+    if (isDeviceOnline) {
+      return displayPumpStatus === "ON" ? "#4CAF50" : "#F44336";
+    } else if (isDeviceWaiting) {
+      return "#FF9800"; // Orange
+    } else {
+      return "#9E9E9E"; // Grey for offline
+    }
+  };
 
   return (
     <ScrollView
@@ -363,29 +338,72 @@ export default function Dashboard() {
             Real-time Farm Analytics Dashboard
           </Text>
           
+          {/* ✅ Connection Status with Orange/Green/Red */}
           <ConnectionDot
+            connectionState={connectionState}
             hasReceivedData={hasReceivedData}
             deviceStatusFlags={deviceStatusFlags}
             background={theme.colors.surface}
           />
 
-          {/* ✅ Show mode only if device is online */}
+          {/* ✅ System Mode Status */}
           {isDeviceOnline && isModeLoaded && (
-            <View style={styles.modeStatusRow}>
-              <Text style={[styles.modeStatusLabel, { color: theme.colors.textSecondary }]}>
-                System Mode:
-              </Text>
-              <Text style={[styles.modeStatusValue, {
-                color: isManualMode ? '#4CAF50' : '#FF9800',
-                fontWeight: '700'
-              }]}>
-                {isManualMode ? '🔧 MANUAL' : '🤖 AUTO'}
-              </Text>
-              {isSwitchingMode && (
-                <Text style={[styles.modeSwitchingText, { color: '#FF9800' }]}>
-                  ⏳ Switching...
+            <TouchableOpacity 
+              style={styles.modeStatusContainer}
+              onPress={() => {
+                if (!isModeSwitching && !modeLocked) {
+                  toggleMode();
+                }
+              }}
+              disabled={isModeSwitching || modeLocked}
+              activeOpacity={0.7}
+            >
+              <View style={styles.modeStatusRow}>
+                <Text style={[styles.modeStatusLabel, { color: theme.colors.textSecondary }]}>
+                  System Mode:
                 </Text>
-              )}
+                <Text style={[styles.modeStatusValue, {
+                  color: modeColor,
+                  fontWeight: '700'
+                }]}>
+                  {modeIcon} {isManualMode ? 'MANUAL' : 'AUTO'}
+                </Text>
+                {isModeSwitching && (
+                  <Text style={[styles.modeSwitchingText, { color: '#FF9800' }]}>
+                    ⏳ Switching...
+                  </Text>
+                )}
+                <TouchableOpacity 
+                  style={styles.modeInfoButton}
+                  onPress={() => {
+                    Alert.alert(
+                      isManualMode ? '💡 Manual Mode' : '🤖 Auto Mode',
+                      isManualMode 
+                        ? 'You can control devices individually.\n\nTap to switch to AUTO mode.'
+                        : 'System controls devices automatically.\n\nTap to switch to MANUAL mode to control devices individually.',
+                      [
+                        { text: 'OK', style: 'default' },
+                        ...(isManualMode 
+                          ? [{ text: 'Switch to AUTO', onPress: switchToAuto }]
+                          : [{ text: 'Switch to MANUAL', onPress: switchToManual }]
+                        )
+                      ]
+                    );
+                  }}
+                >
+                  <Ionicons name="information-circle-outline" size={18} color={modeColor} />
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {/* ✅ Show mode switching progress */}
+          {isModeSwitching && (
+            <View style={styles.modeSwitchingProgress}>
+              <ActivityIndicator size="small" color="#FF9800" />
+              <Text style={[styles.modeSwitchingProgressText, { color: '#FF9800' }]}>
+                Switching mode...
+              </Text>
             </View>
           )}
 
@@ -416,8 +434,8 @@ export default function Dashboard() {
         style={[
           styles.pumpCard,
           {
-            backgroundColor: isOffline ? '#999' : displayPumpStatus === "ON" ? "#4CAF50" : "#F44336",
-            opacity: isOffline || !canPublish ? 0.6 : 1,
+            backgroundColor: getPumpCardColor(),
+            opacity: isDeviceOffline ? 0.6 : 1,
           },
         ]}
       >
@@ -429,22 +447,33 @@ export default function Dashboard() {
                 Last toggle: {pumpToggleTime}
               </Text>
             )}
-            {isOffline && (
+            {isDeviceWaiting && (
+              <Text style={styles.pumpTimeText}>
+                ⏳ Connecting...
+              </Text>
+            )}
+            {isDeviceOffline && (
               <Text style={styles.pumpTimeText}>
                 ⚠️ Offline - No control
               </Text>
             )}
-            {!isManualMode && isModeLoaded && isDeviceOnline && (
+            {isAutoMode && isModeLoaded && isDeviceOnline && (
               <Text style={styles.pumpTimeText}>
-                🔒 Auto Mode - Click to switch
+                🔒 Auto Mode - Tap to switch
+              </Text>
+            )}
+            {isModeSwitching && (
+              <Text style={styles.pumpTimeText}>
+                ⏳ Switching mode...
               </Text>
             )}
           </View>
 
+          {/* ✅ Mode Badge */}
           {isDeviceOnline && isModeLoaded && (
-            <View style={styles.pumpModeBadge}>
+            <View style={[styles.pumpModeBadge, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
               <Text style={styles.pumpModeBadgeText}>
-                {isManualMode ? '🔧 Manual' : '🤖 Auto'}
+                {modeIcon} {isManualMode ? 'Manual' : 'Auto'}
               </Text>
             </View>
           )}
@@ -452,12 +481,12 @@ export default function Dashboard() {
           <TouchableOpacity
             style={[
               styles.pumpButton,
-              (!canPublish || isPublishing || isSwitchingMode) && styles.pumpButtonDisabled,
+              (!canPublish || isPublishing || isModeSwitching) && styles.pumpButtonDisabled,
             ]}
             onPress={togglePump}
-            disabled={!canPublish || isPublishing || isSwitchingMode}
+            disabled={!canPublish || isPublishing || isModeSwitching}
           >
-            {isPublishing || isSwitchingMode ? (
+            {isPublishing || isModeSwitching ? (
               <ActivityIndicator size="small" color="#FFF" />
             ) : (
               <Text style={styles.pumpButtonText}>
@@ -466,13 +495,16 @@ export default function Dashboard() {
             )}
           </TouchableOpacity>
         </View>
+
         <Text style={styles.pumpStatus}>
-          {isOffline ? "Device Offline" :
-           !isManualMode ? "Auto Mode - Switch to Manual to control" :
+          {isDeviceOffline ? "Device Offline" :
+           isDeviceWaiting ? "⏳ Connecting to device..." :
+           isModeSwitching ? "Switching Mode..." :
+           isAutoMode ? `🤖 Auto Mode - Switch to Manual to control (${currentModeDisplay})` :
            `Pump is ${displayPumpStatus === "ON" ? "RUNNING" : "OFF"}`}
           {isPublishing && " (Sending...)"}
-          {isSwitchingMode && " (Switching Mode...)"}
         </Text>
+
         <View style={styles.pumpStats}>
           <Text style={styles.pumpStatText}>⚡ 2.5 kW</Text>
           <Text style={styles.pumpStatText}>⏱️ Last run: {pumpToggleTime || 'N/A'}</Text>
@@ -488,8 +520,8 @@ export default function Dashboard() {
         {SENSOR_CONFIG.map((sensor) => {
           const liveValue = sensorData[sensor.dataKey];
           const hasValue = liveValue !== null && liveValue !== undefined;
-          const active = !isOffline && hasValue;
-          const tint = active ? sensor.color : '#9E9E9E';
+          const active = isDeviceOnline && hasValue;
+          const tint = active ? sensor.color : (isDeviceWaiting ? '#FF9800' : '#9E9E9E');
 
           return (
             <TouchableOpacity
@@ -498,7 +530,7 @@ export default function Dashboard() {
                 styles.sensorCard,
                 {
                   backgroundColor: theme.colors.card,
-                  borderColor: active ? `${tint}55` : theme.colors.border,
+                  borderColor: active ? `${tint}55` : (isDeviceWaiting ? '#FF980055' : theme.colors.border),
                 },
               ]}
               onPress={() =>
@@ -513,14 +545,14 @@ export default function Dashboard() {
                 <Ionicons name={sensor.icon} size={22} color={tint} />
               </View>
               <Text
-                style={[styles.sensorValue, { color: active ? tint : '#9E9E9E' }]}
+                style={[styles.sensorValue, { color: active ? tint : (isDeviceWaiting ? '#FF9800' : '#9E9E9E') }]}
                 numberOfLines={1}
                 adjustsFontSizeToFit
               >
-                {active ? `${fmt(liveValue)}${sensor.unit}` : '_ _'}
+                {active ? `${fmt(liveValue)}${sensor.unit}` : (isDeviceWaiting ? '...' : '_ _')}
               </Text>
               <Text
-                style={[styles.sensorName, { color: active ? theme.colors.text : '#9E9E9E' }]}
+                style={[styles.sensorName, { color: active ? theme.colors.text : (isDeviceWaiting ? '#FF9800' : '#9E9E9E') }]}
                 numberOfLines={1}
               >
                 {sensor.name}
@@ -590,11 +622,14 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 
+  modeStatusContainer: {
+    marginTop: 4,
+  },
   modeStatusRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 4,
     gap: 6,
+    flexWrap: "wrap",
   },
   modeStatusLabel: {
     fontSize: 12,
@@ -607,7 +642,19 @@ const styles = StyleSheet.create({
   modeSwitchingText: {
     fontSize: 12,
     fontWeight: "600",
-    marginLeft: 4,
+  },
+  modeInfoButton: {
+    padding: 2,
+  },
+  modeSwitchingProgress: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  modeSwitchingProgressText: {
+    fontSize: 12,
+    fontWeight: "500",
   },
 
   lastUpdated: {
@@ -656,7 +703,6 @@ const styles = StyleSheet.create({
   pumpStatText: { fontSize: 10, color: "#FFF", opacity: 0.9 },
 
   pumpModeBadge: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 12,
