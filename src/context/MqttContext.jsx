@@ -145,6 +145,14 @@ let lastKnownConfigState = {
   auto_mode: false,
 };
 
+// ✅ Storage keys
+const STORAGE_KEYS = {
+  EXTERNAL_KEY: 'external_key',
+  ACTIVE_DEVICE_ID: 'active_device_id',
+  PUBLISHER_ID: 'publisher_id',
+  REPORT_INTERVAL: 'report_interval',
+  TIMEOUT_DURATION: 'timeout_duration',
+};
 
 function parseActuatorToDevices(raw) {
   try {
@@ -174,19 +182,17 @@ function parseActuatorToDevices(raw) {
 }
 
 // ── Payload Builders ──────────────────────────────────────────────────────────
-
-// ✅ UPDATED: Actuator payload with shortened names
 function buildActuatorPayload(status) {
   const payload = [
     { bn: "urn:dev:9003718EEB3F:", bt: Math.floor(Date.now() / 1000) }
   ];
   
   const actuatorFields = [
-    { n: "WatPmp", vb: status.water_pump },      // ✅ Changed
-    { n: "Wat_ILV", vb: status.water_ILvalve },  // ✅ Changed
-    { n: "Wat_OLV", vb: status.water_OLvalve },  // ✅ Changed
-    { n: "NUT_PMP", vb: status.nutrient_pump },  // ✅ Changed
-    { n: "BootAck", vb: status.reboot_ack }      // ✅ Changed
+    { n: "WatPmp", vb: status.water_pump },
+    { n: "Wat_ILV", vb: status.water_ILvalve },
+    { n: "Wat_OLV", vb: status.water_OLvalve },
+    { n: "NUT_PMP", vb: status.nutrient_pump },
+    { n: "BootAck", vb: status.reboot_ack }
   ];
   
   for (const field of actuatorFields) {
@@ -198,37 +204,35 @@ function buildActuatorPayload(status) {
   return payload;
 }
 
-// ✅ UPDATED: Settings payload with shortened names
 function buildSettingsPayload(settings, externalKey) {
   return [
     { bn: `urn:dev:${externalKey}:`, bt: Math.floor(Date.now() / 1000) },
-    { n: "AMBTL", v: settings.tempLow },          // ✅ Changed from TL
-    { n: "AMTHI", v: settings.tempHigh },         // ✅ Changed from TH
-    { n: "HUMLO", v: settings.humidityLow },      // ✅ Changed from HL
-    { n: "HUMHI", v: settings.humidityHigh },     // ✅ Changed from HH
-    { n: "WTLO", v: settings.waterTempLow },      // ✅ Changed from WTL
-    { n: "WTHI", v: settings.waterTempHigh },     // ✅ Changed from WTH
-    { n: "WLLP", v: settings.waterLevelLow || 20 },  // ✅ Changed from WLL
-    { n: "WLHP", v: settings.waterLevelHigh || 80 }, // ✅ Changed from WLH
-    { n: "pHLO", v: settings.phLow },             // ✅ Changed from pHL
-    { n: "pHHI", v: settings.phHigh },            // ✅ Changed from pHH
-    { n: "Co2LO", v: settings.co2Low },           // ✅ Changed from co2L
-    { n: "Co2HI", v: settings.co2High },          // ✅ Changed from co2H
-    { n: "LUXLO", v: settings.luxLow },           // ✅ Changed from LL
-    { n: "LUXHI", v: settings.luxHigh },          // ✅ Changed from LH
+    { n: "AMBTL", v: settings.tempLow },
+    { n: "AMTHI", v: settings.tempHigh },
+    { n: "HUMLO", v: settings.humidityLow },
+    { n: "HUMHI", v: settings.humidityHigh },
+    { n: "WTLO", v: settings.waterTempLow },
+    { n: "WTHI", v: settings.waterTempHigh },
+    { n: "WLLP", v: settings.waterLevelLow || 20 },
+    { n: "WLHP", v: settings.waterLevelHigh || 80 },
+    { n: "pHLO", v: settings.phLow },
+    { n: "pHHI", v: settings.phHigh },
+    { n: "Co2LO", v: settings.co2Low },
+    { n: "Co2HI", v: settings.co2High },
+    { n: "LUXLO", v: settings.luxLow },
+    { n: "LUXHI", v: settings.luxHigh },
     { n: "ECL", v: settings.ecLow },
     { n: "ECH", v: settings.ecHigh },
-    { n: "Dimm", v: settings.dimming || 75 },     // ✅ Changed from DL
+    { n: "Dimm", v: settings.dimming || 75 },
   ];
 }
 
-// ✅ UPDATED: Config payload with shortened names
 function buildConfigPayload(deviceId, config) {
   return [
     { bn: `urn:dev:${deviceId}:cfg/`, bt: Math.floor(Date.now() / 1000) },
-    { n: "RPT_INT", v: config.report_interval },   // ✅ Changed from report_interval
-    { n: "SAMP_INT", v: config.sampling_interval }, // ✅ Changed from sampling_interval
-    { n: "AutoMode", vb: config.auto_mode },       // ✅ Changed from auto_mode
+    { n: "RPT_INT", v: config.report_interval },
+    { n: "SAMP_INT", v: config.sampling_interval },
+    { n: "AutoMode", vb: config.auto_mode },
   ];
 }
 
@@ -250,32 +254,16 @@ export const MqttProvider = ({ children }) => {
   // CURRENT connection state (connecting/offline) instead of cached online.
   const [isLiveData, setIsLiveData] = useState(false);
   const [deviceStatus, setDeviceStatus] = useState(null);
-  
-  // ✅ Device status flags from 32-bit parsing
   const [deviceStatusFlags, setDeviceStatusFlags] = useState(getDefaultDeviceStatus());
-  
-  // ✅ Connection state management
   const [connectionState, setConnectionState] = useState('idle');
-  // idle | connecting | waiting (orange) | online (green) | offline (red)
-  
-  // ✅ Track if device has ever been online
   const [hasEverBeenOnline, setHasEverBeenOnline] = useState(false);
   
-  // ✅ How long to wait for a newly connected device's first response before marking it offline
-  const getInitialResponseTimeout = () => {
-    const intervalMs = reportInterval > 0 ? reportInterval * 1000 : 0;
-    return Math.min(Math.max(intervalMs, 60000), 300000);
-  };
-
-  // ✅ Report interval from config - default 30 minutes (1800 seconds)
+  // ✅ Default report interval: 1800 seconds (30 minutes)
   const [reportInterval, setReportInterval] = useState(1800);
-  const [timeoutDuration, setTimeoutDuration] = useState(3600); // 2x report interval
+  const [timeoutDuration, setTimeoutDuration] = useState(3600);
   
-  // ✅ Timeout check refs
   const timeoutCheckInterval = useRef(null);
   const lastDataReceivedTime = useRef(null);
-
-  // ✅ Initial response check refs
   const initialResponseTimer = useRef(null);
   const hasReceivedDataRef = useRef(false);
   const activeDeviceIdRef = useRef(null);
@@ -283,7 +271,6 @@ export const MqttProvider = ({ children }) => {
   // externalKey that the current in-memory sensor data belongs to
   const sensorDataKeyRef = useRef(null);
   
-  // ✅ Multiple device support
   const [availableDevices, setAvailableDevices] = useState([]);
   const [activeDeviceId, setActiveDeviceId] = useState(null);
   const [deviceConnectionStatus, setDeviceConnectionStatus] = useState({});
@@ -327,16 +314,56 @@ export const MqttProvider = ({ children }) => {
     console.log("=== END DEBUG ===");
   };
 
+  // ── Load saved device from AsyncStorage ──────────────────────────────────
+  const loadSavedDevice = async () => {
+    try {
+      // ✅ Load external_key
+      const savedKey = await AsyncStorage.getItem(STORAGE_KEYS.EXTERNAL_KEY);
+      if (savedKey) {
+        console.log("📦 Loaded saved external_key:", savedKey);
+        setExternalKey(savedKey);
+      }
+
+      // ✅ Load active device ID
+      const savedDeviceId = await AsyncStorage.getItem(STORAGE_KEYS.ACTIVE_DEVICE_ID);
+      if (savedDeviceId) {
+        console.log("📦 Loaded saved activeDeviceId:", savedDeviceId);
+        setActiveDeviceId(savedDeviceId);
+      }
+
+      return { savedKey, savedDeviceId };
+    } catch (error) {
+      console.error("❌ Error loading saved device:", error);
+      return { savedKey: null, savedDeviceId: null };
+    }
+  };
+
+  // ── Save device to AsyncStorage ──────────────────────────────────────────
+  const saveDevice = async (key, deviceId) => {
+    try {
+      if (key) {
+        await AsyncStorage.setItem(STORAGE_KEYS.EXTERNAL_KEY, key);
+        console.log("💾 Saved external_key:", key);
+      }
+      if (deviceId) {
+        await AsyncStorage.setItem(STORAGE_KEYS.ACTIVE_DEVICE_ID, deviceId);
+        console.log("💾 Saved activeDeviceId:", deviceId);
+      }
+    } catch (error) {
+      console.error("❌ Error saving device:", error);
+    }
+  };
+
   // ── Update timeout based on report interval ──────────────────────────────
   const updateTimeoutFromReportInterval = (interval) => {
     if (interval && interval > 0) {
-      const newTimeout = interval * 2;
+      const newTimeout = Math.max(interval * 2, 3600); // Minimum 1 hour
       setReportInterval(interval);
       setTimeoutDuration(newTimeout);
-      console.log(`📡 Report interval: ${interval}s, Timeout set to: ${newTimeout}s (2x)`);
+      console.log(`📡 Report interval: ${interval}s, Timeout set to: ${newTimeout}s (${Math.round(newTimeout/60)} minutes)`);
       
-      AsyncStorage.setItem('report_interval', String(interval)).catch(console.error);
-      AsyncStorage.setItem('timeout_duration', String(newTimeout)).catch(console.error);
+      AsyncStorage.setItem(STORAGE_KEYS.REPORT_INTERVAL, String(interval)).catch(console.error);
+      AsyncStorage.setItem(STORAGE_KEYS.TIMEOUT_DURATION, String(newTimeout)).catch(console.error);
       
       return newTimeout;
     }
@@ -347,8 +374,8 @@ export const MqttProvider = ({ children }) => {
   useEffect(() => {
     const loadSavedValues = async () => {
       try {
-        const savedInterval = await AsyncStorage.getItem('report_interval');
-        const savedTimeout = await AsyncStorage.getItem('timeout_duration');
+        const savedInterval = await AsyncStorage.getItem(STORAGE_KEYS.REPORT_INTERVAL);
+        const savedTimeout = await AsyncStorage.getItem(STORAGE_KEYS.TIMEOUT_DURATION);
         
         if (savedInterval) {
           setReportInterval(Number(savedInterval));
@@ -596,10 +623,10 @@ export const MqttProvider = ({ children }) => {
   // ── Load External Key ────────────────────────────────────────────────────
   const loadExternalKey = async () => {
     try {
-      let storedKey = await AsyncStorage.getItem("external_key");
+      let storedKey = await AsyncStorage.getItem(STORAGE_KEYS.EXTERNAL_KEY);
       
       if (!storedKey) {
-        console.log("ℹ️ No external_key found in storage. Will be set during device addition.");
+        console.log("ℹ️ No external_key found in storage.");
         return null;
       }
       console.log("✅ Found stored external_key:", storedKey);
@@ -719,7 +746,7 @@ export const MqttProvider = ({ children }) => {
       console.log('⏳ Data already received this session — skipping initial response check');
       return;
     }
-    console.log(`⏳ Starting initial response check — waiting ${Math.round(timeoutMs / 1000)}s for device data...`);
+    console.log(`⏳ Starting initial response check — waiting ${Math.round(timeoutMs / 1000)}s (${Math.round(timeoutMs / 3600)} hours) for device data...`);
     initialResponseTimer.current = setTimeout(() => {
       initialResponseTimer.current = null;
       if (!isMountedRef.current) return;
@@ -734,6 +761,13 @@ export const MqttProvider = ({ children }) => {
         }
       }
     }, timeoutMs);
+  };
+
+  // ✅ Updated: Initial response timeout - minimum 1 hour (3600 seconds)
+  const getInitialResponseTimeout = () => {
+    const intervalMs = reportInterval > 0 ? reportInterval * 1000 : 0;
+    // ✅ Minimum 1 hour (3600 seconds), maximum 5 hours (18000000 seconds)
+    return Math.min(Math.max(intervalMs, 3600000), 18000000);
   };
 
   // ── Publish ──────────────────────────────────────────────────────────────
@@ -866,7 +900,7 @@ export const MqttProvider = ({ children }) => {
     try {
       if (newKey) {
         console.log("   New external key:", newKey);
-        await AsyncStorage.setItem("external_key", newKey);
+        await AsyncStorage.setItem(STORAGE_KEYS.EXTERNAL_KEY, newKey);
         setExternalKey(newKey);
         await updateMqttPassword(newKey);
       }
@@ -932,8 +966,9 @@ export const MqttProvider = ({ children }) => {
         [thingId]: 'connecting'
       }));
       
-      await AsyncStorage.setItem("publisher_id", String(thingId));
-      await AsyncStorage.setItem("external_key", externalKey);
+      await AsyncStorage.setItem(STORAGE_KEYS.PUBLISHER_ID, String(thingId));
+      await AsyncStorage.setItem(STORAGE_KEYS.EXTERNAL_KEY, externalKey);
+      await AsyncStorage.setItem(STORAGE_KEYS.ACTIVE_DEVICE_ID, thingId);
       
       setExternalKey(externalKey);
       setActiveDeviceId(thingId);
@@ -967,23 +1002,50 @@ export const MqttProvider = ({ children }) => {
       if (things && things.length > 0) {
         setAvailableDevices(things);
         
-        const active = await getActiveDevice();
+        // ✅ Try to get active device from storage first
+        const savedDeviceId = await AsyncStorage.getItem(STORAGE_KEYS.ACTIVE_DEVICE_ID);
+        const savedKey = await AsyncStorage.getItem(STORAGE_KEYS.EXTERNAL_KEY);
+        
+        console.log("📦 Saved device - ID:", savedDeviceId, "Key:", savedKey);
+        
+        let active = null;
+        
+        // ✅ Check if saved device exists
+        if (savedDeviceId && savedKey) {
+          const exists = things.find(t => t.id === savedDeviceId);
+          if (exists) {
+            active = { publisherId: savedDeviceId, externalKey: savedKey };
+            console.log("✅ Using saved device:", savedDeviceId);
+          } else {
+            console.log("⚠️ Saved device not found in list");
+          }
+        }
+        
+        // ✅ If no saved device, get from API
+        if (!active) {
+          active = await getActiveDevice();
+        }
+        
         if (active && active.publisherId) {
           const exists = things.find(t => t.id === active.publisherId);
           if (exists) {
             setActiveDeviceId(active.publisherId);
             setExternalKey(active.externalKey);
+            // ✅ Save for future
+            await saveDevice(active.externalKey, active.publisherId);
           } else {
             const firstThing = things[0];
             await setActiveDevice(firstThing.id, firstThing.external_key);
             setActiveDeviceId(firstThing.id);
             setExternalKey(firstThing.external_key);
+            await saveDevice(firstThing.external_key, firstThing.id);
           }
         } else if (things.length > 0) {
           const firstThing = things[0];
           await setActiveDevice(firstThing.id, firstThing.external_key);
           setActiveDeviceId(firstThing.id);
           setExternalKey(firstThing.external_key);
+          await saveDevice(firstThing.external_key, firstThing.id);
         }
         
         const statusMap = {};
@@ -1020,6 +1082,21 @@ export const MqttProvider = ({ children }) => {
     }
 
     console.log("🔧 initializeMqtt called");
+    
+    // ✅ Check if external_key exists in AsyncStorage
+    const storedKey = await loadExternalKey();
+    
+    if (!storedKey) {
+      console.log("⚠️ No external_key found in AsyncStorage - Skipping MQTT connection");
+      setExternalKey(null);
+      setIsReady(true);
+      setConnectionState('idle');
+      // ✅ Set isReady to true but don't connect
+      return;
+    }
+
+    // ✅ Only connect if external_key exists
+    console.log("✅ external_key found, proceeding with MQTT connection");
     setConnectionState('connecting');
     setIsInitializing(true);
     
@@ -1033,18 +1110,6 @@ export const MqttProvider = ({ children }) => {
 
       await loadAvailableDevices();
       
-      const storedKey = await loadExternalKey();
-      console.log("📦 Loaded externalKey:", storedKey);
-      
-      if (!storedKey) {
-        console.log("⚠️ No external_key found");
-        setExternalKey(null);
-        setIsReady(true);
-        setIsInitializing(false);
-        setConnectionState('idle');
-        return;
-      }
-
       setExternalKey(storedKey);
       console.log("🔑 externalKey set in state:", storedKey);
 
@@ -1364,6 +1429,9 @@ export const MqttProvider = ({ children }) => {
       }
       
       if (isAuthenticated && token) {
+        // ✅ Load saved device first
+        await loadSavedDevice();
+        
         if (!hasInitializedRef.current) {
           await initializeMqtt();
         }

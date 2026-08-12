@@ -1,5 +1,4 @@
 // app/(main)/devices.jsx — Devices tab
-// Add Device wizard + registered device list (connect / delete)
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
@@ -7,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   Dimensions,
   Modal,
   Platform,
@@ -24,12 +24,20 @@ import { useMqtt } from "../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
 import {
-  getActiveDevice,
   getAllThings,
-  setActiveDevice,
+  getStoredExternalKey,
+  getStoredPublisherId,
+  setActiveDevice
 } from "../../src/services/identify/identify";
 
 const { height } = Dimensions.get("window");
+
+// ── Storage Keys ──────────────────────────────────────────────────────────
+const STORAGE_KEYS = {
+  EXTERNAL_KEY: 'external_key',
+  ACTIVE_DEVICE_ID: 'active_device_id',
+  PUBLISHER_ID: 'publisher_id',
+};
 
 // ── Registered device card ───────────────────────────────────────────────────
 function DeviceCard({
@@ -46,8 +54,21 @@ function DeviceCard({
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
 
-  // Get connection status from MqttContext
+  // ✅ Determine device status with proper states
   const getStatus = () => {
+    // Not active device
+    if (!isActive) {
+      return {
+        status: 'inactive',
+        color: theme.colors.textSecondary,
+        bg: `${theme.colors.textSecondary}16`,
+        label: "Not Connected",
+        icon: "power-outline",
+        isOnline: false,
+      };
+    }
+
+    // Active device - checking connection
     if (isActive) {
       if (connectionStatus === "online" && isLiveData) return "online";
       // connecting/waiting/idle all mean the device is reconnecting right now
@@ -57,8 +78,6 @@ function DeviceCard({
       if (connectionStatus === "error") return "error";
       return "offline";
     }
-    return "disconnected";
-  };
 
   const status = getStatus();
 
@@ -208,7 +227,9 @@ function DeviceCard({
                     { backgroundColor: status === "online" ? "#4CAF50" : theme.colors.primary },
                   ]}
                 >
-                  <Text style={styles.activePillText}>ACTIVE</Text>
+                  <Text style={styles.activePillText}>
+                    {statusInfo.isOnline ? "ONLINE" : "WAITING"}
+                  </Text>
                 </View>
               )}
             </View>
@@ -443,6 +464,7 @@ export default function Devices() {
   const { onScroll, headerHeight } = useScroll();
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
+  
   const {
     isConnected,
     externalKey,
@@ -452,6 +474,8 @@ export default function Devices() {
     isLiveData,
     forceReconnect,
     switchToDevice,
+    isReady,
+    deviceStatusFlags,
   } = useMqtt();
 
   const { deleteThing } = useAuth();
@@ -461,13 +485,59 @@ export default function Devices() {
   const [loadingDevices, setLoadingDevices] = useState(true);
   const [activeDevice, setActiveDeviceState] = useState(null);
   const [deviceConnStatus, setDeviceConnStatus] = useState({});
-  const [showConnectionSuccess, setShowConnectionSuccess] = useState(false);
-  const [connectedDeviceName, setConnectedDeviceName] = useState("");
   const [showAddWizard, setShowAddWizard] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [autoConnectAttempted, setAutoConnectAttempted] = useState(false);
 
-  // Check if offline
-  const isOffline = connectionState === "disconnected" || connectionState === "idle";
+  // ── Auto-connect to last used device ──────────────────────────────────────
+  const autoConnectToLastDevice = async () => {
+    try {
+      console.log("🔄 Attempting auto-connect to last device...");
+      
+      const storedExternalKey = await getStoredExternalKey();
+      const storedPublisherId = await getStoredPublisherId();
+      
+      console.log("📦 Stored - External Key:", storedExternalKey, "Publisher ID:", storedPublisherId);
+      
+      if (storedExternalKey && storedPublisherId) {
+        const deviceExists = registeredDevices.find(d => d.id === storedPublisherId);
+        
+        if (deviceExists) {
+          console.log("✅ Found matching device in list:", deviceExists.name);
+          setActiveDeviceState(deviceExists);
+          
+          if (externalKey !== storedExternalKey) {
+            console.log("🔄 Auto-connecting to:", storedExternalKey);
+            await switchToDevice(storedPublisherId, storedExternalKey);
+          } else {
+            console.log("✅ Already connected to the stored device");
+          }
+          
+          setAutoConnectAttempted(true);
+          return true;
+        }
+      }
+      
+      // ✅ Fallback: Connect to first device
+      if (registeredDevices.length > 0 && !autoConnectAttempted) {
+        const firstDevice = registeredDevices[0];
+        console.log("🔄 Auto-connecting to first device:", firstDevice.name);
+        await setActiveDevice(firstDevice.id, firstDevice.external_key);
+        setActiveDeviceState(firstDevice);
+        
+        if (externalKey !== firstDevice.external_key) {
+          await switchToDevice(firstDevice.id, firstDevice.external_key);
+        }
+        setAutoConnectAttempted(true);
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error("❌ Auto-connect error:", error);
+      return false;
+    }
+  };
 
   // ── Load registered devices ──────────────────────────────────────────────
   const loadDevices = async () => {
@@ -477,13 +547,26 @@ export default function Devices() {
       if (allThings && allThings.length > 0) {
         setRegisteredDevices(allThings);
 
-        const active = await getActiveDevice();
-        if (active && active.publisherId) {
-          const activeThing = allThings.find((t) => t.id === active.publisherId);
-          setActiveDeviceState(activeThing || allThings[0]);
+        const storedPublisherId = await getStoredPublisherId();
+        const storedExternalKey = await getStoredExternalKey();
+        
+        if (storedPublisherId && storedExternalKey) {
+          const storedDevice = allThings.find((t) => t.id === storedPublisherId);
+          if (storedDevice) {
+            setActiveDeviceState(storedDevice);
+            if (externalKey !== storedExternalKey) {
+              console.log("🔄 Auto-connecting to stored device:", storedDevice.name);
+              await switchToDevice(storedDevice.id, storedExternalKey);
+            }
+          } else {
+            const firstThing = allThings[0];
+            await setActiveDevice(firstThing.id, firstThing.external_key);
+            setActiveDeviceState(firstThing);
+          }
         } else {
-          setActiveDeviceState(allThings[0]);
-          await setActiveDevice(allThings[0].id, allThings[0].external_key);
+          const firstThing = allThings[0];
+          await setActiveDevice(firstThing.id, firstThing.external_key);
+          setActiveDeviceState(firstThing);
         }
       } else {
         setRegisteredDevices([]);
@@ -491,46 +574,24 @@ export default function Devices() {
       }
     } catch (error) {
       console.error("Error loading devices:", error);
-      Alert.alert("Error", "Failed to load devices. Please try again.");
     } finally {
       setLoadingDevices(false);
       setRefreshing(false);
+      setAutoConnectAttempted(true);
     }
   };
 
+  // ── Load devices on mount ────────────────────────────────────────────────
   useEffect(() => {
     loadDevices();
   }, []);
 
-  // ── Monitor MQTT connection status for active registered device ─────────
+  // ── Auto-connect when devices are loaded ─────────────────────────────────
   useEffect(() => {
-    if (activeDevice) {
-      setDeviceConnStatus((prev) => ({
-        ...prev,
-        [activeDevice.id]: connectionState,
-      }));
+    if (!loadingDevices && registeredDevices.length > 0 && !autoConnectAttempted) {
+      autoConnectToLastDevice();
     }
-  }, [connectionState, activeDevice]);
-
-  // ── Success popup when the active device comes online ────────────────────
-  useEffect(() => {
-    if (
-      activeDevice &&
-      connectionState === "online" &&
-      hasReceivedData &&
-      showConnectionSuccess
-    ) {
-      Alert.alert(
-        "✅ Device Connected",
-        `${connectedDeviceName || activeDevice.name || "Device"} is now online and ready to use!`,
-        [
-          { text: "Go to Dashboard", onPress: () => router.replace("/(main)/dashboard") },
-          { text: "Stay Here", style: "cancel" },
-        ]
-      );
-      setShowConnectionSuccess(false);
-    }
-  }, [connectionState, activeDevice, hasReceivedData, showConnectionSuccess, connectedDeviceName]);
+  }, [loadingDevices, registeredDevices]);
 
   // ── Connect a registered device ─────────────────────────────────────────
   const handleConnectDevice = async (device) => {
@@ -540,26 +601,17 @@ export default function Devices() {
       await setActiveDevice(device.id, device.external_key);
       setActiveDeviceState(device);
 
-      await forceReconnect(device.external_key);
+      await switchToDevice(device.id, device.external_key);
 
       setDeviceConnStatus((prev) => ({
         ...prev,
-        [device.id]: connectionState || "offline",
+        [device.id]: connectionState || "waiting",
       }));
 
-      setConnectedDeviceName(device.name || "Device");
-
       Alert.alert(
-        "🔄 Connecting",
-        `Connecting to ${device.name || "Device"}...\n\nThe device will show as Online once it starts reporting data.`,
-        [
-          {
-            text: "OK",
-            onPress: () => {
-              setShowConnectionSuccess(true);
-            },
-          },
-        ]
+        "✅ Device Selected",
+        `${device.name || "Device"} is now active.\n\nWaiting for device to connect...`,
+        [{ text: "OK" }]
       );
     } catch (error) {
       console.error("Error connecting to device:", error);
@@ -568,7 +620,6 @@ export default function Devices() {
         "Connection Failed",
         `Failed to connect to ${device.name}. Please try again.`
       );
-      setShowConnectionSuccess(false);
     }
   };
 
@@ -618,8 +669,12 @@ export default function Devices() {
     if (device?.id && device?.externalKey) {
       try {
         await switchToDevice(device.id, device.externalKey);
-        setConnectedDeviceName(device.name || "Device");
-        setShowConnectionSuccess(true);
+        setActiveDeviceState(device);
+        Alert.alert(
+          "✅ Device Added",
+          `${device.name || "Device"} has been added and connected successfully!`,
+          [{ text: "OK" }]
+        );
       } catch (error) {
         console.error("Auto-connect to new device failed:", error);
       }
@@ -644,6 +699,38 @@ export default function Devices() {
 
   const primary = theme.colors.primary;
   const primaryDark = theme.colors.primaryDark;
+
+  // ✅ Check if device is online
+  const isDeviceOnline = hasReceivedData && deviceStatusFlags?.online === true;
+
+  // ── Back Handler ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
+      // ✅ If AddDeviceWizard is open, close it first
+      if (showAddWizard) {
+        setShowAddWizard(false);
+        return true; // Prevent default back behavior
+      }
+      
+      // ✅ If any modal is open, close it
+      // (Modals are handled inside DeviceCard)
+      
+      // ✅ Default behavior - go back
+      router.back();
+      return true;
+    });
+
+    return () => backHandler.remove();
+  }, [showAddWizard]);
+
+  // ── Check and navigate back if no devices ──────────────────────────────
+  useEffect(() => {
+    // If no devices and not loading, auto-navigate to add device
+    if (!loadingDevices && registeredDevices.length === 0 && !showAddWizard) {
+      // Uncomment if you want auto-open add wizard when no devices
+      // setShowAddWizard(true);
+    }
+  }, [loadingDevices, registeredDevices]);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -671,7 +758,7 @@ export default function Devices() {
         }
       >
         {/* ── Header ───────────────────────────────────────────────────────── */}
-        {/* <View style={styles.header}>
+        <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={[styles.title, { color: theme.colors.text }]}>Devices</Text>
             <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
@@ -684,26 +771,54 @@ export default function Devices() {
                 : "No devices connected yet"}
             </Text>
           </View>
-          <TouchableOpacity
-            style={[styles.headerAddButton, { backgroundColor: primary }]}
-            onPress={openAddWizard}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel="Add a new device"
-          >
-            <Ionicons name="add" size={22} color="#FFF" />
-          </TouchableOpacity>
-        </View> */}
+          {/* ❌ REMOVED + ICON - No add button in header */}
+        </View>
 
-        {/* ── Offline banner ───────────────────────────────────────────────── */}
-        {/* {isOffline && activeDevice && (
-          <View style={[styles.offlineBanner, { backgroundColor: "#FFEBEE" }]}>
-            <Ionicons name="alert-circle" size={20} color="#F44336" />
-            <Text style={styles.offlineBannerText}>
-              {activeDevice.name} is offline — live data is paused
-            </Text>
+        {/* ── Active Device Status Banner ─────────────────────────────────── */}
+        {activeDevice && (
+          <View
+            style={[
+              styles.activeDeviceBanner,
+              {
+                backgroundColor: isDeviceOnline ? `${primary}1A` : "#FFF3E0",
+                borderColor: isDeviceOnline ? primary : "#FF9800",
+                borderWidth: 1,
+              },
+            ]}
+          >
+            <View style={styles.bannerContent}>
+              <View style={styles.bannerIcon}>
+                <Ionicons
+                  name={isDeviceOnline ? "checkmark-circle" : "time-outline"}
+                  size={20}
+                  color={isDeviceOnline ? primary : "#FF9800"}
+                />
+              </View>
+              <View style={styles.bannerTextContainer}>
+                <Text style={[styles.bannerTitle, { color: theme.colors.text }]}>
+                  {isDeviceOnline ? "✅ Device Connected" : "⏳ Connecting to Device..."}
+                </Text>
+                <Text style={[styles.bannerSubtitle, { color: theme.colors.textSecondary }]}>
+                  {isDeviceOnline
+                    ? `${activeDevice.name || "Device"} is ready and receiving data`
+                    : `Waiting for ${activeDevice.name || "device"} to connect...`}
+                </Text>
+              </View>
+              {!isDeviceOnline && (
+                <TouchableOpacity
+                  style={[styles.bannerRetryBtn, { backgroundColor: "#FF9800" }]}
+                  onPress={() => {
+                    if (activeDevice) {
+                      handleConnectDevice(activeDevice);
+                    }
+                  }}
+                >
+                  <Text style={styles.bannerRetryText}>Retry</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
-        )} */}
+        )}
 
         {/* ── Loading / Empty states ───────────────────────────────────────── */}
         {loadingDevices ? (
@@ -862,11 +977,17 @@ export default function Devices() {
                 <View
                   style={[
                     styles.footerDot,
-                    { backgroundColor: isConnected && !isOffline ? "#4CAF50" : "#F44336" },
+                    { 
+                      backgroundColor: isDeviceOnline ? "#4CAF50" : 
+                                     (connectionState === 'waiting' || connectionState === 'connecting') ? "#FF9800" : 
+                                     "#F44336" 
+                    },
                   ]}
                 />
                 <Text style={[styles.footerText, { color: theme.colors.textSecondary }]}>
-                  {isOffline ? "Device Offline" : isConnected ? "MQTT Connected" : "MQTT Disconnected"}
+                  {isDeviceOnline ? "Device Connected" : 
+                    (connectionState === 'waiting' || connectionState === 'connecting') ? "Connecting..." : 
+                    "Device Offline"}
                 </Text>
               </View>
               {externalKey && (
@@ -883,25 +1004,9 @@ export default function Devices() {
         )} */}
       </ScrollView>
 
-      {/* ── Floating Action Button ────────────────────────────────────────── */}
-      <TouchableOpacity
-        style={[styles.fab, { shadowColor: primaryDark }]}
-        onPress={openAddWizard}
-        activeOpacity={0.85}
-        accessibilityRole="button"
-        accessibilityLabel="Add a new device"
-      >
-        <LinearGradient
-          colors={[primary, primaryDark]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.fabGradient}
-        >
-          <Ionicons name="add" size={30} color="#FFF" />
-        </LinearGradient>
-      </TouchableOpacity>
+      {/* ❌ REMOVED FAB - No floating add button */}
 
-      {/* ── Add Device Wizard (fullscreen modal) ──────────────────────────── */}
+      {/* ── Add Device Wizard ──────────────────────────────────────────────── */}
       <AddDeviceWizard
         visible={showAddWizard}
         onClose={() => setShowAddWizard(false)}
@@ -926,34 +1031,35 @@ const styles = StyleSheet.create({
   headerLeft: { flex: 1, marginRight: 12 },
   title: { fontSize: 28, fontWeight: "700" },
   subtitle: { fontSize: 13, marginTop: 4, opacity: 0.9 },
-  headerAddButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-    shadowColor: "#1B5E20",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 4,
-  },
 
-  // ── Offline banner ─────────────────────────────────────────────────────
-  offlineBanner: {
+  // ── Active Device Banner ────────────────────────────────────────────────
+  activeDeviceBanner: {
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+    borderWidth: 1,
+  },
+  bannerContent: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 12,
+    gap: 12,
   },
-  offlineBannerText: {
-    color: "#F44336",
-    fontWeight: "600",
-    fontSize: 13,
-    flex: 1,
+  bannerIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
   },
+  bannerTextContainer: { flex: 1 },
+  bannerTitle: { fontSize: 14, fontWeight: "700" },
+  bannerSubtitle: { fontSize: 12, marginTop: 2 },
+  bannerRetryBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  bannerRetryText: { color: "#FFF", fontSize: 12, fontWeight: "600" },
 
   // ── Loading / empty ────────────────────────────────────────────────────
   loadingBox: {
@@ -1190,24 +1296,6 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   refreshText: { fontSize: 12, fontWeight: "500" },
-
-  // ── FAB ────────────────────────────────────────────────────────────────
-  fab: {
-    position: "absolute",
-    right: 20,
-    bottom: 24,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.35,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  fabGradient: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    alignItems: "center",
-    justifyContent: "center",
-  },
 
   // ── Delete modal ───────────────────────────────────────────────────────
   modalOverlay: {
