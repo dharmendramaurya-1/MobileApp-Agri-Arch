@@ -17,6 +17,10 @@ import {
 } from "../services/mqttClient";
 import { getDefaultDeviceStatus } from "../utils/deviceStatusParser";
 import { parseSenMLToObject } from "../utils/senmlParser";
+import {
+  loadLastData,
+  saveLastData
+} from "../services/lastDataCache";
 import { useAuth } from "./AuthContext";
 
 // ── Defaults ── All null/undefined ─────────────────────────────────────────
@@ -241,6 +245,10 @@ export const MqttProvider = ({ children }) => {
   const [mqttClient, setMqttClient] = useState(null);
   const [isInitializing, setIsInitializing] = useState(false);
   const [hasReceivedData, setHasReceivedData] = useState(false);
+  // ✅ True ONLY when a live MQTT message was received this session. Cached
+  // data restored from AsyncStorage never sets this — so screens show the
+  // CURRENT connection state (connecting/offline) instead of cached online.
+  const [isLiveData, setIsLiveData] = useState(false);
   const [deviceStatus, setDeviceStatus] = useState(null);
   
   // ✅ Device status flags from 32-bit parsing
@@ -272,6 +280,8 @@ export const MqttProvider = ({ children }) => {
   const hasReceivedDataRef = useRef(false);
   const activeDeviceIdRef = useRef(null);
   const hasEverBeenOnlineRef = useRef(false);
+  // externalKey that the current in-memory sensor data belongs to
+  const sensorDataKeyRef = useRef(null);
   
   // ✅ Multiple device support
   const [availableDevices, setAvailableDevices] = useState([]);
@@ -414,6 +424,146 @@ export const MqttProvider = ({ children }) => {
     };
   }, [activeDeviceId]);
 
+  // ── Restore last known data from AsyncStorage (survives app restarts) ────
+  const restoreLastData = async (expectedKey) => {
+    try {
+      const cached = await loadLastData();
+      if (!cached) {
+        console.log("🗂️ No cached MQTT snapshot found");
+        return false;
+      }
+
+      // Only restore if the snapshot belongs to the currently selected device
+      if (cached.externalKey && cached.externalKey !== expectedKey) {
+        console.log(`🗂️ Cached snapshot is for ${cached.externalKey}, skipping (current: ${expectedKey})`);
+        return false;
+      }
+
+      if (cached.sensorData) {
+        const restored = { ...cached.sensorData };
+        // AsyncStorage serializes Dates → convert lastUpdated back to a Date
+        if (restored.lastUpdated) restored.lastUpdated = new Date(restored.lastUpdated);
+        setSensorData(restored);
+      }
+
+      if (cached.actuatorStatus) {
+        const restored = { ...cached.actuatorStatus };
+        if (restored.lastUpdated) restored.lastUpdated = new Date(restored.lastUpdated);
+        setActuatorStatus(restored);
+        lastKnownActuatorState = {
+          water_pump: restored.water_pump ?? false,
+          water_ILvalve: restored.water_ILvalve ?? false,
+          water_OLvalve: restored.water_OLvalve ?? false,
+          nutrient_pump: restored.nutrient_pump ?? false,
+          reboot_ack: restored.reboot_ack ?? false,
+        };
+      }
+
+      if (cached.cropSettings) {
+        const restored = { ...cached.cropSettings };
+        if (restored.lastUpdated) restored.lastUpdated = new Date(restored.lastUpdated);
+        setCropSettings(restored);
+      }
+
+      if (cached.deviceConfig) {
+        const restored = { ...cached.deviceConfig };
+        if (restored.lastUpdated) restored.lastUpdated = new Date(restored.lastUpdated);
+        setDeviceConfig(restored);
+        lastKnownConfigState = {
+          report_interval: restored.report_interval ?? 120,
+          sampling_interval: restored.sampling_interval ?? 30,
+          auto_mode: restored.auto_mode ?? false,
+        };
+      }
+
+      if (cached.devices && cached.devices.length > 0) {
+        setDevices(cached.devices);
+      }
+
+      if (typeof cached.deviceStatus === "number") {
+        setDeviceStatus(cached.deviceStatus);
+      }
+
+      if (cached.deviceStatusFlags) {
+        setDeviceStatusFlags(cached.deviceStatusFlags);
+      }
+
+      if (typeof cached.hasEverBeenOnline === "boolean") {
+        setHasEverBeenOnline(cached.hasEverBeenOnline);
+        hasEverBeenOnlineRef.current = cached.hasEverBeenOnline;
+      }
+
+      // Show cached data in the UI immediately, but keep the ref false so the
+      // initial-response check still runs — a device that doesn't respond after
+      // reconnect is correctly marked OFFLINE instead of staying “waiting”.
+      if (cached.hasReceivedData) {
+        setHasReceivedData(true);
+        hasReceivedDataRef.current = false;
+      }
+
+      // Start a fresh timeout window from app open so the reconnected device
+      // has a fair chance to report new data before being marked offline.
+      lastDataReceivedTime.current = Date.now();
+
+      // The restored data belongs to this device — later state changes (e.g.
+      // a manual pump toggle) are safe to persist under this key.
+      sensorDataKeyRef.current = expectedKey;
+
+      console.log("🗂️ Restored last MQTT snapshot from AsyncStorage");
+      return true;
+    } catch (error) {
+      console.error("❌ Error restoring last MQTT snapshot:", error);
+      return false;
+    }
+  };
+
+  // ── Persist last known data (debounced) so it survives app restarts ─────
+  const persistTimer = useRef(null);
+  useEffect(() => {
+    // Only persist snapshots that carry real data. Checking `lastUpdated` (not
+    // the hasReceivedData ref) means restored data and manual pump toggles also
+    // get persisted, while empty DEFAULT state is never written to the cache.
+    const hasRealData = !!sensorData.lastUpdated || !!actuatorStatus.lastUpdated ||
+                        !!cropSettings.lastUpdated || !!deviceConfig.lastUpdated;
+    if (!hasRealData) return;
+    // Never save device A's stale data under device B's key.
+    if (sensorDataKeyRef.current !== externalKey) return;
+
+    if (persistTimer.current) clearTimeout(persistTimer.current);
+    persistTimer.current = setTimeout(() => {
+      saveLastData({
+        externalKey,
+        sensorData,
+        actuatorStatus,
+        cropSettings,
+        deviceConfig,
+        devices,
+        deviceStatus,
+        deviceStatusFlags,
+        hasReceivedData,
+        hasEverBeenOnline,
+        lastKnownActuatorState,
+        lastKnownConfigState,
+        savedAt: Date.now(),
+      });
+    }, 600);
+
+    return () => {
+      if (persistTimer.current) clearTimeout(persistTimer.current);
+    };
+  }, [
+    sensorData,
+    actuatorStatus,
+    cropSettings,
+    deviceConfig,
+    devices,
+    deviceStatus,
+    deviceStatusFlags,
+    hasReceivedData,
+    hasEverBeenOnline,
+    externalKey,
+  ]);
+
   // ── Cleanup ──────────────────────────────────────────────────────────────
   const cleanupMqtt = async () => {
     if (timeoutCheckInterval.current) {
@@ -437,6 +587,7 @@ export const MqttProvider = ({ children }) => {
     setMqttClient(null);
     setHasReceivedData(false);
     hasReceivedDataRef.current = false;
+    setIsLiveData(false);
     setDeviceStatus(null);
     setConnectionState('idle');
     clearInitialResponseCheck();
@@ -873,6 +1024,13 @@ export const MqttProvider = ({ children }) => {
     setIsInitializing(true);
     
     try {
+      // ✅ Restore cached data FIRST — reads AsyncStorage only (no network), so
+      // the last-known sensor values appear the moment the app reopens.
+      const earlyKey = await loadExternalKey();
+      if (earlyKey) {
+        await restoreLastData(earlyKey);
+      }
+
       await loadAvailableDevices();
       
       const storedKey = await loadExternalKey();
@@ -898,6 +1056,11 @@ export const MqttProvider = ({ children }) => {
 
       await cleanupMqtt();
 
+      // ✅ Restore AGAIN after cleanup — cleanupMqtt resets hasReceivedData /
+      // deviceStatus / connectionState, and we don't want the restored state
+      // wiped before the UI can render it.
+      await restoreLastData(storedKey);
+
       const client = await getMqttClient();
       console.log("📡 MQTT client obtained, connected:", client.connected);
       setMqttClient(client);
@@ -915,6 +1078,8 @@ export const MqttProvider = ({ children }) => {
         // ✅ Data received! Mark device online
         setHasReceivedData(true);
         hasReceivedDataRef.current = true;
+        setIsLiveData(true);
+        sensorDataKeyRef.current = storedKey;
         setConnectionState('online');
         lastDataReceivedTime.current = Date.now();
         
@@ -1346,6 +1511,7 @@ export const MqttProvider = ({ children }) => {
     isReady,
     externalKey,
     hasReceivedData,
+    isLiveData,
     deviceStatus,
     deviceStatusFlags,
     connectionState,

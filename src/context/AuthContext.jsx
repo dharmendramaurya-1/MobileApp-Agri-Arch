@@ -8,6 +8,7 @@ import {
   useState
 } from "react";
 import { loginUser } from "../services/api";
+import { LAST_DATA_CACHE_KEY } from "../services/lastDataCache";
 
 // ✅ Create context without TypeScript types
 const AuthContext = createContext(null);
@@ -216,7 +217,8 @@ export function AuthProvider({ children }) {
         "Username",
         "profile_id",
         "org_id",
-        "group_id"
+        "group_id",
+        LAST_DATA_CACHE_KEY
       ];
       
       await AsyncStorage.multiRemove(keysToRemove);

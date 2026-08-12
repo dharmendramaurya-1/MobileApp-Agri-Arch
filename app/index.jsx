@@ -9,7 +9,7 @@ export default function Index() {
   useEffect(() => {
     // Small delay to show splash
     const timer = setTimeout(() => {
-      router.push("/onboarding");
+      router.replace("/onboarding");
     }, 500);
 
     return () => clearTimeout(timer);

@@ -1,10 +1,11 @@
 // app/_layout.tsx
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Stack, router, useSegments } from "expo-router";
 import { useEffect, useRef } from "react";
-import AppStatusBar from "../components/AppStatusBar";
 import { ActivityIndicator, Text, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import AppStatusBar from "../components/AppStatusBar";
 import { AlertProvider } from "../src/context/AlertContext"; // ✅ UNCOMMENT YEH
 import { AuthProvider, useAuth } from "../src/context/AuthContext";
 import { HistoricalDataProvider } from "../src/context/HistoricalDataContext";
@@ -23,6 +24,9 @@ function RootNav() {
       console.log("⏳ Auth loading...");
       return;
     }
+
+
+
 
     const inMainGroup = segments[0] === "(main)";
     const inAuthGroup = segments[0] === "(auth)";
@@ -100,6 +104,28 @@ function RootNav() {
     console.log("⏭️ No redirect needed");
 
   }, [isAuthenticated, isLoading, segments, isSignupFlow]);
+
+       useEffect(() => {
+    const getAllAsyncStorageData = async () => {
+      try {
+        const keys = await AsyncStorage.getAllKeys();
+
+        console.log("AsyncStorage Keys:", keys);
+
+        const data = await AsyncStorage.multiGet(keys);
+
+        console.log("AsyncStorage Data:");
+
+        data.forEach(([key, value]) => {
+          console.log(`${key}:`, value);
+        });
+      } catch (error) {
+        console.error("Error reading AsyncStorage:", error);
+      }
+    };
+
+    getAllAsyncStorageData();
+  }, []);
 
   if (isLoading) {
     return (

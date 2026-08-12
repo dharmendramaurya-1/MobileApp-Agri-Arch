@@ -3,6 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
+import { getDrawerStatusFromState } from "@react-navigation/drawer";
 import { router, useNavigation } from "expo-router";
 import { Drawer } from "expo-router/drawer";
 import { useEffect, useRef, useState } from "react";
@@ -264,7 +265,9 @@ function CustomDrawerContent({ navigation }) {
           setTimeout(() => {
             logout().catch(console.error);
             setTimeout(() => {
-              router.push("/onboarding");
+              // Reset the whole stack so Back can never land on the old (main) screens
+              if (router.canDismiss?.()) router.dismissAll();
+              router.replace("/onboarding");
             }, 100);
           }, 200);
         },
@@ -464,11 +467,30 @@ function MainDrawer({ theme }) {
   // Handle Android back button
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (navigation.canGoBack()) {
-        navigation.goBack();
+      const state = navigation.getState();
+
+      // Safety: only take over when the focused navigator is the drawer
+      // (falls through to the system default otherwise)
+      if (state?.type !== 'drawer') return false;
+
+      // 1️⃣ Drawer is open → just close it (standard drawer UX)
+      try {
+        if (getDrawerStatusFromState(state) === 'open') {
+          navigation.closeDrawer();
+          return true;
+        }
+      } catch {
+        // state not ready yet — fall through
+      }
+
+      // 2️⃣ Any screen other than Dashboard → go home (Dashboard)
+      const currentRoute = state?.routes?.[state?.index ?? 0]?.name;
+      if (currentRoute && currentRoute !== 'dashboard') {
+        navigation.navigate('dashboard');
         return true;
       }
-      
+
+      // 3️⃣ On Dashboard → confirm before exiting the app
       Alert.alert(
         "Exit App",
         "Are you sure you want to exit?",

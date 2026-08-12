@@ -373,8 +373,7 @@ export default function AddCrops() {
     publishSettings,
     publishSenML,
     connectionState,
-    hasReceivedData,
-    deviceStatus,
+    isLiveData,
     deviceStatusFlags,
   } = useMqtt();
 
@@ -1184,22 +1183,22 @@ export default function AddCrops() {
 
   // ── Live device status (MqttContext — DevStat Bit 17 aware) ──────────────
   const liveStatus = (() => {
-    // Online only when data is present and nothing reports offline.
+    // Online ONLY when live data was received this session (isLiveData) and
+    // nothing reports offline — cached/restored data never shows Online.
     if (
-      deviceStatusFlags?.online === true ||
-      connectionState === "online" ||
-      (hasReceivedData && connectionState !== "offline")
+      isLiveData &&
+      (deviceStatusFlags?.online === true || connectionState === "online")
     ) {
       return { label: "Online", color: "#4CAF50", bg: "rgba(76,175,80,0.12)" };
     }
-    if (connectionState === "connecting") {
+    if (connectionState === "connecting" || connectionState === "waiting") {
       return { label: "Connecting...", color: "#FFC107", bg: "rgba(255,193,7,0.12)" };
     }
-    // No data (or explicit offline) -> Offline directly. No waiting state.
+    // No live data (or explicit offline) -> Offline directly. No waiting state.
     if (
       connectionState === "offline" ||
       deviceStatusFlags?.online === false ||
-      !hasReceivedData
+      !isLiveData
     ) {
       return { label: "Offline", color: "#F44336", bg: "rgba(244,67,54,0.12)" };
     }

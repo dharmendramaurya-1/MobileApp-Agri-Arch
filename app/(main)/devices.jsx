@@ -40,6 +40,8 @@ function DeviceCard({
   theme,
   connectionStatus,
   hasReceivedData,
+  isLiveData,
+  sensorData,
 }) {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
@@ -47,8 +49,11 @@ function DeviceCard({
   // Get connection status from MqttContext
   const getStatus = () => {
     if (isActive) {
-      if (connectionStatus === "online" && hasReceivedData) return "online";
-      if (connectionStatus === "connecting") return "connecting";
+      if (connectionStatus === "online" && isLiveData) return "online";
+      // connecting/waiting/idle all mean the device is reconnecting right now
+      if (connectionStatus === "connecting" || connectionStatus === "waiting" || connectionStatus === "idle") {
+        return "connecting";
+      }
       if (connectionStatus === "error") return "error";
       return "offline";
     }
@@ -62,31 +67,26 @@ function DeviceCard({
       color: "#4CAF50",
       bg: "rgba(76,175,80,0.12)",
       label: "Online",
-      icon: "checkmark-circle",
     },
     connecting: {
       color: "#FF9800",
       bg: "rgba(255,152,0,0.14)",
       label: "Connecting…",
-      icon: "sync",
     },
     offline: {
       color: "#F44336",
       bg: "rgba(244,67,54,0.10)",
       label: "Offline",
-      icon: "close-circle",
     },
     error: {
       color: "#F44336",
       bg: "rgba(244,67,54,0.10)",
       label: "Error",
-      icon: "alert-circle",
     },
     disconnected: {
       color: theme.colors.textSecondary,
       bg: `${theme.colors.textSecondary}16`,
       label: "Offline",
-      icon: "cloud-offline-outline",
     },
   }[status];
 
@@ -104,24 +104,82 @@ function DeviceCard({
     await onDelete(device);
   };
 
+  // ── Derived card data ────────────────────────────────────────────────────
+  const typeLabel = device.type === "device" ? "Controller" : "Sensor";
+  const keyOrId = device.external_key || device.id || "";
+  const metaLine = keyOrId
+    ? `${typeLabel} · ${keyOrId.length > 16 ? keyOrId.slice(0, 16) + "…" : keyOrId}`
+    : `${typeLabel} · ID ${device.id?.slice(0, 8) || "—"}`;
+
+  // Live mini-stats only for the active device that has data
+  const hasLiveData =
+    isActive &&
+    !!sensorData &&
+    (sensorData.ambientTemperature != null ||
+      sensorData.ambientHumidity != null ||
+      sensorData.waterLevel != null);
+
+  const liveStats = [
+    {
+      icon: "thermometer-outline",
+      label: "Temp",
+      color: "#FF9800",
+      value:
+        sensorData?.ambientTemperature != null
+          ? `${sensorData.ambientTemperature.toFixed(1)}°`
+          : "--",
+    },
+    {
+      icon: "water-outline",
+      label: "Humidity",
+      color: "#29B6F6",
+      value:
+        sensorData?.ambientHumidity != null
+          ? `${sensorData.ambientHumidity.toFixed(0)}%`
+          : "--",
+    },
+    {
+      icon: "water",
+      label: "Water",
+      color: "#4CAF50",
+      value:
+        sensorData?.waterLevel != null
+          ? `${sensorData.waterLevel.toFixed(0)}%`
+          : "--",
+    },
+  ];
+
+  const dataLabel = !isActive
+    ? "Not connected"
+    : isLiveData
+    ? "Receiving live data"
+    : hasReceivedData
+    ? "Last known data"
+    : "Waiting for first data…";
+
   return (
     <>
       <TouchableOpacity
         style={[
           styles.deviceCard,
+          isActive && styles.deviceCardActive,
           {
             backgroundColor: theme.colors.surface,
-            borderColor: isActive ? theme.colors.primary : theme.colors.border,
-            borderWidth: isActive ? 1.5 : 1,
+            borderColor: theme.colors.border,
+            borderLeftColor: isActive ? theme.colors.primary : theme.colors.border,
           },
         ]}
-        activeOpacity={0.8}
+        activeOpacity={0.85}
       >
-        <View style={styles.deviceCardHeader}>
+        {/* ── Header row: icon · name · status ──────────────────────────── */}
+        <View style={styles.cardHeader}>
           <View
             style={[
-              styles.deviceIconContainer,
-              { backgroundColor: statusConfig.bg },
+              styles.iconChip,
+              {
+                backgroundColor: statusConfig.bg,
+                borderColor: `${statusConfig.color}33`,
+              },
             ]}
           >
             <Ionicons
@@ -130,12 +188,13 @@ function DeviceCard({
                   ? "hardware-chip-outline"
                   : "sensor-outline"
               }
-              size={22}
+              size={20}
               color={statusConfig.color}
             />
           </View>
-          <View style={styles.deviceInfo}>
-            <View style={styles.deviceNameRow}>
+
+          <View style={styles.cardInfo}>
+            <View style={styles.nameRow}>
               <Text
                 style={[styles.deviceName, { color: theme.colors.text }]}
                 numberOfLines={1}
@@ -146,59 +205,119 @@ function DeviceCard({
                 <View
                   style={[
                     styles.activePill,
-                    { backgroundColor: theme.colors.primary },
+                    { backgroundColor: status === "online" ? "#4CAF50" : theme.colors.primary },
                   ]}
                 >
                   <Text style={styles.activePillText}>ACTIVE</Text>
                 </View>
               )}
             </View>
-            <Text style={[styles.deviceType, { color: theme.colors.textSecondary }]}>
-              {device.type || "device"} · ID {device.id?.substring(0, 8)}…
+            <Text
+              style={[styles.metaLine, { color: theme.colors.textSecondary }]}
+              numberOfLines={1}
+            >
+              {metaLine}
             </Text>
-            <View style={[styles.statusPill, { backgroundColor: statusConfig.bg }]}>
-              {status === "connecting" ? (
-                <ActivityIndicator size={10} color={statusConfig.color} />
-              ) : (
-                <Ionicons name={statusConfig.icon} size={12} color={statusConfig.color} />
-              )}
-              <Text style={[styles.statusPillText, { color: statusConfig.color }]}>
-                {statusConfig.label}
-              </Text>
-            </View>
+          </View>
+
+          <View style={[styles.statusPill, { backgroundColor: statusConfig.bg }]}>
+            {status === "connecting" ? (
+              <ActivityIndicator size={9} color={statusConfig.color} />
+            ) : (
+              <View style={[styles.statusDot, { backgroundColor: statusConfig.color }]} />
+            )}
+            <Text style={[styles.statusPillText, { color: statusConfig.color }]}>
+              {statusConfig.label}
+            </Text>
           </View>
         </View>
 
-        <View style={[styles.deviceCardFooter, { borderTopColor: theme.colors.border }]}>
-          <View style={styles.lastSeen}>
-            <Ionicons name="time-outline" size={14} color={theme.colors.textSecondary} />
-            <Text style={[styles.lastSeenText, { color: theme.colors.textSecondary }]}>
-              {isActive && hasReceivedData ? "Receiving data" : "No data yet"}
+        {/* ── Live mini-stats strip (active device only) ────────────────── */}
+        {hasLiveData ? (
+          <View
+            style={[
+              styles.liveStrip,
+              {
+                backgroundColor: `${theme.colors.primary}0D`,
+                borderColor: `${theme.colors.primary}22`,
+              },
+            ]}
+          >
+            {liveStats.map((stat, idx) => (
+              <View
+                key={stat.label}
+                style={[
+                  styles.liveStat,
+                  idx > 0 && [styles.liveStatBorder, { borderLeftColor: theme.colors.border }],
+                ]}
+              >
+                <Ionicons name={stat.icon} size={13} color={stat.color} />
+                <Text style={[styles.liveStatValue, { color: theme.colors.text }]}>
+                  {stat.value}
+                </Text>
+                <Text style={[styles.liveStatLabel, { color: theme.colors.textSecondary }]}>
+                  {stat.label}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {/* ── Footer: data freshness + actions ──────────────────────────── */}
+        <View style={styles.cardFooter}>
+          <View style={styles.dataInfo}>
+            {isActive && status === "connecting" && !hasLiveData ? (
+              <ActivityIndicator size="small" color={statusConfig.color} />
+            ) : (
+              <Ionicons
+                name={
+                  isActive && isLiveData
+                    ? "radio-outline"
+                    : isActive && hasReceivedData
+                    ? "cloud-download-outline"
+                    : "time-outline"
+                }
+                size={14}
+                color={theme.colors.textSecondary}
+              />
+            )}
+            <Text
+              style={[styles.dataLabel, { color: theme.colors.textSecondary }]}
+              numberOfLines={1}
+            >
+              {dataLabel}
             </Text>
           </View>
+
           <View style={styles.cardActions}>
             <TouchableOpacity
               style={[
                 styles.connectBtn,
                 {
-                  backgroundColor: status === "online" ? "#4CAF50" : theme.colors.primary,
-                  opacity: status === "online" || status === "connecting" ? 0.85 : 1,
+                  backgroundColor:
+                    status === "online" ? "#4CAF50" : theme.colors.primary,
                 },
               ]}
               onPress={handleConnect}
               disabled={status === "online" || status === "connecting"}
               activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel={
+                status === "online"
+                  ? `${device.name || "Device"} connected`
+                  : `Connect ${device.name || "device"}`
+              }
             >
               {status === "connecting" ? (
                 <ActivityIndicator size="small" color="#FFF" />
               ) : status === "online" ? (
                 <>
-                  <Ionicons name="checkmark-circle" size={16} color="#FFF" />
+                  <Ionicons name="checkmark-circle" size={15} color="#FFF" />
                   <Text style={styles.connectBtnText}>Connected</Text>
                 </>
               ) : (
                 <>
-                  <Ionicons name="flash" size={16} color="#FFF" />
+                  <Ionicons name="flash" size={15} color="#FFF" />
                   <Text style={styles.connectBtnText}>Connect</Text>
                 </>
               )}
@@ -211,7 +330,7 @@ function DeviceCard({
                 accessibilityRole="button"
                 accessibilityLabel={`Delete ${device.name || "device"}`}
               >
-                <Ionicons name="trash-outline" size={18} color="#F44336" />
+                <Ionicons name="trash-outline" size={16} color="#F44336" />
               </TouchableOpacity>
             )}
           </View>
@@ -330,6 +449,7 @@ export default function Devices() {
     sensorData,
     connectionState,
     hasReceivedData,
+    isLiveData,
     forceReconnect,
     switchToDevice,
   } = useMqtt();
@@ -650,11 +770,13 @@ export default function Devices() {
                 theme={theme}
                 connectionStatus={getDeviceConnectionStatus(item.id)}
                 hasReceivedData={hasReceivedData}
+                isLiveData={isLiveData}
+                sensorData={sensorData}
               />
             ))}
 
             {/* Dashed add card */}
-            <TouchableOpacity
+            {/* <TouchableOpacity
               style={[styles.addDeviceCard, { borderColor: theme.colors.primary }]}
               onPress={openAddWizard}
               activeOpacity={0.8}
@@ -672,12 +794,12 @@ export default function Devices() {
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={20} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
+            </TouchableOpacity> */}
           </>
         )}
 
         {/* ── Live Sensor Summary ──────────────────────────────────────────── */}
-        {registeredDevices.length > 0 &&
+        {/* {registeredDevices.length > 0 &&
           sensorData &&
           Object.keys(sensorData).length > 0 &&
           (sensorData.ambientTemperature != null ||
@@ -722,10 +844,10 @@ export default function Devices() {
                 </View>
               </View>
             </View>
-          )}
+          )} */}
 
         {/* ── MQTT Status Footer ───────────────────────────────────────────── */}
-        {registeredDevices.length > 0 && (
+        {/* {registeredDevices.length > 0 && (
           <View
             style={[
               styles.footer,
@@ -758,7 +880,7 @@ export default function Devices() {
               <Text style={[styles.refreshText, { color: primary }]}>Refresh</Text>
             </TouchableOpacity>
           </View>
-        )}
+        )} */}
       </ScrollView>
 
       {/* ── Floating Action Button ────────────────────────────────────────── */}
@@ -904,69 +1026,104 @@ const styles = StyleSheet.create({
 
   // ── Registered device cards ────────────────────────────────────────────
   deviceCard: {
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 18,
+    padding: 14,
+    paddingLeft: 15,
     marginBottom: 12,
     borderWidth: 1,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 3,
   },
-  deviceCardHeader: { flexDirection: "row", alignItems: "flex-start" },
-  deviceIconContainer: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  // Active card: 4px primary accent keeps the content start aligned
+  // with inactive cards (borderLeftWidth 4 + paddingLeft 12 = 16px).
+  deviceCardActive: {
+    borderLeftWidth: 4,
+    paddingLeft: 12,
+  },
+  cardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  iconChip: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1,
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
   },
-  deviceInfo: { flex: 1 },
-  deviceNameRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  deviceName: { fontSize: 16, fontWeight: "600", flexShrink: 1 },
+  cardInfo: { flex: 1, marginRight: 8 },
+  nameRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  deviceName: { fontSize: 16, fontWeight: "700", flexShrink: 1 },
   activePill: {
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 8,
   },
   activePillText: { color: "#FFF", fontSize: 9, fontWeight: "800", letterSpacing: 0.5 },
-  deviceType: { fontSize: 12, marginTop: 3 },
+  metaLine: {
+    fontSize: 11.5,
+    marginTop: 3,
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
+  },
   statusPill: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    alignSelf: "flex-start",
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginTop: 8,
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
   },
-  statusPillText: { fontSize: 11, fontWeight: "600" },
-  deviceCardFooter: {
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  statusPillText: { fontSize: 11, fontWeight: "700" },
+
+  // ── Live mini-stats strip ──────────────────────────────────────────────
+  liveStrip: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingVertical: 8,
+  },
+  liveStat: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 5,
+  },
+  liveStatBorder: { borderLeftWidth: 1 },
+  liveStatValue: { fontSize: 13, fontWeight: "700" },
+  liveStatLabel: { fontSize: 10, fontWeight: "500", opacity: 0.75 },
+
+  // ── Card footer / actions ─────────────────────────────────────────────
+  cardFooter: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginTop: 14,
-    paddingTop: 12,
-    borderTopWidth: 1,
+    marginTop: 12,
+    gap: 10,
   },
-  lastSeen: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1 },
-  lastSeenText: { fontSize: 12 },
+  dataInfo: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1 },
+  dataLabel: { fontSize: 12, flexShrink: 1 },
   cardActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   connectBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 9,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     borderRadius: 10,
   },
-  connectBtnText: { color: "#FFF", fontSize: 13, fontWeight: "700" },
+  connectBtnText: { color: "#FFF", fontSize: 12.5, fontWeight: "700" },
   deleteBtn: {
-    width: 40,
-    height: 40,
+    width: 36,
+    height: 36,
     borderRadius: 10,
     borderWidth: 1,
     alignItems: "center",
