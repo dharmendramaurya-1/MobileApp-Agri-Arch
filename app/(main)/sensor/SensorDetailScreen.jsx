@@ -1,23 +1,34 @@
 // app/(main)/sensor/SensorDetailScreen.jsx
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
-    ActivityIndicator,
-    Dimensions,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Dimensions,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
-import { useHistoricalData } from "../../../src/context/HistoricalDataContext";
+import LineChart from "../../../components/LineChart";
 import { useMqtt } from "../../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../../src/context/ScrollContext";
 import { useTheme } from "../../../src/context/ThemContext";
-import { searchSenML } from "../../../src/services/senmlService";
+import {
+  fetchAllSensorHistorical,
+  fetchSensorHistorical,
+  getSenMLByPublisher,
+  searchSenML,
+} from "../../../src/services/senmlService";
 
 const { width } = Dimensions.get("window");
+
+const PAGE_SIZE = 10;
+
+// Number of days for each time range option
+const RANGE_DAYS = { "1d": 1, "7d": 7, "30d": 30 };
+const RANGE_LABELS = { "1d": "Last 24 hours", "7d": "Last 7 days", "30d": "Last 30 days" };
 
 export default function SensorDetailScreen({
   config,
@@ -25,14 +36,23 @@ export default function SensorDetailScreen({
   contentPaddingTop,
 }) {
   const { theme } = useTheme();
-  const { sensorData } = useMqtt();
+  const { getSelectedDeviceSensorData } = useMqtt();
+  const sensorData = getSelectedDeviceSensorData();
   const { onScroll, headerHeight } = useScroll();
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
-  const { getSensorWeeklyData, isLoading } = useHistoricalData();
   const [timeRange, setTimeRange] = useState("7d");
-  const [historicalData, setHistoricalData] = useState([]);
-  const [isChartLoading, setIsChartLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState("table"); // "table" | "graph"
+
+  // Table (paginated) state
+  const [tableData, setTableData] = useState([]);
+  const [tableTotal, setTableTotal] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [isTableLoading, setIsTableLoading] = useState(false);
+
+  // Graph state
+  const [graphData, setGraphData] = useState([]);
+  const [isGraphLoading, setIsGraphLoading] = useState(false);
 
   const liveValue = sensorData[config.dataKey];
 
@@ -85,31 +105,92 @@ export default function SensorDetailScreen({
     }
   };
 
-  // Fetch historical data when component mounts
-  useEffect(() => {
-    fetchHistoricalData();
-    // Run debug on mount
-    debugHistoricalData();
-  }, [config.dataKey, timeRange]);
+  const getSensorData = async () => {
+    const result = await getSenMLByPublisher();
+    console.log("🔍 Debugging getSenMLByPublisher...");
+    console.log("data", result.data);
 
-  const fetchHistoricalData = async () => {
-    setIsChartLoading(true);
-    try {
-      // ✅ Use the apiName from config
-      const sensorName = getSensorName();
-      console.log(`📊 Fetching historical data for: ${sensorName}`);
-      console.log(`   Config name: ${config.name}`);
-      console.log(`   ApiName: ${config.apiName}`);
-      
-      const data = await getSensorWeeklyData(sensorName);
-      console.log(`✅ Received ${data?.length || 0} data points`);
-      setHistoricalData(data || []);
-    } catch (error) {
-      console.error("❌ Error fetching historical data:", error);
-    } finally {
-      setIsChartLoading(false);
+    if (result.success) {
+      console.log("SenML data:", result.data);
+    } else {
+      console.error("Error:", result.error);
     }
   };
+
+  // Compute the from/to window for the selected time range
+  const getTimeWindow = useCallback(() => {
+    const days = RANGE_DAYS[timeRange] || 7;
+    const to = Date.now();
+    const from = to - days * 24 * 60 * 60 * 1000;
+    return { from, to };
+  }, [timeRange]);
+
+  // Fetch one page of the historical table
+  const fetchTablePage = useCallback(
+    async (page) => {
+      setIsTableLoading(true);
+      try {
+        const { from, to } = getTimeWindow();
+        const result = await fetchSensorHistorical({
+          sensorKey: getSensorName(),
+          from,
+          to,
+          limit: PAGE_SIZE,
+          offset: (page - 1) * PAGE_SIZE,
+        });
+
+        if (result.success) {
+          setTableData(result.data);
+          setTableTotal(result.total);
+          setCurrentPage(page);
+        } else {
+          console.error("❌ Error fetching historical table:", result.error);
+          setTableData([]);
+          setTableTotal(0);
+        }
+      } catch (error) {
+        console.error("❌ Error fetching historical table:", error);
+        setTableData([]);
+        setTableTotal(0);
+      } finally {
+        setIsTableLoading(false);
+      }
+    },
+    [getTimeWindow]
+  );
+
+  // Fetch ALL data points in the range for the graph
+  const fetchGraphData = useCallback(async () => {
+    setIsGraphLoading(true);
+    try {
+      const { from, to } = getTimeWindow();
+      const result = await fetchAllSensorHistorical({
+        sensorKey: getSensorName(),
+        from,
+        to,
+        pageSize: 100,
+      });
+
+      if (result.success) {
+        setGraphData(result.data);
+      } else {
+        console.error("❌ Error fetching historical graph:", result.error);
+        setGraphData([]);
+      }
+    } catch (error) {
+      console.error("❌ Error fetching historical graph:", error);
+      setGraphData([]);
+    } finally {
+      setIsGraphLoading(false);
+    }
+  }, [getTimeWindow]);
+
+  // Fetch data when the sensor or time range changes
+  useEffect(() => {
+    fetchTablePage(1);
+    fetchGraphData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config.dataKey, timeRange]);
 
   // Format data for display
   const formatValue = (value) => {
@@ -118,6 +199,21 @@ export default function SensorDetailScreen({
       return Number.isInteger(value) ? String(value) : value.toFixed(1);
     }
     return String(value);
+  };
+
+  const formatTime = (ms) => {
+    if (!ms) return "--";
+    const d = new Date(ms);
+    const date = d.toLocaleDateString([], {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+    const time = d.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return `${date}, ${time}`;
   };
 
   const getStatusColor = (value) => {
@@ -140,6 +236,10 @@ export default function SensorDetailScreen({
     if (config.max !== undefined && value > config.max) return "arrow-up-circle-outline";
     return "checkmark-circle-outline";
   };
+
+  const totalPages = Math.max(1, Math.ceil(tableTotal / PAGE_SIZE));
+  const startIndex = tableTotal > 0 ? (currentPage - 1) * PAGE_SIZE + 1 : 0;
+  const endIndex = Math.min(currentPage * PAGE_SIZE, tableTotal);
 
   return (
     <ScrollView 
@@ -211,7 +311,7 @@ export default function SensorDetailScreen({
             📊 Historical Data
           </Text>
           <Text style={[styles.historicalSubtitle, { color: theme.colors.textSecondary }]}>
-            Last {timeRange === '7d' ? '7' : timeRange === '1d' ? '24' : '30'} days
+            {RANGE_LABELS[timeRange]}
           </Text>
         </View>
 
@@ -238,47 +338,220 @@ export default function SensorDetailScreen({
           ))}
         </View>
 
-        {/* Chart / Historical Data Display */}
+        {/* Tab Switcher: Table | Graph */}
+        <View
+          style={[
+            styles.tabSwitcher,
+            { backgroundColor: theme.colors.surfaceVariant },
+          ]}
+        >
+          <TouchableOpacity
+            style={[
+              styles.tabButton,
+              activeTab === "table" && { backgroundColor: theme.colors.surface },
+            ]}
+            onPress={() => setActiveTab("table")}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name="list-outline"
+              size={16}
+              color={activeTab === "table" ? theme.colors.primary : theme.colors.textSecondary}
+            />
+            <Text
+              style={[
+                styles.tabButtonText,
+                {
+                  color:
+                    activeTab === "table"
+                      ? theme.colors.primary
+                      : theme.colors.textSecondary,
+                  fontWeight: activeTab === "table" ? "700" : "500",
+                },
+              ]}
+            >
+              Table
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.tabButton,
+              activeTab === "graph" && { backgroundColor: theme.colors.surface },
+            ]}
+            onPress={() => setActiveTab("graph")}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name="trending-up-outline"
+              size={16}
+              color={activeTab === "graph" ? theme.colors.primary : theme.colors.textSecondary}
+            />
+            <Text
+              style={[
+                styles.tabButtonText,
+                {
+                  color:
+                    activeTab === "graph"
+                      ? theme.colors.primary
+                      : theme.colors.textSecondary,
+                  fontWeight: activeTab === "graph" ? "700" : "500",
+                },
+              ]}
+            >
+              Graph
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Tab Content */}
         <View style={[styles.chartContainer, { backgroundColor: theme.colors.surface }]}>
-          {isChartLoading ? (
-            <View style={styles.chartPlaceholder}>
-              <ActivityIndicator size="large" color={theme.colors.primary} />
-              <Text style={[styles.chartPlaceholderText, { color: theme.colors.textSecondary }]}>
-                Loading historical data...
-              </Text>
-            </View>
-          ) : historicalData && historicalData.length > 0 ? (
-            <View style={styles.dataPointsContainer}>
-              <Text style={[styles.dataPointsTitle, { color: theme.colors.text }]}>
-                Data Points: {historicalData.length}
-              </Text>
-              {historicalData.slice(0, 10).map((point, index) => (
-                <View key={index} style={styles.dataPoint}>
-                  <Text style={[styles.dataPointTime, { color: theme.colors.textSecondary }]}>
-                    {point.time ? new Date(point.time).toLocaleDateString() : 'N/A'}
+          {activeTab === "table" ? (
+            /* ── Table Tab (paginated) ─────────────────────────────── */
+            isTableLoading ? (
+              <View style={styles.chartPlaceholder}>
+                <ActivityIndicator size="large" color={theme.colors.primary} />
+                <Text style={[styles.chartPlaceholderText, { color: theme.colors.textSecondary }]}>
+                  Loading table data...
+                </Text>
+              </View>
+            ) : tableData.length > 0 ? (
+              <>
+                {/* Table header */}
+                <View style={styles.tableHeaderRow}>
+                  <Text style={[styles.tableHeaderCell, { color: theme.colors.textSecondary }]}>
+                    Date &amp; Time
                   </Text>
-                  <Text style={[styles.dataPointValue, { color: config.color }]}>
-                    {formatValue(point.value)} {point.unit || config.unit}
+                  <Text
+                    style={[
+                      styles.tableHeaderCell,
+                      styles.tableHeaderCellRight,
+                      { color: theme.colors.textSecondary },
+                    ]}
+                  >
+                    Value
                   </Text>
                 </View>
-              ))}
-            </View>
+
+                {/* Table rows */}
+                {tableData.map((point, index) => (
+                  <View
+                    key={`${point.time}-${index}`}
+                    style={[
+                      styles.tableRow,
+                      index % 2 === 1 && styles.tableRowStriped,
+                    ]}
+                  >
+                    <Text style={[styles.tableCell, { color: theme.colors.text }]}>
+                      {formatTime(point.time)}
+                    </Text>
+                    <View style={styles.tableValueCell}>
+                      <Text style={[styles.tableValue, { color: getStatusColor(point.value) }]}>
+                        {formatValue(point.value)}
+                      </Text>
+                      <Text style={[styles.tableUnit, { color: theme.colors.textSecondary }]}>
+                        {point.unit || config.unit}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+
+                {/* Pagination footer */}
+                <View style={styles.paginationFooter}>
+                  <TouchableOpacity
+                    style={[
+                      styles.pageButton,
+                      currentPage <= 1 && { opacity: 0.4 },
+                    ]}
+                    disabled={currentPage <= 1}
+                    onPress={() => fetchTablePage(currentPage - 1)}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="chevron-back" size={16} color={theme.colors.primary} />
+                    <Text style={[styles.pageButtonText, { color: theme.colors.primary }]}>
+                      Prev
+                    </Text>
+                  </TouchableOpacity>
+
+                  <View style={styles.pageInfo}>
+                    <Text style={[styles.pageInfoText, { color: theme.colors.text }]}>
+                      Page {currentPage} of {totalPages}
+                    </Text>
+                    <Text style={[styles.pageInfoSub, { color: theme.colors.textSecondary }]}>
+                      {tableTotal > 0
+                        ? `Showing ${startIndex}-${endIndex} of ${tableTotal}`
+                        : "No records"}
+                    </Text>
+                  </View>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.pageButton,
+                      currentPage >= totalPages && { opacity: 0.4 },
+                    ]}
+                    disabled={currentPage >= totalPages}
+                    onPress={() => fetchTablePage(currentPage + 1)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.pageButtonText, { color: theme.colors.primary }]}>
+                      Next
+                    </Text>
+                    <Ionicons name="chevron-forward" size={16} color={theme.colors.primary} />
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <View style={styles.chartPlaceholder}>
+                <Ionicons name="analytics-outline" size={48} color={theme.colors.textSecondary} />
+                <Text style={[styles.chartPlaceholderText, { color: theme.colors.textSecondary }]}>
+                  No historical data available
+                </Text>
+                <Text style={[styles.chartPlaceholderSubtext, { color: theme.colors.textSecondary }]}>
+                  Data will appear here once available
+                </Text>
+              </View>
+            )
           ) : (
-            <View style={styles.chartPlaceholder}>
-              <Ionicons name="analytics-outline" size={48} color={theme.colors.textSecondary} />
-              <Text style={[styles.chartPlaceholderText, { color: theme.colors.textSecondary }]}>
-                No historical data available
-              </Text>
-              <Text style={[styles.chartPlaceholderSubtext, { color: theme.colors.textSecondary }]}>
-                Data will appear here once available
-              </Text>
-            </View>
+            /* ── Graph Tab (all data) ──────────────────────────────── */
+            isGraphLoading ? (
+              <View style={styles.chartPlaceholder}>
+                <ActivityIndicator size="large" color={theme.colors.primary} />
+                <Text style={[styles.chartPlaceholderText, { color: theme.colors.textSecondary }]}>
+                  Loading graph data...
+                </Text>
+              </View>
+            ) : graphData.length > 0 ? (
+              <View style={styles.graphWrapper}>
+                <Text style={[styles.graphSummary, { color: theme.colors.textSecondary }]}>
+                  {graphData.length} data points ·{" "}
+                  {formatValue(Math.min(...graphData.map((d) => d.value)))} -{" "}
+                  {formatValue(Math.max(...graphData.map((d) => d.value)))} {config.unit}
+                </Text>
+                <LineChart
+                  data={graphData}
+                  color={config.color}
+                  unit={config.unit}
+                  width={width - 60}
+                  height={240}
+                  labelColor={theme.colors.textSecondary}
+                />
+              </View>
+            ) : (
+              <View style={styles.chartPlaceholder}>
+                <Ionicons name="analytics-outline" size={48} color={theme.colors.textSecondary} />
+                <Text style={[styles.chartPlaceholderText, { color: theme.colors.textSecondary }]}>
+                  No historical data available
+                </Text>
+                <Text style={[styles.chartPlaceholderSubtext, { color: theme.colors.textSecondary }]}>
+                  Data will appear here once available
+                </Text>
+              </View>
+            )
           )}
         </View>
       </View>
 
       {/* Sensor Details */}
-      <View style={[styles.detailsCard, { backgroundColor: theme.colors.surface }]}>
+      {/* <View style={[styles.detailsCard, { backgroundColor: theme.colors.surface }]}>
         <Text style={[styles.detailsTitle, { color: theme.colors.text }]}>
           Sensor Details
         </Text>
@@ -320,7 +593,7 @@ export default function SensorDetailScreen({
             </Text>
           </View>
         )}
-      </View>
+      </View> */}
     </ScrollView>
   );
 }
@@ -337,6 +610,8 @@ const styles = StyleSheet.create({
   },
   backButton: { padding: 8 },
   headerTitle: { fontSize: 20, fontWeight: "700" },
+
+  /* ── Live value card ───────────────────────────────────────────── */
   valueCard: {
     marginHorizontal: 16,
     padding: 20,
@@ -368,6 +643,8 @@ const styles = StyleSheet.create({
   mainUnit: { fontSize: 18, fontWeight: "500" },
   rangeContainer: { marginTop: 12 },
   rangeText: { fontSize: 14 },
+
+  /* ── Historical section ────────────────────────────────────────── */
   historicalSection: {
     marginHorizontal: 16,
     marginBottom: 16,
@@ -380,51 +657,148 @@ const styles = StyleSheet.create({
   },
   historicalTitle: { fontSize: 18, fontWeight: "700" },
   historicalSubtitle: { fontSize: 12 },
+
+  /* ── Time range pills ──────────────────────────────────────────── */
   timeRangeContainer: {
     flexDirection: "row",
     justifyContent: "center",
     gap: 8,
     marginBottom: 12,
-    padding: 8,
-    borderRadius: 12,
   },
   timeRangeButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
     borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: "rgba(0,0,0,0.08)",
   },
-  timeRangeText: { fontSize: 12, fontWeight: "600" },
+  timeRangeText: { fontSize: 13, fontWeight: "600" },
+
+  /* ── Table / Graph tab switcher ────────────────────────────────── */
+  tabSwitcher: {
+    flexDirection: "row",
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 12,
+  },
+  tabButton: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 10,
+    borderRadius: 10,
+    gap: 6,
+  },
+  tabButtonText: { fontSize: 14, fontWeight: "500" },
+
+  /* ── Content card (shared by table & graph) ────────────────────── */
   chartContainer: {
-    padding: 16,
+    padding: 0,
     borderRadius: 16,
-    minHeight: 200,
+    overflow: "hidden",
+    minHeight: 220,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
   },
   chartPlaceholder: {
-    flex: 1,
     justifyContent: "center",
     alignItems: "center",
     minHeight: 180,
+    padding: 16,
     gap: 8,
   },
-  chartPlaceholderText: { fontSize: 16, fontWeight: "500" },
-  chartPlaceholderSubtext: { fontSize: 12, opacity: 0.7 },
-  dataPointsContainer: {
-    gap: 8,
-  },
-  dataPointsTitle: {
-    fontSize: 14,
-    fontWeight: "600",
-    marginBottom: 8,
-  },
-  dataPoint: {
+  chartPlaceholderText: { fontSize: 15, fontWeight: "500" },
+  chartPlaceholderSubtext: { fontSize: 12, opacity: 0.6 },
+
+  /* ── Table styles ──────────────────────────────────────────────── */
+  tableHeaderRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 6,
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.04)",
+    paddingVertical: 10,
+    paddingHorizontal: 14,
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(0,0,0,0.05)",
+    borderBottomColor: "rgba(0,0,0,0.08)",
   },
-  dataPointTime: { fontSize: 12 },
-  dataPointValue: { fontSize: 12, fontWeight: "600" },
+  tableHeaderCell: {
+    flex: 2,
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  tableHeaderCellRight: {
+    flex: 1,
+    textAlign: "right",
+  },
+  tableRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(0,0,0,0.06)",
+  },
+  tableRowStriped: {
+    backgroundColor: "rgba(76,175,80,0.04)",
+  },
+  tableCell: {
+    flex: 2,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  tableValueCell: {
+    flex: 1,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "baseline",
+    gap: 4,
+  },
+  tableValue: { fontSize: 15, fontWeight: "700" },
+  tableUnit: { fontSize: 11, fontWeight: "500" },
+
+  /* ── Pagination ────────────────────────────────────────────────── */
+  paginationFooter: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(0,0,0,0.06)",
+  },
+  pageButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  pageButtonText: { fontSize: 13, fontWeight: "600" },
+  pageInfo: { alignItems: "center" },
+  pageInfoText: { fontSize: 13, fontWeight: "600" },
+  pageInfoSub: { fontSize: 11, marginTop: 2, opacity: 0.7 },
+
+  /* ── Graph wrapper ─────────────────────────────────────────────── */
+  graphWrapper: {
+    alignItems: "stretch",
+    padding: 14,
+    gap: 10,
+  },
+  graphSummary: {
+    fontSize: 12,
+    fontWeight: "500",
+    marginBottom: 4,
+  },
+
+  /* ── Sensor details card ───────────────────────────────────────── */
   detailsCard: {
     marginHorizontal: 16,
     padding: 16,

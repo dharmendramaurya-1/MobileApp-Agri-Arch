@@ -47,7 +47,8 @@ function fmt(value) {
 export default function SensorTabs() {
   const { type } = useLocalSearchParams();
   const { theme } = useTheme();
-  const { sensorData } = useMqtt();
+  const { getSelectedDeviceSensorData } = useMqtt();
+  const sensorData = getSelectedDeviceSensorData();
   const { scrollY, headerHeight, heroHeight, resetScroll } = useScroll();
   const tabBarScrollRef = useRef(null);
 

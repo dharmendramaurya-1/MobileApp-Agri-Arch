@@ -320,8 +320,8 @@ export default function Dashboard() {
 
   const lastUpdatedLabel = sensorData.lastUpdated
     ? (isDeviceOnline
-        ? `Updated ${sensorData.lastUpdated.toLocaleTimeString()}`
-        : `Last known: ${sensorData.lastUpdated.toLocaleTimeString()}`)
+        ? `Updated ${new Date(sensorData.lastUpdated).toLocaleTimeString()}`
+        : `Last known: ${new Date(sensorData.lastUpdated).toLocaleTimeString()}`)
     : "No data received yet";
 
   const displayPumpStatus = optimisticPumpStatus || pumpStatus;

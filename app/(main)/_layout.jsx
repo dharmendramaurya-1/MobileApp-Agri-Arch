@@ -7,9 +7,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { router, useNavigation } from "expo-router";
 import { Drawer } from "expo-router/drawer";
 import { useEffect, useRef, useState } from "react";
-import { BackHandler, Modal } from "react-native";
-
-import {
+import { BackHandler, Modal ,
   Alert,
   Animated,
   Dimensions,
@@ -21,6 +19,8 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+
+
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { AlertBadge } from "../../components/AlertBadge";

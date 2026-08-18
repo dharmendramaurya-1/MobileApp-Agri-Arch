@@ -278,6 +278,12 @@ export const MqttProvider = ({ children }) => {
   const hasInitializedRef = useRef(false);
   const unsubscribeRef = useRef(null);
   
+  // ✅ Refs to avoid stale closures in MQTT handlers
+  const externalKeyRef = useRef(null);
+  const selectedExternalKeyRef = useRef(null);
+  const selectedDeviceIdRef = useRef(null);
+  const availableDevicesRef = useRef([]);
+  
   const getStatStartTime = useRef(null);
   const isUsingGetStat = useRef(true);
   const dataCheckIntervalRef = useRef(null);
@@ -285,6 +291,12 @@ export const MqttProvider = ({ children }) => {
   const lastDataReceivedTimePerDevice = useRef({});
   
   const { isAuthenticated, token, isLoading: authLoading, isSignupFlow } = useAuth();
+
+  // ✅ Keep refs in sync with state (avoids stale closures in MQTT handlers)
+  useEffect(() => { externalKeyRef.current = externalKey; }, [externalKey]);
+  useEffect(() => { selectedExternalKeyRef.current = selectedExternalKey; }, [selectedExternalKey]);
+  useEffect(() => { selectedDeviceIdRef.current = selectedDeviceId; }, [selectedDeviceId]);
+  useEffect(() => { availableDevicesRef.current = availableDevices; }, [availableDevices]);
 
   const initDeviceData = (deviceId) => {
     if (!devicesData[deviceId]) {
@@ -316,9 +328,15 @@ export const MqttProvider = ({ children }) => {
   // ── ✅ Check if external key matches selected device ──
   const isSelectedExternalKey = (extKey) => {
     if (!extKey) return false;
-    if (extKey === selectedExternalKey) return true;
-    if (selectedDeviceId) {
-      const device = availableDevices.find(d => d.id === selectedDeviceId);
+    // ✅ Use refs to avoid stale closures from MQTT handlers
+    const selKey = selectedExternalKeyRef.current;
+    const extK = externalKeyRef.current;
+    const selDevId = selectedDeviceIdRef.current;
+    const devList = availableDevicesRef.current;
+    if (extKey === selKey) return true;
+    if (extKey === extK) return true;
+    if (selDevId) {
+      const device = devList.find(d => d.id === selDevId);
       if (device && device.external_key === extKey) return true;
     }
     return false;
@@ -437,37 +455,44 @@ export const MqttProvider = ({ children }) => {
   const getSelectedExternalKey = () => selectedExternalKey;
 
   const getSelectedDeviceData = () => {
-    if (!selectedExternalKey) return null;
-    return devicesData[selectedExternalKey] || null;
+    const key = selectedExternalKey || externalKey;
+    if (!key) return null;
+    return devicesData[key] || null;
   };
 
+  // ✅ Use selectedExternalKey, falling back to externalKey
   const getSelectedDeviceSensorData = () => {
-    if (!selectedExternalKey) return DEFAULT_SENSOR_DATA;
-    const data = devicesData[selectedExternalKey];
+    const key = selectedExternalKey || externalKey;
+    if (!key) return DEFAULT_SENSOR_DATA;
+    const data = devicesData[key];
     return data?.sensorData || DEFAULT_SENSOR_DATA;
   };
 
   const getSelectedDeviceActuatorStatus = () => {
-    if (!selectedExternalKey) return DEFAULT_ACTUATOR_STATUS;
-    const data = devicesData[selectedExternalKey];
+    const key = selectedExternalKey || externalKey;
+    if (!key) return DEFAULT_ACTUATOR_STATUS;
+    const data = devicesData[key];
     return data?.actuatorStatus || DEFAULT_ACTUATOR_STATUS;
   };
 
   const getSelectedDeviceCropSettings = () => {
-    if (!selectedExternalKey) return DEFAULT_CROP_SETTINGS;
-    const data = devicesData[selectedExternalKey];
+    const key = selectedExternalKey || externalKey;
+    if (!key) return DEFAULT_CROP_SETTINGS;
+    const data = devicesData[key];
     return data?.cropSettings || DEFAULT_CROP_SETTINGS;
   };
 
   const getSelectedDeviceConfig = () => {
-    if (!selectedExternalKey) return DEFAULT_CONFIG;
-    const data = devicesData[selectedExternalKey];
+    const key = selectedExternalKey || externalKey;
+    if (!key) return DEFAULT_CONFIG;
+    const data = devicesData[key];
     return data?.deviceConfig || DEFAULT_CONFIG;
   };
 
   const getSelectedDeviceOnlineStatus = () => {
-    if (!selectedExternalKey) return false;
-    return deviceOnlineStatus[selectedExternalKey] || false;
+    const key = selectedExternalKey || externalKey;
+    if (!key) return false;
+    return deviceOnlineStatus[key] || false;
   };
 
   const requestStatusForAllDevices = async () => {
@@ -824,144 +849,157 @@ export const MqttProvider = ({ children }) => {
   };
 
   const updateDeviceData = (deviceKey, parsed) => {
-    const currentData = devicesData[deviceKey] || {
-      sensorData: { ...DEFAULT_SENSOR_DATA },
-      actuatorStatus: { ...DEFAULT_ACTUATOR_STATUS },
-      cropSettings: { ...DEFAULT_CROP_SETTINGS },
-      deviceConfig: { ...DEFAULT_CONFIG },
-      devices: [],
-      deviceStatus: null,
-      deviceStatusFlags: getDefaultDeviceStatus(),
-      lastUpdated: null,
-    };
-    
-    let updatedSensorData = { ...currentData.sensorData };
-    let updatedActuatorStatus = { ...currentData.actuatorStatus };
-    let updatedDevices = [...currentData.devices];
-    let newDeviceStatus = currentData.deviceStatus;
-    let newDeviceStatusFlags = currentData.deviceStatusFlags;
-    let hasSensorUpdate = false;
-    let hasActuatorUpdate = false;
-    
-    for (const [key, value] of Object.entries(parsed)) {
-      if (key.startsWith('_')) continue;
+    // ✅ Use updater function to always get the latest devicesData
+    setDevicesData(prev => {
+      const currentData = prev[deviceKey] || {
+        sensorData: { ...DEFAULT_SENSOR_DATA },
+        actuatorStatus: { ...DEFAULT_ACTUATOR_STATUS },
+        cropSettings: { ...DEFAULT_CROP_SETTINGS },
+        deviceConfig: { ...DEFAULT_CONFIG },
+        devices: [],
+        deviceStatus: null,
+        deviceStatusFlags: getDefaultDeviceStatus(),
+        lastUpdated: null,
+      };
       
-      if (['ambientTemperature', 'ambientHumidity', 'waterTemperature', 
-           'co2Level', 'ecValue', 'phValue', 'waterLevel', 'lightLevel', 
-           'soilMoisture'].includes(key)) {
-        updatedSensorData[key] = value;
-        hasSensorUpdate = true;
+      let updatedSensorData = { ...currentData.sensorData };
+      let updatedActuatorStatus = { ...currentData.actuatorStatus };
+      let updatedDevices = [...currentData.devices];
+      let newDeviceStatus = currentData.deviceStatus;
+      let newDeviceStatusFlags = currentData.deviceStatusFlags;
+      let hasActuatorUpdate = false;
+      
+      for (const [key, value] of Object.entries(parsed)) {
+        if (key.startsWith('_')) continue;
+        
+        if (['ambientTemperature', 'ambientHumidity', 'waterTemperature', 
+             'co2Level', 'ecValue', 'phValue', 'waterLevel', 'lightLevel', 
+             'soilMoisture'].includes(key)) {
+          updatedSensorData[key] = value;
+        }
+        
+        if (key === 'deviceStatus') {
+          newDeviceStatus = value;
+          updatedSensorData.deviceStatus = value;
+        }
+        
+        if (key === 'deviceStatusFlags') {
+          newDeviceStatusFlags = value;
+        }
+        
+        if (['water_pump', 'water_ILvalve', 'water_OLvalve', 
+             'nutrient_pump', 'reboot_ack'].includes(key)) {
+          updatedActuatorStatus[key] = value;
+          updatedSensorData[key] = value;
+          hasActuatorUpdate = true;
+        }
       }
       
-      if (key === 'deviceStatus') {
-        newDeviceStatus = value;
-        updatedSensorData.deviceStatus = value;
-        hasSensorUpdate = true;
-      }
-      
-      if (key === 'deviceStatusFlags') {
-        newDeviceStatusFlags = value;
-      }
-      
-      if (['water_pump', 'water_ILvalve', 'water_OLvalve', 
-           'nutrient_pump', 'reboot_ack'].includes(key)) {
-        updatedActuatorStatus[key] = value;
-        updatedSensorData[key] = value;
-        hasActuatorUpdate = true;
-        hasSensorUpdate = true;
-      }
-    }
-    
-    if (hasSensorUpdate || hasActuatorUpdate) {
       const now = new Date();
       updatedSensorData.lastUpdated = now;
       updatedActuatorStatus.lastUpdated = now;
-    }
-    
-    if (hasActuatorUpdate) {
-      updatedDevices = Object.entries(updatedActuatorStatus)
-        .filter(([key]) => key in DEVICE_CONFIG && key !== 'lastUpdated')
-        .map(([key, value]) => {
-          const config = DEVICE_CONFIG[key];
-          return {
-            id: key,
-            n: key,
-            vb: value || false,
-            displayName: config.displayName,
-            icon: config.icon,
-            description: config.description,
-            category: config.category,
-          };
-        });
-    }
-    
-    setDevicesData(prev => ({
-      ...prev,
-      [deviceKey]: {
-        ...currentData,
-        sensorData: updatedSensorData,
-        actuatorStatus: updatedActuatorStatus,
-        devices: updatedDevices,
-        deviceStatus: newDeviceStatus,
-        deviceStatusFlags: newDeviceStatusFlags,
-        lastUpdated: new Date(),
-        lastDataReceived: Date.now(),
-        hasReceivedData: true,
-        isLiveData: true,
+      
+      if (hasActuatorUpdate) {
+        updatedDevices = Object.entries(updatedActuatorStatus)
+          .filter(([key]) => key in DEVICE_CONFIG && key !== 'lastUpdated')
+          .map(([key, value]) => {
+            const cfg = DEVICE_CONFIG[key];
+            return {
+              id: key,
+              n: key,
+              vb: value || false,
+              displayName: cfg.displayName,
+              icon: cfg.icon,
+              description: cfg.description,
+              category: cfg.category,
+            };
+          });
       }
-    }));
+      
+      return {
+        ...prev,
+        [deviceKey]: {
+          ...currentData,
+          sensorData: updatedSensorData,
+          actuatorStatus: updatedActuatorStatus,
+          devices: updatedDevices,
+          deviceStatus: newDeviceStatus,
+          deviceStatusFlags: newDeviceStatusFlags,
+          lastUpdated: now,
+          lastDataReceived: Date.now(),
+          hasReceivedData: true,
+          isLiveData: true,
+        }
+      };
+    });
   };
 
   const updateLegacyState = (parsed) => {
-    const updatedSensorData = { ...sensorData };
-    const updatedActuatorStatus = { ...actuatorStatus };
-    let hasSensorUpdate = false;
-    let hasActuatorUpdate = false;
-    let newDeviceStatus = deviceStatus;
-    
-    for (const [key, value] of Object.entries(parsed)) {
-      if (key.startsWith('_')) continue;
+    // ✅ Use updater functions to always get the latest state
+    setSensorData(prev => {
+      const updatedSensorData = { ...prev };
+      let hasSensorUpdate = false;
+      let hasActuatorUpdate = false;
+      let newDeviceStatusLocal = null;
+      let newDeviceStatusFlagsLocal = null;
       
-      if (['ambientTemperature', 'ambientHumidity', 'waterTemperature', 
-           'co2Level', 'ecValue', 'phValue', 'waterLevel', 'lightLevel', 
-           'soilMoisture'].includes(key)) {
-        updatedSensorData[key] = value;
-        hasSensorUpdate = true;
+      for (const [key, value] of Object.entries(parsed)) {
+        if (key.startsWith('_')) continue;
+        
+        if (['ambientTemperature', 'ambientHumidity', 'waterTemperature', 
+             'co2Level', 'ecValue', 'phValue', 'waterLevel', 'lightLevel', 
+             'soilMoisture'].includes(key)) {
+          updatedSensorData[key] = value;
+          hasSensorUpdate = true;
+        }
+        
+        if (key === 'deviceStatus') {
+          newDeviceStatusLocal = value;
+          updatedSensorData.deviceStatus = value;
+          hasSensorUpdate = true;
+        }
+        
+        if (key === 'deviceStatusFlags') {
+          newDeviceStatusFlagsLocal = value;
+        }
+        
+        if (['water_pump', 'water_ILvalve', 'water_OLvalve', 
+             'nutrient_pump', 'reboot_ack'].includes(key)) {
+          updatedSensorData[key] = value;
+          hasActuatorUpdate = true;
+          hasSensorUpdate = true;
+        }
       }
       
-      if (key === 'deviceStatus') {
-        newDeviceStatus = value;
-        updatedSensorData.deviceStatus = value;
-        hasSensorUpdate = true;
+      if (hasSensorUpdate) {
+        updatedSensorData.lastUpdated = new Date();
       }
       
-      if (key === 'deviceStatusFlags') {
-        setDeviceStatusFlags(value);
+      // ✅ Update deviceStatusFlags outside of this updater
+      if (newDeviceStatusFlagsLocal) {
+        setDeviceStatusFlags(newDeviceStatusFlagsLocal);
+      }
+      if (newDeviceStatusLocal !== null) {
+        setDeviceStatus(newDeviceStatusLocal);
       }
       
-      if (['water_pump', 'water_ILvalve', 'water_OLvalve', 
-           'nutrient_pump', 'reboot_ack'].includes(key)) {
-        updatedSensorData[key] = value;
-        updatedActuatorStatus[key] = value;
-        hasActuatorUpdate = true;
-        hasSensorUpdate = true;
+      // ✅ Update actuatorStatus inside its own updater
+      if (hasActuatorUpdate) {
+        setActuatorStatus(prevAct => {
+          const updatedActuator = { ...prevAct };
+          for (const [key, value] of Object.entries(parsed)) {
+            if (['water_pump', 'water_ILvalve', 'water_OLvalve', 
+                 'nutrient_pump', 'reboot_ack'].includes(key)) {
+              updatedActuator[key] = value;
+            }
+          }
+          updatedActuator.lastUpdated = new Date();
+          return updatedActuator;
+        });
       }
-    }
-    
-    if (hasSensorUpdate) {
-      updatedSensorData.lastUpdated = new Date();
-      setSensorData(updatedSensorData);
-      console.log(`📊 Updated sensorData:`, updatedSensorData);
-    }
-    
-    if (hasActuatorUpdate) {
-      updatedActuatorStatus.lastUpdated = new Date();
-      setActuatorStatus(updatedActuatorStatus);
-    }
-    
-    if (newDeviceStatus !== null) {
-      setDeviceStatus(newDeviceStatus);
-    }
+      
+      return updatedSensorData;
+    });
   };
 
   const loadAvailableDevices = async () => {
@@ -1096,6 +1134,13 @@ export const MqttProvider = ({ children }) => {
       return;
     }
 
+    // ✅ If selectedExternalKey is still null, use storedKey as fallback
+    if (!selectedExternalKey && storedKey) {
+      setSelectedExternalKey(storedKey);
+      await AsyncStorage.setItem(STORAGE_KEYS.SELECTED_EXTERNAL_KEY, storedKey);
+      console.log("✅ Set selectedExternalKey from external_key:", storedKey);
+    }
+
     console.log("✅ external_key found, proceeding with MQTT connection");
     setConnectionState('connecting');
     setIsInitializing(true);
@@ -1177,8 +1222,24 @@ export const MqttProvider = ({ children }) => {
       }
 
       if (cached.devicesData) {
-        setDevicesData(cached.devicesData);
-        console.log("🗂️ Restored data for", Object.keys(cached.devicesData).length, "devices");
+        // ✅ Convert lastUpdated strings back to Date objects
+        const restored = {};
+        for (const [key, dev] of Object.entries(cached.devicesData)) {
+          restored[key] = {
+            ...dev,
+            sensorData: dev.sensorData ? {
+              ...dev.sensorData,
+              lastUpdated: dev.sensorData.lastUpdated ? new Date(dev.sensorData.lastUpdated) : null,
+            } : { ...DEFAULT_SENSOR_DATA },
+            actuatorStatus: dev.actuatorStatus ? {
+              ...dev.actuatorStatus,
+              lastUpdated: dev.actuatorStatus.lastUpdated ? new Date(dev.actuatorStatus.lastUpdated) : null,
+            } : { ...DEFAULT_ACTUATOR_STATUS },
+            lastUpdated: dev.lastUpdated ? new Date(dev.lastUpdated) : null,
+          };
+        }
+        setDevicesData(restored);
+        console.log("🗂️ Restored data for", Object.keys(restored).length, "devices");
       }
 
       if (cached.deviceConnectionStatus) {
