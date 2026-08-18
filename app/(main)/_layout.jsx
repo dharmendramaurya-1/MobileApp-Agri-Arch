@@ -2,8 +2,8 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import MaskedView from "@react-native-masked-view/masked-view";
-import { LinearGradient } from "expo-linear-gradient";
 import { getDrawerStatusFromState } from "@react-navigation/drawer";
+import { LinearGradient } from "expo-linear-gradient";
 import { router, useNavigation } from "expo-router";
 import { Drawer } from "expo-router/drawer";
 import { useEffect, useRef, useState } from "react";
@@ -28,28 +28,33 @@ import { AlertList } from "../../components/AlertList";
 import Logo from "../../components/Logo";
 import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
+import { ScrollProvider, useScroll } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
 import { user_profile } from "../../src/services/profile/profile";
-import { ScrollProvider, useScroll } from "../../src/context/ScrollContext";
 
 const { width, height } = Dimensions.get("window");
 
 function CustomHeader({ navigation, theme }) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [user_name, setUsername] = useState("");
-  const [currentvalue, setcurrentvalue] = useState({});
   const [showAlerts, setShowAlerts] = useState(false);
-  const { sensorData } = useMqtt();
+  
+  // ✅ Get selected device data
+  const { 
+    getSelectedDeviceName,
+    selectedDeviceId,
+    deviceOnlineStatus,
+    getSelectedDeviceOnlineStatus,
+  } = useMqtt();
+
+  const selectedDeviceName = getSelectedDeviceName();
+  const isDeviceOnline = getSelectedDeviceOnlineStatus();
 
   // ── Hero collapse (shutter) driven by the current screen's scroll ──────
   const { scrollY, setHeaderHeight, heroHeight, setHeroHeight } = useScroll();
   const heroMeasuredRef = useRef(false);
 
   // Native-driver collapse: the hero slides up (translateY) and fades in
-  // lockstep with the scroll offset — zero layout animation, so it stays
-  // silky-smooth even on low-end devices. Because translateY is exactly
-  // -scrollY, the scrolled content fills the space the hero vacates
-  // (screens reserve it via ScrollContext.headerHeight padding).
   const heroTranslateY = scrollY.interpolate({
     inputRange: [0, heroHeight],
     outputRange: [0, -heroHeight],
@@ -74,14 +79,6 @@ function CustomHeader({ navigation, theme }) {
     };
     profile();
   }, []);
-
-  useEffect(() => {
-    setcurrentvalue({
-      WaterLevel: sensorData.waterLevel,
-      temperature: sensorData.ambientTemperature,
-      Humidity: sensorData.ambientHumidity,
-    });
-  }, [sensorData]);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -125,6 +122,9 @@ function CustomHeader({ navigation, theme }) {
       });
   };
 
+  // ✅ Get device ID (external key) for display
+  const deviceId = selectedDeviceId || 'No Device Selected';
+
   return (
     <View
       style={styles.headerContainer}
@@ -152,7 +152,6 @@ function CustomHeader({ navigation, theme }) {
         </View>
 
         <View style={styles.headerRightIcons}>
-          {/* ✅ Alert Badge - Click to show alerts */}
           <TouchableOpacity
             onPress={() => setShowAlerts(true)}
             style={styles.headerIconButton}
@@ -192,12 +191,14 @@ function CustomHeader({ navigation, theme }) {
         <View style={styles.heroContent}>
           <View style={styles.weatherTimeRow}>
             <View style={styles.weatherInfo}>
-              <Text style={styles.weatherIcon}>☀️</Text>
+              <Text style={styles.weatherIcon}>🌱</Text>
               <View>
                 <Text style={styles.weatherTemp}>
-                  {currentvalue.temperature?.toFixed(1) || '--'}°C
+                  {selectedDeviceName || 'No Device'}
                 </Text>
-                <Text style={styles.weatherCondition}>Sunny</Text>
+                <Text style={styles.weatherCondition}>
+                  {isDeviceOnline ? '✅ Active' : '⏳ Waiting...'}
+                </Text>
               </View>
             </View>
             <View style={styles.timeInfo}>
@@ -211,27 +212,29 @@ function CustomHeader({ navigation, theme }) {
               Good Morning, {user_name}! 👋
             </Text>
             <Text style={styles.greetingSubtext}>
-              Your farm is healthy today
+              {isDeviceOnline ? 'Device is connected and ready' : 'Waiting for device connection...'}
             </Text>
           </View>
 
-          <View style={styles.quickStats}>
-            <View style={styles.statItem}>
-              <Ionicons name="water" size={14} color="#4CAF50" />
-              <Text style={styles.statValue}>{currentvalue.WaterLevel?.toFixed(0) || '--'}%</Text>
-              <Text style={styles.statLabel}>Water</Text>
+          {/* ── Device Info Card ── */}
+          <View style={styles.deviceInfoCard}>
+            <View style={styles.deviceInfoRow}>
+              <Ionicons name="hardware-chip-outline" size={16} color="#FFF" style={styles.deviceInfoIcon} />
+              <Text style={styles.deviceInfoLabel}>Device ID:</Text>
+              <Text style={styles.deviceInfoValue} numberOfLines={1}>
+                {deviceId === 'No Device Selected' ? '—' : deviceId}
+              </Text>
             </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statItem}>
-              <Ionicons name="thermometer" size={14} color="#FF9800" />
-              <Text style={styles.statValue}>{currentvalue.temperature?.toFixed(1) || '--'}</Text>
-              <Text style={styles.statLabel}>Temp</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.statItem}>
-              <Ionicons name="leaf" size={14} color="#8BC34A" />
-              <Text style={styles.statValue}>{currentvalue.Humidity?.toFixed(0) || '--'}</Text>
-              <Text style={styles.statLabel}>Humidity</Text>
+            <View style={styles.deviceInfoDivider} />
+            <View style={styles.deviceInfoRow}>
+              <Ionicons name="radio-outline" size={16} color="#FFF" style={styles.deviceInfoIcon} />
+              <Text style={styles.deviceInfoLabel}>Status:</Text>
+              <Text style={[
+                styles.deviceInfoValue,
+                { color: isDeviceOnline ? '#4CAF50' : '#FF9800' }
+              ]}>
+                {isDeviceOnline ? '🟢 Online' : '🟡 Offline'}
+              </Text>
             </View>
           </View>
         </View>
@@ -253,6 +256,15 @@ function CustomHeader({ navigation, theme }) {
 function CustomDrawerContent({ navigation }) {
   const { theme } = useTheme();
   const { logout } = useAuth();
+  const { 
+    getSelectedDeviceName, 
+    getSelectedDeviceOnlineStatus,
+    getSelectedDeviceId,
+  } = useMqtt();
+
+  const selectedDeviceName = getSelectedDeviceName();
+  const isOnline = getSelectedDeviceOnlineStatus();
+  const selectedDeviceId = getSelectedDeviceId();
 
   const handleLogout = async () => {
     Alert.alert("Logout", "Are you sure you want to logout?", [
@@ -265,7 +277,6 @@ function CustomDrawerContent({ navigation }) {
           setTimeout(() => {
             logout().catch(console.error);
             setTimeout(() => {
-              // Reset the whole stack so Back can never land on the old (main) screens
               if (router.canDismiss?.()) router.dismissAll();
               router.replace("/onboarding");
             }, 100);
@@ -280,7 +291,6 @@ function CustomDrawerContent({ navigation }) {
     router.push(route);
   };
 
-  // ✅ Updated menu items with correct routes
   const menuItems = [
     {
       section: "MAIN",
@@ -348,6 +358,21 @@ function CustomDrawerContent({ navigation }) {
               </LinearGradient>
             </MaskedView>
           </View>
+
+          {/* ✅ Show selected device in drawer */}
+          {selectedDeviceName && (
+            <View style={styles.drawerDeviceInfo}>
+              <View style={styles.drawerDeviceStatus}>
+                <View style={[styles.drawerStatusDot, { backgroundColor: isOnline ? '#4CAF50' : '#F44336' }]} />
+                <Text style={[styles.drawerDeviceName, { color: theme.colors.text }]}>
+                  {selectedDeviceName}
+                </Text>
+              </View>
+              <Text style={[styles.drawerDeviceStatusText, { color: theme.colors.textSecondary }]}>
+                {isOnline ? '🟢 Active' : '🔴 Offline'} · ID: {selectedDeviceId || 'N/A'}
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.drawerMenu}>
@@ -460,20 +485,13 @@ export default function MainLayout() {
 function MainDrawer({ theme }) {
   const navigation = useNavigation();
 
-  // NOTE: hero/scroll reset on route change is handled per-screen via
-  // useScrollReset (ScrollContext) + useFocusEffect — it fires reliably on
-  // every drawer tab switch, unlike a listener on the parent navigator here.
-
   // Handle Android back button
   useEffect(() => {
     const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
       const state = navigation.getState();
 
-      // Safety: only take over when the focused navigator is the drawer
-      // (falls through to the system default otherwise)
       if (state?.type !== 'drawer') return false;
 
-      // 1️⃣ Drawer is open → just close it (standard drawer UX)
       try {
         if (getDrawerStatusFromState(state) === 'open') {
           navigation.closeDrawer();
@@ -483,14 +501,12 @@ function MainDrawer({ theme }) {
         // state not ready yet — fall through
       }
 
-      // 2️⃣ Any screen other than Dashboard → go home (Dashboard)
       const currentRoute = state?.routes?.[state?.index ?? 0]?.name;
       if (currentRoute && currentRoute !== 'dashboard') {
         navigation.navigate('dashboard');
         return true;
       }
 
-      // 3️⃣ On Dashboard → confirm before exiting the app
       Alert.alert(
         "Exit App",
         "Are you sure you want to exit?",
@@ -565,9 +581,6 @@ function MainDrawer({ theme }) {
 }
 
 const styles = StyleSheet.create({
-  // Transparent overlay — the drawer renders it above the screen content
-  // (headerTransparent). The green top bar stays pinned; the hero slides
-  // up behind it on scroll. Screens reserve its height as scroll padding.
   headerContainer: {
     zIndex: 10,
   },
@@ -579,8 +592,6 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
     backgroundColor: "#2E7D32",
     zIndex: 2,
-    // Android: elevation, not zIndex, decides sibling draw order. Keep the
-    // hero (elevation 10) sliding BEHIND this opaque bar, never over it.
     elevation: 12,
   },
   headerIconButton: { padding: 6, position: "relative" },
@@ -636,17 +647,43 @@ const styles = StyleSheet.create({
     marginBottom: 2,
   },
   greetingSubtext: { fontSize: 11, color: "rgba(255,255,255,0.9)" },
-  quickStats: {
-    flexDirection: "row",
-    backgroundColor: "rgba(255,255,255,0.15)",
-    borderRadius: 12,
-    padding: 8,
-    justifyContent: "space-around",
+  
+  // ── Device Info Card (NEW) ──
+  deviceInfoCard: {
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 4,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.08)",
   },
-  statItem: { alignItems: "center", gap: 2 },
-  statValue: { fontSize: 14, fontWeight: "700", color: "#FFF" },
-  statLabel: { fontSize: 9, color: "rgba(255,255,255,0.9)" },
-  statDivider: { width: 1, backgroundColor: "rgba(255,255,255,0.2)" },
+  deviceInfoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 2,
+  },
+  deviceInfoIcon: {
+    marginRight: 6,
+  },
+  deviceInfoLabel: {
+    fontSize: 11,
+    color: "rgba(255,255,255,0.7)",
+    fontWeight: "500",
+    width: 70,
+  },
+  deviceInfoValue: {
+    fontSize: 11,
+    color: "#FFF",
+    fontWeight: "600",
+    flex: 1,
+  },
+  deviceInfoDivider: {
+    height: 1,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    marginVertical: 4,
+  },
+
+  // ── Drawer styles ──
   drawerContainer: { flex: 1 },
   scrollContent: { flexGrow: 1 },
   drawerHeader: {
@@ -675,6 +712,32 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: "800",
     letterSpacing: 0.5,
+  },
+  drawerDeviceInfo: {
+    marginTop: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  drawerDeviceStatus: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  drawerStatusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  drawerDeviceName: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  drawerDeviceStatusText: {
+    fontSize: 12,
+    marginTop: 2,
+    marginLeft: 18,
   },
   drawerMenu: { paddingHorizontal: 12, paddingBottom: 16 },
   drawerSectionTitle: {

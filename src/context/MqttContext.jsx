@@ -7,23 +7,22 @@ import {
   setActiveDevice
 } from "../services/identify/identify";
 import {
+  loadLastData,
+  saveLastData
+} from "../services/lastDataCache";
+import {
   disconnectMqtt,
   getMqttClient,
   isMqttConnected,
-  onMqttConnectionChange,
   publishWithRetry,
   reconnectMqtt as reconnectMqttClient,
   updateMqttPassword
 } from "../services/mqttClient";
 import { getDefaultDeviceStatus } from "../utils/deviceStatusParser";
 import { parseSenMLToObject } from "../utils/senmlParser";
-import {
-  loadLastData,
-  saveLastData
-} from "../services/lastDataCache";
 import { useAuth } from "./AuthContext";
 
-// ── Defaults ── All null/undefined ─────────────────────────────────────────
+// ── Defaults ──
 const DEFAULT_SENSOR_DATA = {
   ambientTemperature: null,
   ambientHumidity: null,
@@ -86,7 +85,7 @@ const DEFAULT_CONFIG = {
   lastUpdated: null,
 };
 
-// ── Device Configuration ──────────────────────────────────────────────────────
+// ── Device Configuration ──
 const DEVICE_CONFIG = {
   water_pump: {
     displayName: "Water Pump",
@@ -120,40 +119,26 @@ const DEVICE_CONFIG = {
   },
 };
 
-const DEVICE_ORDER = [
-  "water_pump",
-  "water_ILvalve",
-  "water_OLvalve",
-  "nutrient_pump",
-  "reboot_ack",
-];
-
 const MqttContext = createContext(undefined);
 
-// ── State Preservation ────────────────────────────────────────────────────────
-let lastKnownActuatorState = {
-  water_pump: false,
-  water_ILvalve: false,
-  water_OLvalve: false,
-  nutrient_pump: false,
-  reboot_ack: false,
-};
-
-let lastKnownConfigState = {
-  report_interval: 120,
-  sampling_interval: 30,
-  auto_mode: false,
-};
-
-// ✅ Storage keys
+// ── Storage keys ──
 const STORAGE_KEYS = {
   EXTERNAL_KEY: 'external_key',
   ACTIVE_DEVICE_ID: 'active_device_id',
   PUBLISHER_ID: 'publisher_id',
   REPORT_INTERVAL: 'report_interval',
   TIMEOUT_DURATION: 'timeout_duration',
+  DEVICES_DATA: 'devices_data',
+  SELECTED_DEVICE_ID: 'selected_device_id',
+  SELECTED_DEVICE_NAME: 'selected_device_name',
+  SELECTED_EXTERNAL_KEY: 'selected_external_key',
 };
 
+// ── Constants ──
+const GET_STAT_ACTIVE_DURATION = 10 * 60 * 1000;
+const DATA_CHECK_INTERVAL = 30 * 1000;
+
+// ── Helper Functions ──
 function parseActuatorToDevices(raw) {
   try {
     const records = JSON.parse(raw);
@@ -181,7 +166,6 @@ function parseActuatorToDevices(raw) {
   }
 }
 
-// ── Payload Builders ──────────────────────────────────────────────────────────
 function buildActuatorPayload(status) {
   const payload = [
     { bn: "urn:dev:9003718EEB3F:", bt: Math.floor(Date.now() / 1000) }
@@ -236,29 +220,48 @@ function buildConfigPayload(deviceId, config) {
   ];
 }
 
-// ── Provider ──────────────────────────────────────────────────────────────────
+const generateRequestId = () => {
+  return Math.random().toString(16).substring(2, 10).toUpperCase();
+};
+
+const buildGetStatusPayload = (requestId) => {
+  return JSON.stringify({
+    cmd: "GET_STATUS",
+    request_id: requestId
+  });
+};
+
 export const MqttProvider = ({ children }) => {
+  const [devicesData, setDevicesData] = useState({});
+  const [deviceConnectionStatus, setDeviceConnectionStatus] = useState({});
+  const [deviceOnlineStatus, setDeviceOnlineStatus] = useState({});
+  
+  const [selectedDeviceId, setSelectedDeviceId] = useState(null);
+  const [selectedDeviceName, setSelectedDeviceName] = useState(null);
+  const [selectedExternalKey, setSelectedExternalKey] = useState(null);
+  
   const [sensorData, setSensorData] = useState(DEFAULT_SENSOR_DATA);
   const [actuatorStatus, setActuatorStatus] = useState(DEFAULT_ACTUATOR_STATUS);
   const [cropSettings, setCropSettings] = useState(DEFAULT_CROP_SETTINGS);
   const [deviceConfig, setDeviceConfig] = useState(DEFAULT_CONFIG);
   const [devices, setDevices] = useState([]);
+  const [deviceStatus, setDeviceStatus] = useState(null);
+  const [deviceStatusFlags, setDeviceStatusFlags] = useState(getDefaultDeviceStatus());
+  
   const [isConnected, setIsConnected] = useState(false);
   const [isReady, setIsReady] = useState(false);
   const [externalKey, setExternalKey] = useState(null);
   const [mqttClient, setMqttClient] = useState(null);
   const [isInitializing, setIsInitializing] = useState(false);
   const [hasReceivedData, setHasReceivedData] = useState(false);
-  // ✅ True ONLY when a live MQTT message was received this session. Cached
-  // data restored from AsyncStorage never sets this — so screens show the
-  // CURRENT connection state (connecting/offline) instead of cached online.
   const [isLiveData, setIsLiveData] = useState(false);
-  const [deviceStatus, setDeviceStatus] = useState(null);
-  const [deviceStatusFlags, setDeviceStatusFlags] = useState(getDefaultDeviceStatus());
   const [connectionState, setConnectionState] = useState('idle');
   const [hasEverBeenOnline, setHasEverBeenOnline] = useState(false);
   
-  // ✅ Default report interval: 1800 seconds (30 minutes)
+  const [availableDevices, setAvailableDevices] = useState([]);
+  const [activeDeviceId, setActiveDeviceId] = useState(null);
+  const [isSwitchingDevice, setIsSwitchingDevice] = useState(false);
+  
   const [reportInterval, setReportInterval] = useState(1800);
   const [timeoutDuration, setTimeoutDuration] = useState(3600);
   
@@ -268,760 +271,726 @@ export const MqttProvider = ({ children }) => {
   const hasReceivedDataRef = useRef(false);
   const activeDeviceIdRef = useRef(null);
   const hasEverBeenOnlineRef = useRef(false);
-  // externalKey that the current in-memory sensor data belongs to
   const sensorDataKeyRef = useRef(null);
-  
-  const [availableDevices, setAvailableDevices] = useState([]);
-  const [activeDeviceId, setActiveDeviceId] = useState(null);
-  const [deviceConnectionStatus, setDeviceConnectionStatus] = useState({});
-  const [isSwitchingDevice, setIsSwitchingDevice] = useState(false);
-  
-  const { isAuthenticated, token, isLoading: authLoading, isSignupFlow } = useAuth();
+  const pendingRequestIds = useRef({});
   const isMountedRef = useRef(true);
   const connectionCheckInterval = useRef(null);
   const hasInitializedRef = useRef(false);
   const unsubscribeRef = useRef(null);
-
-  // Keep latest values available inside timers/callbacks
-  useEffect(() => {
-    activeDeviceIdRef.current = activeDeviceId;
-  }, [activeDeviceId]);
-  useEffect(() => {
-    hasEverBeenOnlineRef.current = hasEverBeenOnline;
-  }, [hasEverBeenOnline]);
   
-  const getTopics = (key) => ({
-    data: `/messages/${key}/data`,
-    settings: `/messages/${key}/settings`,
-    config: `/messages/${key}/cfg`,
-    actuator: `/messages/${key}/actuator`,
-  });
+  const getStatStartTime = useRef(null);
+  const isUsingGetStat = useRef(true);
+  const dataCheckIntervalRef = useRef(null);
+  const lastGetStatResponseTime = useRef({});
+  const lastDataReceivedTimePerDevice = useRef({});
+  
+  const { isAuthenticated, token, isLoading: authLoading, isSignupFlow } = useAuth();
 
-  // ── Debug ──────────────────────────────────────────────────────────────────
-  const debugMqttState = () => {
-    console.log("=== MQTT STATE DEBUG ===");
-    console.log("mqttClient exists:", !!mqttClient);
-    console.log("mqttClient connected:", mqttClient?.connected);
-    console.log("isConnected state:", isConnected);
-    console.log("connectionState:", connectionState);
-    console.log("externalKey:", externalKey);
-    console.log("activeDeviceId:", activeDeviceId);
-    console.log("hasReceivedData:", hasReceivedData);
-    console.log("hasEverBeenOnline:", hasEverBeenOnline);
-    console.log("deviceStatus:", deviceStatus);
-    console.log("reportInterval:", reportInterval);
-    console.log("timeoutDuration:", timeoutDuration);
-    console.log("=== END DEBUG ===");
-  };
-
-  // ── Load saved device from AsyncStorage ──────────────────────────────────
-  const loadSavedDevice = async () => {
-    try {
-      // ✅ Load external_key
-      const savedKey = await AsyncStorage.getItem(STORAGE_KEYS.EXTERNAL_KEY);
-      if (savedKey) {
-        console.log("📦 Loaded saved external_key:", savedKey);
-        setExternalKey(savedKey);
-      }
-
-      // ✅ Load active device ID
-      const savedDeviceId = await AsyncStorage.getItem(STORAGE_KEYS.ACTIVE_DEVICE_ID);
-      if (savedDeviceId) {
-        console.log("📦 Loaded saved activeDeviceId:", savedDeviceId);
-        setActiveDeviceId(savedDeviceId);
-      }
-
-      return { savedKey, savedDeviceId };
-    } catch (error) {
-      console.error("❌ Error loading saved device:", error);
-      return { savedKey: null, savedDeviceId: null };
+  const initDeviceData = (deviceId) => {
+    if (!devicesData[deviceId]) {
+      setDevicesData(prev => ({
+        ...prev,
+        [deviceId]: {
+          sensorData: { ...DEFAULT_SENSOR_DATA },
+          actuatorStatus: { ...DEFAULT_ACTUATOR_STATUS },
+          cropSettings: { ...DEFAULT_CROP_SETTINGS },
+          deviceConfig: { ...DEFAULT_CONFIG },
+          devices: [],
+          deviceStatus: null,
+          deviceStatusFlags: getDefaultDeviceStatus(),
+          lastUpdated: null,
+          lastDataReceived: null,
+          hasReceivedData: false,
+          isLiveData: false,
+          isOnline: false,
+        }
+      }));
     }
   };
 
-  // ── Save device to AsyncStorage ──────────────────────────────────────────
-  const saveDevice = async (key, deviceId) => {
+  const isDeviceOnlineFromDevStat = (deviceStatus) => {
+    if (deviceStatus === null || deviceStatus === undefined) return false;
+    return !!(deviceStatus & 0x00020000);
+  };
+
+  // ── ✅ Check if external key matches selected device ──
+  const isSelectedExternalKey = (extKey) => {
+    if (!extKey) return false;
+    if (extKey === selectedExternalKey) return true;
+    if (selectedDeviceId) {
+      const device = availableDevices.find(d => d.id === selectedDeviceId);
+      if (device && device.external_key === extKey) return true;
+    }
+    return false;
+  };
+
+  // ── ✅ Load selected device from AsyncStorage ──
+  const loadSelectedDevice = async () => {
     try {
-      if (key) {
-        await AsyncStorage.setItem(STORAGE_KEYS.EXTERNAL_KEY, key);
-        console.log("💾 Saved external_key:", key);
-      }
+      const deviceId = await AsyncStorage.getItem(STORAGE_KEYS.SELECTED_DEVICE_ID);
+      const deviceName = await AsyncStorage.getItem(STORAGE_KEYS.SELECTED_DEVICE_NAME);
+      const extKey = await AsyncStorage.getItem(STORAGE_KEYS.SELECTED_EXTERNAL_KEY);
+      
+      console.log("📦 Loading selected device:", { deviceId, deviceName, extKey });
+      
       if (deviceId) {
-        await AsyncStorage.setItem(STORAGE_KEYS.ACTIVE_DEVICE_ID, deviceId);
-        console.log("💾 Saved activeDeviceId:", deviceId);
+        setSelectedDeviceId(deviceId);
+        setSelectedDeviceName(deviceName || "Device");
+        
+        if (extKey) {
+          setSelectedExternalKey(extKey);
+          console.log("✅ Using stored external key:", extKey);
+          return { deviceId, deviceName, externalKey: extKey };
+        }
+        
+        // Try to find external key from available devices
+        const device = availableDevices.find(d => d.id === deviceId);
+        if (device && device.external_key) {
+          setSelectedExternalKey(device.external_key);
+          await AsyncStorage.setItem(STORAGE_KEYS.SELECTED_EXTERNAL_KEY, device.external_key);
+          console.log("✅ Found external key from devices:", device.external_key);
+          return { deviceId, deviceName, externalKey: device.external_key };
+        }
+        
+        // Try to use the main external_key
+        const storedKey = await AsyncStorage.getItem(STORAGE_KEYS.EXTERNAL_KEY);
+        if (storedKey) {
+          setSelectedExternalKey(storedKey);
+          await AsyncStorage.setItem(STORAGE_KEYS.SELECTED_EXTERNAL_KEY, storedKey);
+          console.log("✅ Using main external_key:", storedKey);
+          return { deviceId, deviceName, externalKey: storedKey };
+        }
+        
+        return { deviceId, deviceName, externalKey: null };
       }
+      return null;
     } catch (error) {
-      console.error("❌ Error saving device:", error);
+      console.error("❌ Error loading selected device:", error);
+      return null;
     }
   };
 
-  // ── Update timeout based on report interval ──────────────────────────────
-  const updateTimeoutFromReportInterval = (interval) => {
-    if (interval && interval > 0) {
-      const newTimeout = Math.max(interval * 2, 3600); // Minimum 1 hour
-      setReportInterval(interval);
-      setTimeoutDuration(newTimeout);
-      console.log(`📡 Report interval: ${interval}s, Timeout set to: ${newTimeout}s (${Math.round(newTimeout/60)} minutes)`);
-      
-      AsyncStorage.setItem(STORAGE_KEYS.REPORT_INTERVAL, String(interval)).catch(console.error);
-      AsyncStorage.setItem(STORAGE_KEYS.TIMEOUT_DURATION, String(newTimeout)).catch(console.error);
-      
-      return newTimeout;
-    }
-    return timeoutDuration;
-  };
-
-  // ── Load saved timeout values ────────────────────────────────────────────
-  useEffect(() => {
-    const loadSavedValues = async () => {
-      try {
-        const savedInterval = await AsyncStorage.getItem(STORAGE_KEYS.REPORT_INTERVAL);
-        const savedTimeout = await AsyncStorage.getItem(STORAGE_KEYS.TIMEOUT_DURATION);
-        
-        if (savedInterval) {
-          setReportInterval(Number(savedInterval));
-        }
-        if (savedTimeout) {
-          setTimeoutDuration(Number(savedTimeout));
-        }
-        console.log(`📡 Loaded saved values - Report: ${savedInterval || 1800}s, Timeout: ${savedTimeout || 3600}s`);
-      } catch (error) {
-        console.error('Error loading saved timeout values:', error);
-      }
-    };
-    loadSavedValues();
-  }, []);
-
-  // ── Monitor deviceConfig for report_interval changes ────────────────────
-  useEffect(() => {
-    if (deviceConfig && deviceConfig.report_interval) {
-      const interval = deviceConfig.report_interval;
-      if (interval !== reportInterval) {
-        updateTimeoutFromReportInterval(interval);
-      }
-    }
-  }, [deviceConfig]);
-
-  // ── Connection callback ──────────────────────────────────────────────────
-  useEffect(() => {
-    let isMounted = true;
-    console.log("📡 Registering MQTT connection callback...");
-    
-    const unsubscribe = onMqttConnectionChange((connected) => {
-      if (isMounted) {
-        console.log(`📡 MQTT Broker connection state changed: ${connected}`);
-        setIsConnected(connected);
-        
-        if (activeDeviceId) {
-          setDeviceConnectionStatus(prev => ({
-            ...prev,
-            [activeDeviceId]: connected ? 'waiting' : 'disconnected'
-          }));
-        }
-        
-        if (connected) {
-          if (hasEverBeenOnline) {
-            setConnectionState('waiting');
-            startTimeoutCheck();
-          } else {
-            setConnectionState('waiting');
-            console.log('⏳ First connection - Waiting for data with no timeout');
-          }
-        }
-        
-        if (connected && connectionCheckInterval.current) {
-          clearInterval(connectionCheckInterval.current);
-          connectionCheckInterval.current = null;
-        }
-      }
-    });
-    
-    unsubscribeRef.current = unsubscribe;
-
-    return () => {
-      console.log("🧹 Unregistering MQTT connection callback...");
-      isMounted = false;
-      if (unsubscribeRef.current) {
-        unsubscribeRef.current();
-        unsubscribeRef.current = null;
-      }
-      if (connectionCheckInterval.current) {
-        clearInterval(connectionCheckInterval.current);
-        connectionCheckInterval.current = null;
-      }
-    };
-  }, [activeDeviceId]);
-
-  // ── Restore last known data from AsyncStorage (survives app restarts) ────
-  const restoreLastData = async (expectedKey) => {
+  // ── ✅ Save selected device ──
+  const saveSelectedDevice = async (deviceId, deviceName, extKey) => {
     try {
-      const cached = await loadLastData();
-      if (!cached) {
-        console.log("🗂️ No cached MQTT snapshot found");
-        return false;
+      if (deviceId) {
+        await AsyncStorage.setItem(STORAGE_KEYS.SELECTED_DEVICE_ID, deviceId);
+        if (deviceName) {
+          await AsyncStorage.setItem(STORAGE_KEYS.SELECTED_DEVICE_NAME, deviceName);
+        }
+        if (extKey) {
+          await AsyncStorage.setItem(STORAGE_KEYS.SELECTED_EXTERNAL_KEY, extKey);
+        }
+        console.log("💾 Saved selected device:", deviceId, deviceName, "ext:", extKey);
       }
-
-      // Only restore if the snapshot belongs to the currently selected device
-      if (cached.externalKey && cached.externalKey !== expectedKey) {
-        console.log(`🗂️ Cached snapshot is for ${cached.externalKey}, skipping (current: ${expectedKey})`);
-        return false;
-      }
-
-      if (cached.sensorData) {
-        const restored = { ...cached.sensorData };
-        // AsyncStorage serializes Dates → convert lastUpdated back to a Date
-        if (restored.lastUpdated) restored.lastUpdated = new Date(restored.lastUpdated);
-        setSensorData(restored);
-      }
-
-      if (cached.actuatorStatus) {
-        const restored = { ...cached.actuatorStatus };
-        if (restored.lastUpdated) restored.lastUpdated = new Date(restored.lastUpdated);
-        setActuatorStatus(restored);
-        lastKnownActuatorState = {
-          water_pump: restored.water_pump ?? false,
-          water_ILvalve: restored.water_ILvalve ?? false,
-          water_OLvalve: restored.water_OLvalve ?? false,
-          nutrient_pump: restored.nutrient_pump ?? false,
-          reboot_ack: restored.reboot_ack ?? false,
-        };
-      }
-
-      if (cached.cropSettings) {
-        const restored = { ...cached.cropSettings };
-        if (restored.lastUpdated) restored.lastUpdated = new Date(restored.lastUpdated);
-        setCropSettings(restored);
-      }
-
-      if (cached.deviceConfig) {
-        const restored = { ...cached.deviceConfig };
-        if (restored.lastUpdated) restored.lastUpdated = new Date(restored.lastUpdated);
-        setDeviceConfig(restored);
-        lastKnownConfigState = {
-          report_interval: restored.report_interval ?? 120,
-          sampling_interval: restored.sampling_interval ?? 30,
-          auto_mode: restored.auto_mode ?? false,
-        };
-      }
-
-      if (cached.devices && cached.devices.length > 0) {
-        setDevices(cached.devices);
-      }
-
-      if (typeof cached.deviceStatus === "number") {
-        setDeviceStatus(cached.deviceStatus);
-      }
-
-      if (cached.deviceStatusFlags) {
-        setDeviceStatusFlags(cached.deviceStatusFlags);
-      }
-
-      if (typeof cached.hasEverBeenOnline === "boolean") {
-        setHasEverBeenOnline(cached.hasEverBeenOnline);
-        hasEverBeenOnlineRef.current = cached.hasEverBeenOnline;
-      }
-
-      // Show cached data in the UI immediately, but keep the ref false so the
-      // initial-response check still runs — a device that doesn't respond after
-      // reconnect is correctly marked OFFLINE instead of staying “waiting”.
-      if (cached.hasReceivedData) {
-        setHasReceivedData(true);
-        hasReceivedDataRef.current = false;
-      }
-
-      // Start a fresh timeout window from app open so the reconnected device
-      // has a fair chance to report new data before being marked offline.
-      lastDataReceivedTime.current = Date.now();
-
-      // The restored data belongs to this device — later state changes (e.g.
-      // a manual pump toggle) are safe to persist under this key.
-      sensorDataKeyRef.current = expectedKey;
-
-      console.log("🗂️ Restored last MQTT snapshot from AsyncStorage");
-      return true;
     } catch (error) {
-      console.error("❌ Error restoring last MQTT snapshot:", error);
+      console.error("❌ Error saving selected device:", error);
+    }
+  };
+
+  // ── ✅ Select/Activate a device ──
+  const selectDevice = async (deviceId, deviceName) => {
+    console.log(`🔌 Selecting device: ${deviceId} (${deviceName})`);
+    
+    // Find the device to get its external key
+    let device = availableDevices.find(d => d.id === deviceId);
+    if (!device) {
+      console.log("🔄 Device not in availableDevices, refreshing...");
+      await loadAvailableDevices();
+      device = availableDevices.find(d => d.id === deviceId);
+      if (!device) {
+        console.error("❌ Device not found after refresh:", deviceId);
+        return false;
+      }
+    }
+    
+    const extKey = device.external_key;
+    console.log(`📌 Device external key: ${extKey}`);
+    
+    setSelectedDeviceId(deviceId);
+    setSelectedDeviceName(deviceName || "Device");
+    setSelectedExternalKey(extKey);
+    await saveSelectedDevice(deviceId, deviceName, extKey);
+    
+    // Also update the active device
+    try {
+      await setActiveDevice(deviceId, extKey);
+      setActiveDeviceId(deviceId);
+      setExternalKey(extKey);
+      await saveDevice(extKey, deviceId);
+    } catch (error) {
+      console.error("Error updating active device:", error);
+    }
+    
+    // Request status for the selected device
+    setTimeout(() => {
+      console.log(`📡 Requesting status for selected device: ${extKey}`);
+      requestDeviceStatus(extKey);
+    }, 1000);
+    
+    console.log(`✅ Device selected with external key: ${extKey}`);
+    return true;
+  };
+
+  const getSelectedDeviceId = () => selectedDeviceId;
+  const getSelectedDeviceName = () => selectedDeviceName;
+  const getSelectedExternalKey = () => selectedExternalKey;
+
+  const getSelectedDeviceData = () => {
+    if (!selectedExternalKey) return null;
+    return devicesData[selectedExternalKey] || null;
+  };
+
+  const getSelectedDeviceSensorData = () => {
+    if (!selectedExternalKey) return DEFAULT_SENSOR_DATA;
+    const data = devicesData[selectedExternalKey];
+    return data?.sensorData || DEFAULT_SENSOR_DATA;
+  };
+
+  const getSelectedDeviceActuatorStatus = () => {
+    if (!selectedExternalKey) return DEFAULT_ACTUATOR_STATUS;
+    const data = devicesData[selectedExternalKey];
+    return data?.actuatorStatus || DEFAULT_ACTUATOR_STATUS;
+  };
+
+  const getSelectedDeviceCropSettings = () => {
+    if (!selectedExternalKey) return DEFAULT_CROP_SETTINGS;
+    const data = devicesData[selectedExternalKey];
+    return data?.cropSettings || DEFAULT_CROP_SETTINGS;
+  };
+
+  const getSelectedDeviceConfig = () => {
+    if (!selectedExternalKey) return DEFAULT_CONFIG;
+    const data = devicesData[selectedExternalKey];
+    return data?.deviceConfig || DEFAULT_CONFIG;
+  };
+
+  const getSelectedDeviceOnlineStatus = () => {
+    if (!selectedExternalKey) return false;
+    return deviceOnlineStatus[selectedExternalKey] || false;
+  };
+
+  const requestStatusForAllDevices = async () => {
+    const connected = isMqttConnected();
+    console.log(`📡 MQTT connection check: ${connected}`);
+    
+    if (!connected) {
+      console.log("⚠️ Cannot request status - MQTT not connected");
+      try {
+        const freshClient = await getMqttClient();
+        if (freshClient && freshClient.connected) {
+          console.log("✅ Got fresh connected client");
+          setMqttClient(freshClient);
+        } else {
+          console.log("❌ Could not get connected client");
+          return;
+        }
+      } catch (error) {
+        console.error("❌ Error getting fresh client:", error);
+        return;
+      }
+    }
+
+    let currentClient = mqttClient;
+    if (!currentClient || !currentClient.connected) {
+      try {
+        currentClient = await getMqttClient();
+        if (currentClient && currentClient.connected) {
+          setMqttClient(currentClient);
+        } else {
+          console.log("❌ MQTT client still not connected");
+          return;
+        }
+      } catch (error) {
+        console.error("❌ Failed to get MQTT client:", error);
+        return;
+      }
+    }
+    
+    if (!currentClient || !currentClient.connected) {
+      console.log("❌ MQTT client not connected");
+      return;
+    }
+
+    const devices = availableDevices.length > 0 ? availableDevices : await loadAvailableDevices();
+    
+    if (devices.length === 0) {
+      console.log("⚠️ No devices available");
+      return;
+    }
+    
+    console.log(`📡 Requesting status for ${devices.length} devices`);
+    
+    getStatStartTime.current = Date.now();
+    isUsingGetStat.current = true;
+    
+    for (const device of devices) {
+      const requestId = generateRequestId();
+      const topic = `/messages/${device.external_key}/get_stat`;
+      const payload = buildGetStatusPayload(requestId);
+      
+      pendingRequestIds.current[device.external_key] = requestId;
+      console.log(`📤 GET_STATUS to ${device.external_key} (${requestId})`);
+      
+      try {
+        await publishWithRetry(topic, payload, 2);
+      } catch (error) {
+        console.error(`❌ Error sending status to ${device.external_key}:`, error);
+      }
+    }
+  };
+
+  const requestDeviceStatus = async (deviceKey) => {
+    if (!deviceKey) {
+      console.log("⚠️ No device key provided");
+      return false;
+    }
+    
+    if (!isMqttConnected()) {
+      console.log("⚠️ MQTT not connected");
+      return false;
+    }
+    
+    const requestId = generateRequestId();
+    const topic = `/messages/${deviceKey}/get_stat`;
+    const payload = buildGetStatusPayload(requestId);
+    
+    pendingRequestIds.current[deviceKey] = requestId;
+    console.log(`📤 GET_STATUS to ${deviceKey} (${requestId})`);
+    
+    try {
+      return await publishWithRetry(topic, payload, 2);
+    } catch (error) {
+      console.error(`❌ Failed to send status to ${deviceKey}:`, error);
       return false;
     }
   };
 
-  // ── Persist last known data (debounced) so it survives app restarts ─────
-  const persistTimer = useRef(null);
-  useEffect(() => {
-    // Only persist snapshots that carry real data. Checking `lastUpdated` (not
-    // the hasReceivedData ref) means restored data and manual pump toggles also
-    // get persisted, while empty DEFAULT state is never written to the cache.
-    const hasRealData = !!sensorData.lastUpdated || !!actuatorStatus.lastUpdated ||
-                        !!cropSettings.lastUpdated || !!deviceConfig.lastUpdated;
-    if (!hasRealData) return;
-    // Never save device A's stale data under device B's key.
-    if (sensorDataKeyRef.current !== externalKey) return;
-
-    if (persistTimer.current) clearTimeout(persistTimer.current);
-    persistTimer.current = setTimeout(() => {
-      saveLastData({
-        externalKey,
-        sensorData,
-        actuatorStatus,
-        cropSettings,
-        deviceConfig,
-        devices,
-        deviceStatus,
-        deviceStatusFlags,
-        hasReceivedData,
-        hasEverBeenOnline,
-        lastKnownActuatorState,
-        lastKnownConfigState,
-        savedAt: Date.now(),
-      });
-    }, 600);
-
-    return () => {
-      if (persistTimer.current) clearTimeout(persistTimer.current);
-    };
-  }, [
-    sensorData,
-    actuatorStatus,
-    cropSettings,
-    deviceConfig,
-    devices,
-    deviceStatus,
-    deviceStatusFlags,
-    hasReceivedData,
-    hasEverBeenOnline,
-    externalKey,
-  ]);
-
-  // ── Cleanup ──────────────────────────────────────────────────────────────
-  const cleanupMqtt = async () => {
-    if (timeoutCheckInterval.current) {
-      clearInterval(timeoutCheckInterval.current);
-      timeoutCheckInterval.current = null;
-    }
-    if (connectionCheckInterval.current) {
-      clearInterval(connectionCheckInterval.current);
-      connectionCheckInterval.current = null;
-    }
-    if (mqttClient) {
-      try {
-        mqttClient.removeAllListeners();
-        await disconnectMqtt(true);
-        console.log("🧹 MQTT cleaned up");
-      } catch (error) {
-        console.error("Error cleaning up MQTT:", error);
-      }
-    }
-    setIsConnected(false);
-    setMqttClient(null);
-    setHasReceivedData(false);
-    hasReceivedDataRef.current = false;
-    setIsLiveData(false);
-    setDeviceStatus(null);
-    setConnectionState('idle');
-    clearInitialResponseCheck();
-  };
-
-  // ── Load External Key ────────────────────────────────────────────────────
-  const loadExternalKey = async () => {
-    try {
-      let storedKey = await AsyncStorage.getItem(STORAGE_KEYS.EXTERNAL_KEY);
-      
-      if (!storedKey) {
-        console.log("ℹ️ No external_key found in storage.");
-        return null;
-      }
-      console.log("✅ Found stored external_key:", storedKey);
-      return storedKey;
-    } catch (error) {
-      console.error("❌ Error loading externalKey:", error);
-      return null;
-    }
-  };
-  
-  // ── Connection Check ─────────────────────────────────────────────────────
-  const startConnectionCheck = () => {
-    if (connectionCheckInterval.current) {
-      clearInterval(connectionCheckInterval.current);
-      connectionCheckInterval.current = null;
-    }
-    if (isConnected) return;
-
-    connectionCheckInterval.current = setInterval(() => {
-      if (!isMountedRef.current) {
-        clearInterval(connectionCheckInterval.current);
-        connectionCheckInterval.current = null;
-        return;
-      }
-      if (isConnected) {
-        clearInterval(connectionCheckInterval.current);
-        connectionCheckInterval.current = null;
-        return;
-      }
-      if (isMqttConnected()) {
-        setIsConnected(true);
-        setConnectionState('waiting');
-        if (activeDeviceId) {
-          setDeviceConnectionStatus(prev => ({
-            ...prev,
-            [activeDeviceId]: 'waiting'
-          }));
-        }
-        clearInterval(connectionCheckInterval.current);
-        connectionCheckInterval.current = null;
-        
-        if (hasEverBeenOnline) {
-          startTimeoutCheck();
-        } else {
-          console.log('⏳ First connection - Waiting for data with no timeout');
-        }
-      }
-    }, 5000);
-  };
-
-  // ── Start Timeout Check ──────────────────────────────────────────────────
-  const startTimeoutCheck = () => {
-    if (timeoutCheckInterval.current) {
-      clearInterval(timeoutCheckInterval.current);
-      timeoutCheckInterval.current = null;
-    }
-
-    if (!hasEverBeenOnlineRef.current) {
-      console.log('⏳ Device never online - No timeout check');
+  const subscribeToAllDevices = async (client) => {
+    if (!client) {
+      console.log("⚠️ No client provided");
       return;
     }
 
-    console.log(`⏳ Starting timeout check - Timeout: ${timeoutDuration}s (${Math.round(timeoutDuration/60)} minutes)`);
-
-    timeoutCheckInterval.current = setInterval(() => {
-      if (!isMountedRef.current) {
-        clearInterval(timeoutCheckInterval.current);
-        timeoutCheckInterval.current = null;
+    if (!client.connected) {
+      console.log("⏳ Client not connected, waiting...");
+      let attempts = 0;
+      while (attempts < 20 && !client.connected) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        attempts++;
+      }
+      if (!client.connected) {
+        console.log("❌ Client still not connected");
         return;
       }
-
-      if (hasReceivedData) {
-        lastDataReceivedTime.current = Date.now();
-        return;
-      }
-
-      if (lastDataReceivedTime.current) {
-        const timeSinceLastData = (Date.now() - lastDataReceivedTime.current) / 1000;
-        
-        if (timeSinceLastData >= timeoutDuration) {
-          setConnectionState('offline');
-          if (activeDeviceId) {
-            setDeviceConnectionStatus(prev => ({
-              ...prev,
-              [activeDeviceId]: 'offline'
-            }));
-          }
-          console.log(`📡 Device marked OFFLINE - No data received for ${timeoutDuration}s (${Math.round(timeoutDuration/60)} minutes)`);
-          
-          if (timeoutCheckInterval.current) {
-            clearInterval(timeoutCheckInterval.current);
-            timeoutCheckInterval.current = null;
-          }
-        } else {
-          if (connectionState !== 'waiting') {
-            setConnectionState('waiting');
-          }
-          const remaining = Math.round((timeoutDuration - timeSinceLastData) / 60);
-          console.log(`⏳ Waiting for data... ${remaining} minutes remaining`);
-        }
-      }
-
-    }, 30000);
-  };
-
-  // ── Initial Response Check ────────────────────────────────────────────────
-  const clearInitialResponseCheck = () => {
-    if (initialResponseTimer.current) {
-      clearTimeout(initialResponseTimer.current);
-      initialResponseTimer.current = null;
-    }
-  };
-
-  const startInitialResponseCheck = (timeoutMs = getInitialResponseTimeout()) => {
-    clearInitialResponseCheck();
-    if (hasReceivedDataRef.current) {
-      console.log('⏳ Data already received this session — skipping initial response check');
-      return;
-    }
-    console.log(`⏳ Starting initial response check — waiting ${Math.round(timeoutMs / 1000)}s (${Math.round(timeoutMs / 3600)} hours) for device data...`);
-    initialResponseTimer.current = setTimeout(() => {
-      initialResponseTimer.current = null;
-      if (!isMountedRef.current) return;
-      if (!hasReceivedDataRef.current) {
-        console.log('❌ Initial response check expired — device sent NO response, marking OFFLINE');
-        setConnectionState('offline');
-        if (activeDeviceIdRef.current) {
-          setDeviceConnectionStatus(prev => ({
-            ...prev,
-            [activeDeviceIdRef.current]: 'offline'
-          }));
-        }
-      }
-    }, timeoutMs);
-  };
-
-  // ✅ Updated: Initial response timeout - minimum 1 hour (3600 seconds)
-  const getInitialResponseTimeout = () => {
-    const intervalMs = reportInterval > 0 ? reportInterval * 1000 : 0;
-    // ✅ Minimum 1 hour (3600 seconds), maximum 5 hours (18000000 seconds)
-    return Math.min(Math.max(intervalMs, 3600000), 18000000);
-  };
-
-  // ── Publish ──────────────────────────────────────────────────────────────
-  const doPublish = (client, topic, message, resolve) => {
-    if (!client || !client.connected) {
-      console.log("❌ Client not connected");
-      resolve(false);
-      return;
     }
     
-    console.log(`📤 Publishing to: ${topic}`);
-    console.log(`📤 Message preview: ${message.substring(0, 150)}...`);
+    const devices = availableDevices.length > 0 ? availableDevices : await loadAvailableDevices();
+    console.log(`📡 Subscribing to ${devices.length} devices...`);
     
-    client.publish(topic, message, { qos: 1 }, (err) => {
-      if (err) {
-        console.error("❌ Publish error:", err);
+    for (const device of devices) {
+      const externalKey = device.external_key;
+      await subscribeToTopic(client, `/messages/${externalKey}/data`);
+      await subscribeToTopic(client, `/messages/${externalKey}/get_stat`);
+      console.log(`✅ Subscribed to topics for: ${externalKey}`);
+    }
+  };
+
+  const subscribeToTopic = (client, topic) => {
+    return new Promise((resolve) => {
+      if (!client || !client.connected) {
         resolve(false);
-      } else {
-        console.log(`✅ Published successfully to ${topic}`);
-        resolve(true);
+        return;
       }
+      
+      client.subscribe(topic, { qos: 1 }, (err) => {
+        if (err) {
+          console.log(`❌ Subscribe error for ${topic}:`, err);
+          resolve(false);
+        } else {
+          console.log(`📡 Subscribed to ${topic}`);
+          resolve(true);
+        }
+      });
     });
   };
 
   const publish = (topic, message) => {
-    return new Promise((resolve) => {
-      console.log(`📤 Publishing to: ${topic}`);
-      
-      let clientToUse = mqttClient;
-      
-      if (!clientToUse || !clientToUse.connected) {
-        console.log("⚠️ Client not available, trying to get fresh client...");
-        getMqttClient().then((freshClient) => {
-          if (freshClient && freshClient.connected) {
-            console.log("✅ Got fresh connected client");
-            clientToUse = freshClient;
-            setMqttClient(freshClient);
-            doPublish(clientToUse, topic, message, resolve);
-          } else {
-            console.log("❌ Could not get fresh client");
-            resolve(false);
-          }
-        }).catch((err) => {
-          console.error("❌ Error getting fresh client:", err);
-          resolve(false);
-        });
+    return publishWithRetry(topic, message, 2);
+  };
+
+  const startDataCheckInterval = () => {
+    if (dataCheckIntervalRef.current) {
+      clearInterval(dataCheckIntervalRef.current);
+      dataCheckIntervalRef.current = null;
+    }
+
+    console.log(`⏳ Starting data check interval (every ${DATA_CHECK_INTERVAL/1000}s)`);
+
+    dataCheckIntervalRef.current = setInterval(() => {
+      if (!isMountedRef.current) {
+        clearInterval(dataCheckIntervalRef.current);
+        dataCheckIntervalRef.current = null;
         return;
       }
+
+      const devices = availableDevices.length > 0 ? availableDevices : [];
       
-      doPublish(clientToUse, topic, message, resolve);
-    });
+      for (const device of devices) {
+        const deviceKey = device.external_key;
+        const lastDataTime = lastDataReceivedTimePerDevice.current[deviceKey] || 0;
+        const timeSinceLastData = Date.now() - lastDataTime;
+        const timeoutMs = (reportInterval || 1800) * 2 * 1000;
+        
+        if (timeSinceLastData > timeoutMs && lastDataTime > 0) {
+          console.log(`⚠️ Device ${deviceKey} - No data for ${Math.round(timeSinceLastData/1000)}s, OFFLINE`);
+          setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: false }));
+          setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: 'offline' }));
+          
+          if (deviceKey === selectedExternalKey) {
+            setConnectionState('offline');
+          }
+        }
+      }
+    }, DATA_CHECK_INTERVAL);
   };
 
-  // ── Subscribe ────────────────────────────────────────────────────────────
-  const subscribeToTopic = (topic) => {
-    if (!externalKey) {
-      console.log("⚠️ Cannot subscribe: No external key");
+  const handleIncomingMessage = (topic, message) => {
+    if (!isMountedRef.current) return;
+    
+    const msgStr = message.toString();
+    console.log(`📨 Received on ${topic}: ${msgStr.substring(0, 100)}...`);
+    
+    const topicParts = topic.split('/');
+    if (topicParts.length < 3) return;
+    
+    const deviceKey = topicParts[2];
+    const topicType = topicParts[3] || '';
+    
+    if (topicType === 'get_stat') {
+      handleStatusResponse(deviceKey, msgStr);
       return;
     }
     
-    const fullTopic = `/messages/${externalKey}/${topic}`;
-    
-    if (!mqttClient || !mqttClient.connected) {
-      console.log("⚠️ Cannot subscribe: MQTT not connected");
+    if (topicType === 'data') {
+      handleDataMessage(deviceKey, msgStr);
       return;
     }
-    
-    mqttClient.subscribe(fullTopic, (err) => {
-      if (!err) {
-        console.log(`📡 Subscribed to ${fullTopic}`);
+  };
+
+  const handleStatusResponse = (deviceKey, msgStr) => {
+    try {
+      let parsed = {};
+      let isJsonResponse = false;
+      
+      try {
+        const jsonData = JSON.parse(msgStr);
+        if (jsonData.cmd === "GET_STATUS" && jsonData.request_id) {
+          console.log(`📊 GET_STAT echo from ${deviceKey}:`, jsonData);
+          isJsonResponse = true;
+          delete pendingRequestIds.current[deviceKey];
+          return;
+        }
+      } catch (e) {}
+      
+      if (!isJsonResponse) {
+        parsed = parseSenMLToObject(msgStr);
+        console.log(`📊 Status response from ${deviceKey}:`, parsed);
+        
+        const requestId = parsed._requestId || parsed.ReqID;
+        const expectedId = pendingRequestIds.current[deviceKey];
+        
+        if (requestId && expectedId && requestId !== expectedId) {
+          console.log(`⚠️ Request ID mismatch for ${deviceKey}`);
+        }
+        
+        let isOnline = false;
+        if (parsed.deviceStatus !== undefined && parsed.deviceStatus !== null) {
+          isOnline = isDeviceOnlineFromDevStat(parsed.deviceStatus);
+        }
+        if (parsed.deviceStatusFlags && parsed.deviceStatusFlags.online !== undefined) {
+          isOnline = parsed.deviceStatusFlags.online;
+        }
+        
+        lastGetStatResponseTime.current[deviceKey] = Date.now();
+        updateDeviceData(deviceKey, parsed);
+        
+        setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: isOnline }));
+        setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: isOnline ? 'online' : 'offline' }));
+        
+        const isSelected = isSelectedExternalKey(deviceKey);
+        console.log(`🔍 Status check - ${deviceKey} is selected: ${isSelected} (selectedExternalKey: ${selectedExternalKey || 'none'})`);
+        
+        if (isSelected) {
+          console.log(`📊 Updating selected device: ${deviceKey}`);
+          updateLegacyState(parsed);
+          setConnectionState(isOnline ? 'online' : 'offline');
+          if (isOnline) {
+            setHasEverBeenOnline(true);
+            hasEverBeenOnlineRef.current = true;
+          }
+        }
+        
+        delete pendingRequestIds.current[deviceKey];
+        console.log(`✅ Device ${deviceKey} status: ${isOnline ? 'ONLINE' : 'OFFLINE'}`);
+        checkAndSwitchToDataMode();
+      }
+    } catch (error) {
+      console.error(`❌ Error processing status for ${deviceKey}:`, error);
+    }
+  };
+
+  const handleDataMessage = (deviceKey, msgStr) => {
+    try {
+      const parsed = parseSenMLToObject(msgStr);
+      console.log(`📊 Data from ${deviceKey}:`, parsed);
+      
+      lastDataReceivedTimePerDevice.current[deviceKey] = Date.now();
+      updateDeviceData(deviceKey, parsed);
+      
+      let isOnline = false;
+      if (parsed.deviceStatus !== undefined && parsed.deviceStatus !== null) {
+        isOnline = isDeviceOnlineFromDevStat(parsed.deviceStatus);
+      }
+      if (parsed.deviceStatusFlags && parsed.deviceStatusFlags.online !== undefined) {
+        isOnline = parsed.deviceStatusFlags.online;
+      }
+      
+      if (!isOnline && Object.keys(parsed).length > 0) {
+        const hasSensorData = parsed.ambientTemperature !== undefined || 
+                             parsed.ambientHumidity !== undefined ||
+                             parsed.waterLevel !== undefined ||
+                             parsed.deviceStatus !== undefined;
+        if (hasSensorData) {
+          isOnline = true;
+        }
+      }
+      
+      setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: isOnline }));
+      setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: isOnline ? 'online' : 'offline' }));
+      
+      setDevicesData(prev => ({
+        ...prev,
+        [deviceKey]: {
+          ...prev[deviceKey],
+          lastDataReceived: Date.now(),
+          hasReceivedData: true,
+          isLiveData: true,
+          isOnline: isOnline,
+        }
+      }));
+      
+      const isSelected = isSelectedExternalKey(deviceKey);
+      console.log(`🔍 Data check - ${deviceKey} is selected: ${isSelected} (selectedExternalKey: ${selectedExternalKey || 'none'})`);
+      
+      if (isSelected) {
+        console.log(`📊 Updating selected device data: ${deviceKey}`);
+        updateLegacyState(parsed);
+        setConnectionState(isOnline ? 'online' : 'offline');
+        if (isOnline) {
+          setHasEverBeenOnline(true);
+          hasEverBeenOnlineRef.current = true;
+        }
+        setHasReceivedData(true);
+        hasReceivedDataRef.current = true;
+        setIsLiveData(true);
+        console.log(`✅ Selected device ${deviceKey} updated, online: ${isOnline}`);
       } else {
-        console.log(`❌ Subscribe error:`, err);
-      }
-    });
-  };
-
-  // ── Publish Message ─────────────────────────────────────────────────────
-  const publishMessage = async (topic, message) => {
-    if (!externalKey) {
-      console.log("⚠️ No external_key available");
-      return false;
-    }
-    const fullTopic = `/messages/${externalKey}/${topic}`;
-    return await publish(fullTopic, message);
-  };
-
-  // ── Toggle Device Status ────────────────────────────────────────────────────
-  const toggleDeviceStatus = async (deviceName, status) => {
-    try {
-      const currentState = lastKnownActuatorState;
-      
-      const actuatorMap = {
-        water_pump: "water_pump",
-        water_ILvalve: "water_ILvalve",
-        water_OLvalve: "water_OLvalve",
-        nutrient_pump: "nutrient_pump",
-        reboot_ack: "reboot_ack",
-      };
-      
-      const actuatorKey = actuatorMap[deviceName];
-      if (!actuatorKey) {
-        console.log(`⚠️ Unknown device: ${deviceName}`);
-        return false;
+        console.log(`📊 Data for non-selected device: ${deviceKey} (selected: ${selectedExternalKey || 'none'})`);
       }
       
-      const updatedState = {
-        ...currentState,
-        [actuatorKey]: status,
-      };
+      console.log(`✅ Data received from ${deviceKey}, online: ${isOnline}`);
       
-      const success = await publishActuatorStatus(updatedState);
-      
-      if (success) {
-        setDevices(prev => prev.map(d => 
-          d.n === deviceName ? { ...d, vb: status } : d
-        ));
-      }
-      
-      return success;
-    } catch (error) {
-      console.error("❌ Set device status error:", error);
-      return false;
-    }
-  };
-
-  // ── Force Reconnect ──────────────────────────────────────────────────────
-  const forceReconnect = async (newKey) => {
-    console.log("🔄 Force reconnecting MQTT...");
-    
-    try {
-      if (newKey) {
-        console.log("   New external key:", newKey);
-        await AsyncStorage.setItem(STORAGE_KEYS.EXTERNAL_KEY, newKey);
-        setExternalKey(newKey);
-        await updateMqttPassword(newKey);
-      }
-      
-      hasInitializedRef.current = false;
-      
-      if (connectionCheckInterval.current) {
-        clearInterval(connectionCheckInterval.current);
-        connectionCheckInterval.current = null;
-      }
-      
-      await cleanupMqtt();
-      setIsConnected(false);
-      
-      if (activeDeviceId) {
-        setDeviceConnectionStatus(prev => ({
-          ...prev,
-          [activeDeviceId]: 'connecting'
-        }));
-      }
-      
-      if (newKey) {
-        console.log("🔄 Calling reconnectMqttClient with new key...");
-        await reconnectMqttClient(newKey);
-      } else {
-        console.log("🔄 Calling reconnectMqttClient...");
-        await reconnectMqttClient();
-      }
-      
-      await initializeMqtt();
-      
-      startInitialResponseCheck();
-      
-      console.log(`✅ Force reconnect completed. isConnected: ${isConnected}`);
-      
-      if (activeDeviceId && isConnected) {
-        setDeviceConnectionStatus(prev => ({
-          ...prev,
-          [activeDeviceId]: 'waiting'
-        }));
+      if (isUsingGetStat.current) {
+        console.log(`🔄 Switching to DATA mode for ${deviceKey}`);
+        isUsingGetStat.current = false;
+        startDataCheckInterval();
       }
     } catch (error) {
-      console.error("❌ Force reconnect error:", error);
-      if (activeDeviceId) {
-        setDeviceConnectionStatus(prev => ({
-          ...prev,
-          [activeDeviceId]: 'error'
-        }));
+      console.error(`❌ Error processing data from ${deviceKey}:`, error);
+    }
+  };
+
+  const checkAndSwitchToDataMode = () => {
+    if (!isUsingGetStat.current || !getStatStartTime.current) return;
+    
+    const elapsed = Date.now() - getStatStartTime.current;
+    
+    if (elapsed >= GET_STAT_ACTIVE_DURATION) {
+      console.log(`⏰ GET_STAT expired - Switching to DATA mode`);
+      isUsingGetStat.current = false;
+      startDataCheckInterval();
+    }
+  };
+
+  const updateDeviceData = (deviceKey, parsed) => {
+    const currentData = devicesData[deviceKey] || {
+      sensorData: { ...DEFAULT_SENSOR_DATA },
+      actuatorStatus: { ...DEFAULT_ACTUATOR_STATUS },
+      cropSettings: { ...DEFAULT_CROP_SETTINGS },
+      deviceConfig: { ...DEFAULT_CONFIG },
+      devices: [],
+      deviceStatus: null,
+      deviceStatusFlags: getDefaultDeviceStatus(),
+      lastUpdated: null,
+    };
+    
+    let updatedSensorData = { ...currentData.sensorData };
+    let updatedActuatorStatus = { ...currentData.actuatorStatus };
+    let updatedDevices = [...currentData.devices];
+    let newDeviceStatus = currentData.deviceStatus;
+    let newDeviceStatusFlags = currentData.deviceStatusFlags;
+    let hasSensorUpdate = false;
+    let hasActuatorUpdate = false;
+    
+    for (const [key, value] of Object.entries(parsed)) {
+      if (key.startsWith('_')) continue;
+      
+      if (['ambientTemperature', 'ambientHumidity', 'waterTemperature', 
+           'co2Level', 'ecValue', 'phValue', 'waterLevel', 'lightLevel', 
+           'soilMoisture'].includes(key)) {
+        updatedSensorData[key] = value;
+        hasSensorUpdate = true;
       }
-      throw error;
+      
+      if (key === 'deviceStatus') {
+        newDeviceStatus = value;
+        updatedSensorData.deviceStatus = value;
+        hasSensorUpdate = true;
+      }
+      
+      if (key === 'deviceStatusFlags') {
+        newDeviceStatusFlags = value;
+      }
+      
+      if (['water_pump', 'water_ILvalve', 'water_OLvalve', 
+           'nutrient_pump', 'reboot_ack'].includes(key)) {
+        updatedActuatorStatus[key] = value;
+        updatedSensorData[key] = value;
+        hasActuatorUpdate = true;
+        hasSensorUpdate = true;
+      }
+    }
+    
+    if (hasSensorUpdate || hasActuatorUpdate) {
+      const now = new Date();
+      updatedSensorData.lastUpdated = now;
+      updatedActuatorStatus.lastUpdated = now;
+    }
+    
+    if (hasActuatorUpdate) {
+      updatedDevices = Object.entries(updatedActuatorStatus)
+        .filter(([key]) => key in DEVICE_CONFIG && key !== 'lastUpdated')
+        .map(([key, value]) => {
+          const config = DEVICE_CONFIG[key];
+          return {
+            id: key,
+            n: key,
+            vb: value || false,
+            displayName: config.displayName,
+            icon: config.icon,
+            description: config.description,
+            category: config.category,
+          };
+        });
+    }
+    
+    setDevicesData(prev => ({
+      ...prev,
+      [deviceKey]: {
+        ...currentData,
+        sensorData: updatedSensorData,
+        actuatorStatus: updatedActuatorStatus,
+        devices: updatedDevices,
+        deviceStatus: newDeviceStatus,
+        deviceStatusFlags: newDeviceStatusFlags,
+        lastUpdated: new Date(),
+        lastDataReceived: Date.now(),
+        hasReceivedData: true,
+        isLiveData: true,
+      }
+    }));
+  };
+
+  const updateLegacyState = (parsed) => {
+    const updatedSensorData = { ...sensorData };
+    const updatedActuatorStatus = { ...actuatorStatus };
+    let hasSensorUpdate = false;
+    let hasActuatorUpdate = false;
+    let newDeviceStatus = deviceStatus;
+    
+    for (const [key, value] of Object.entries(parsed)) {
+      if (key.startsWith('_')) continue;
+      
+      if (['ambientTemperature', 'ambientHumidity', 'waterTemperature', 
+           'co2Level', 'ecValue', 'phValue', 'waterLevel', 'lightLevel', 
+           'soilMoisture'].includes(key)) {
+        updatedSensorData[key] = value;
+        hasSensorUpdate = true;
+      }
+      
+      if (key === 'deviceStatus') {
+        newDeviceStatus = value;
+        updatedSensorData.deviceStatus = value;
+        hasSensorUpdate = true;
+      }
+      
+      if (key === 'deviceStatusFlags') {
+        setDeviceStatusFlags(value);
+      }
+      
+      if (['water_pump', 'water_ILvalve', 'water_OLvalve', 
+           'nutrient_pump', 'reboot_ack'].includes(key)) {
+        updatedSensorData[key] = value;
+        updatedActuatorStatus[key] = value;
+        hasActuatorUpdate = true;
+        hasSensorUpdate = true;
+      }
+    }
+    
+    if (hasSensorUpdate) {
+      updatedSensorData.lastUpdated = new Date();
+      setSensorData(updatedSensorData);
+      console.log(`📊 Updated sensorData:`, updatedSensorData);
+    }
+    
+    if (hasActuatorUpdate) {
+      updatedActuatorStatus.lastUpdated = new Date();
+      setActuatorStatus(updatedActuatorStatus);
+    }
+    
+    if (newDeviceStatus !== null) {
+      setDeviceStatus(newDeviceStatus);
     }
   };
 
-  // ── SWITCH TO DEVICE ──────────────────────────────────────────────────────
-  const switchToDevice = async (thingId, externalKey) => {
-    console.log(`🔄 Switching to device: ${thingId} (${externalKey})`);
-    
-    setIsSwitchingDevice(true);
-    
-    try {
-      setDeviceConnectionStatus(prev => ({
-        ...prev,
-        [thingId]: 'connecting'
-      }));
-      
-      await AsyncStorage.setItem(STORAGE_KEYS.PUBLISHER_ID, String(thingId));
-      await AsyncStorage.setItem(STORAGE_KEYS.EXTERNAL_KEY, externalKey);
-      await AsyncStorage.setItem(STORAGE_KEYS.ACTIVE_DEVICE_ID, thingId);
-      
-      setExternalKey(externalKey);
-      setActiveDeviceId(thingId);
-      
-      await forceReconnect(externalKey);
-      
-      console.log("✅ Successfully switched to device:", thingId);
-      
-      setDeviceConnectionStatus(prev => ({
-        ...prev,
-        [thingId]: isConnected ? 'waiting' : 'connecting'
-      }));
-      
-      return true;
-    } catch (error) {
-      console.error("❌ Error switching device:", error);
-      setDeviceConnectionStatus(prev => ({
-        ...prev,
-        [thingId]: 'error'
-      }));
-      return false;
-    } finally {
-      setIsSwitchingDevice(false);
-    }
-  };
-
-  // ── LOAD AVAILABLE DEVICES ────────────────────────────────────────────────
   const loadAvailableDevices = async () => {
     try {
       const things = await getAllThings();
       if (things && things.length > 0) {
         setAvailableDevices(things);
         
-        // ✅ Try to get active device from storage first
+        for (const thing of things) {
+          initDeviceData(thing.external_key);
+          setDeviceConnectionStatus(prev => ({
+            ...prev,
+            [thing.external_key]: 'connecting'
+          }));
+        }
+        
         const savedDeviceId = await AsyncStorage.getItem(STORAGE_KEYS.ACTIVE_DEVICE_ID);
         const savedKey = await AsyncStorage.getItem(STORAGE_KEYS.EXTERNAL_KEY);
         
-        console.log("📦 Saved device - ID:", savedDeviceId, "Key:", savedKey);
-        
         let active = null;
-        
-        // ✅ Check if saved device exists
         if (savedDeviceId && savedKey) {
           const exists = things.find(t => t.id === savedDeviceId);
           if (exists) {
             active = { publisherId: savedDeviceId, externalKey: savedKey };
-            console.log("✅ Using saved device:", savedDeviceId);
-          } else {
-            console.log("⚠️ Saved device not found in list");
+            setActiveDeviceId(savedDeviceId);
+            setExternalKey(savedKey);
           }
         }
         
-        // ✅ If no saved device, get from API
         if (!active) {
           active = await getActiveDevice();
         }
@@ -1031,7 +1000,6 @@ export const MqttProvider = ({ children }) => {
           if (exists) {
             setActiveDeviceId(active.publisherId);
             setExternalKey(active.externalKey);
-            // ✅ Save for future
             await saveDevice(active.externalKey, active.publisherId);
           } else {
             const firstThing = things[0];
@@ -1048,20 +1016,30 @@ export const MqttProvider = ({ children }) => {
           await saveDevice(firstThing.external_key, firstThing.id);
         }
         
-        const statusMap = {};
-        things.forEach(t => {
-          statusMap[t.id] = t.id === activeDeviceId ? (isConnected ? 'waiting' : 'disconnected') : 'disconnected';
-        });
-        setDeviceConnectionStatus(statusMap);
+        return things;
       }
-      return things;
+      return [];
     } catch (error) {
       console.error("Error loading available devices:", error);
       return [];
     }
   };
 
-  // ── Initialize MQTT ──────────────────────────────────────────────────────
+  const saveDevice = async (key, deviceId) => {
+    try {
+      if (key) {
+        await AsyncStorage.setItem(STORAGE_KEYS.EXTERNAL_KEY, key);
+        console.log("💾 Saved external_key:", key);
+      }
+      if (deviceId) {
+        await AsyncStorage.setItem(STORAGE_KEYS.ACTIVE_DEVICE_ID, deviceId);
+        console.log("💾 Saved activeDeviceId:", deviceId);
+      }
+    } catch (error) {
+      console.error("❌ Error saving device:", error);
+    }
+  };
+
   const initializeMqtt = async () => {
     if (!isAuthenticated || !token) {
       console.log("⏳ Not authenticated, skipping MQTT init");
@@ -1083,337 +1061,383 @@ export const MqttProvider = ({ children }) => {
 
     console.log("🔧 initializeMqtt called");
     
-    // ✅ Check if external_key exists in AsyncStorage
-    const storedKey = await loadExternalKey();
+    await loadAvailableDevices();
+    
+    // Load selected device from storage
+    const selected = await loadSelectedDevice();
+    console.log("📦 Selected device loaded:", selected);
+    
+    // If no selected device but we have available devices, select the first one
+    if (!selected && availableDevices.length > 0) {
+      const firstDevice = availableDevices[0];
+      console.log("🔌 No selected device, auto-selecting first:", firstDevice.id);
+      await selectDevice(firstDevice.id, firstDevice.name);
+    }
+    
+    // If selected device exists but no external key, try to set it
+    if (selected && !selectedExternalKey) {
+      const device = availableDevices.find(d => d.id === selected.deviceId);
+      if (device && device.external_key) {
+        setSelectedExternalKey(device.external_key);
+        await AsyncStorage.setItem(STORAGE_KEYS.SELECTED_EXTERNAL_KEY, device.external_key);
+        console.log("✅ Set missing external key:", device.external_key);
+      }
+    }
+    
+    console.log(`✅ Current selectedExternalKey: ${selectedExternalKey}`);
+    
+    const storedKey = await AsyncStorage.getItem(STORAGE_KEYS.EXTERNAL_KEY);
     
     if (!storedKey) {
-      console.log("⚠️ No external_key found in AsyncStorage - Skipping MQTT connection");
+      console.log("⚠️ No external_key found - Skipping MQTT connection");
       setExternalKey(null);
       setIsReady(true);
       setConnectionState('idle');
-      // ✅ Set isReady to true but don't connect
       return;
     }
 
-    // ✅ Only connect if external_key exists
     console.log("✅ external_key found, proceeding with MQTT connection");
     setConnectionState('connecting');
     setIsInitializing(true);
     
     try {
-      // ✅ Restore cached data FIRST — reads AsyncStorage only (no network), so
-      // the last-known sensor values appear the moment the app reopens.
-      const earlyKey = await loadExternalKey();
-      if (earlyKey) {
-        await restoreLastData(earlyKey);
-      }
-
-      await loadAvailableDevices();
-      
+      await restoreAllDevicesData();
       setExternalKey(storedKey);
-      console.log("🔑 externalKey set in state:", storedKey);
-
       await updateMqttPassword(storedKey);
-      console.log("✅ MQTT password updated");
-
-      const topics = getTopics(storedKey);
-      console.log("📡 Topics configured:", topics);
-
       await cleanupMqtt();
-
-      // ✅ Restore AGAIN after cleanup — cleanupMqtt resets hasReceivedData /
-      // deviceStatus / connectionState, and we don't want the restored state
-      // wiped before the UI can render it.
-      await restoreLastData(storedKey);
 
       const client = await getMqttClient();
       console.log("📡 MQTT client obtained, connected:", client.connected);
       setMqttClient(client);
 
-      // ── Enhanced Message Handler ──────────────────────────────────────────
-      const onMessage = (topic, message) => {
-        if (!isMountedRef.current) return;
-        
-        const msgStr = message.toString();
-        console.log(`📨 Received on ${topic}: ${msgStr.substring(0, 100)}...`);
-        
-        const parsed = parseSenMLToObject(msgStr);
-        console.log("📊 Parsed data:", parsed);
-        
-        // ✅ Data received! Mark device online
-        setHasReceivedData(true);
-        hasReceivedDataRef.current = true;
-        setIsLiveData(true);
-        sensorDataKeyRef.current = storedKey;
-        setConnectionState('online');
-        lastDataReceivedTime.current = Date.now();
-        
-        clearInitialResponseCheck();
-        
-        if (!hasEverBeenOnlineRef.current) {
-          setHasEverBeenOnline(true);
-          hasEverBeenOnlineRef.current = true;
-          console.log('✅ First data received from device! Device is ONLINE');
-          startTimeoutCheck();
-        }
-        
-        if (activeDeviceId) {
-          setDeviceConnectionStatus(prev => ({
-            ...prev,
-            [activeDeviceId]: 'online'
-          }));
-        }
-        
-        if (parsed.deviceStatusFlags) {
-          setDeviceStatusFlags(parsed.deviceStatusFlags);
-          console.log("📊 Device Status Flags:", parsed.deviceStatusFlags);
-          
-          const isOnline = parsed.deviceStatusFlags.online;
-          if (isOnline !== null && isOnline !== undefined) {
-            if (isOnline) {
-              setConnectionState('online');
-              setHasEverBeenOnline(true);
-              hasEverBeenOnlineRef.current = true;
-              console.log('✅ Device reported ONLINE from status flags (Bit 17)');
-            } else {
-              console.log('⚠️ Device reported OFFLINE from status flags (Bit 17)');
-              setConnectionState('offline');
-              if (activeDeviceIdRef.current) {
-                setDeviceConnectionStatus(prev => ({
-                  ...prev,
-                  [activeDeviceIdRef.current]: 'offline'
-                }));
-              }
-            }
-          }
-          
-          const isAuto = parsed.deviceStatusFlags.mode;
-          if (isAuto !== null && isAuto !== undefined) {
-            console.log(`📡 Device mode from status flags: ${isAuto ? 'AUTO' : 'MANUAL'} (Bit 16)`);
-          }
-        }
-        
-        const updatedSensorData = { ...sensorData };
-        let hasSensorUpdate = false;
-        let hasActuatorUpdate = false;
-        let newDeviceStatus = null;
-        
-        for (const [key, value] of Object.entries(parsed)) {
-          if (['ambientTemperature', 'ambientHumidity', 'waterTemperature', 
-               'co2Level', 'ecValue', 'phValue', 'waterLevel', 'lightLevel', 
-               'soilMoisture'].includes(key)) {
-            updatedSensorData[key] = value;
-            hasSensorUpdate = true;
-          }
-          
-          if (key === 'deviceStatus') {
-            newDeviceStatus = value;
-            updatedSensorData.deviceStatus = value;
-            hasSensorUpdate = true;
-          }
-          
-          if (['water_pump', 'water_ILvalve', 'water_OLvalve', 
-               'nutrient_pump', 'reboot_ack'].includes(key)) {
-            updatedSensorData[key] = value;
-            hasActuatorUpdate = true;
-          }
-        }
-        
-        if (hasSensorUpdate || hasActuatorUpdate) {
-          updatedSensorData.lastUpdated = new Date();
-          setSensorData(updatedSensorData);
-          console.log(`📊 Updated sensor data:`, updatedSensorData);
-        }
-        
-        if (newDeviceStatus !== null) {
-          setDeviceStatus(newDeviceStatus);
-          const statusOnline = parsed.deviceStatusFlags?.online;
-          console.log(`📡 Device status from data topic: ${statusOnline ? 'ONLINE' : 'OFFLINE'} (${newDeviceStatus})`);
-        }
-        
-        if (hasActuatorUpdate) {
-          const updatedActuator = {
-            water_pump: parsed.water_pump !== undefined ? parsed.water_pump : actuatorStatus.water_pump,
-            water_ILvalve: parsed.water_ILvalve !== undefined ? parsed.water_ILvalve : actuatorStatus.water_ILvalve,
-            water_OLvalve: parsed.water_OLvalve !== undefined ? parsed.water_OLvalve : actuatorStatus.water_OLvalve,
-            nutrient_pump: parsed.nutrient_pump !== undefined ? parsed.nutrient_pump : actuatorStatus.nutrient_pump,
-            reboot_ack: parsed.reboot_ack !== undefined ? parsed.reboot_ack : actuatorStatus.reboot_ack,
-            lastUpdated: new Date(),
-          };
-          
-          lastKnownActuatorState = {
-            water_pump: updatedActuator.water_pump !== null ? updatedActuator.water_pump : false,
-            water_ILvalve: updatedActuator.water_ILvalve !== null ? updatedActuator.water_ILvalve : false,
-            water_OLvalve: updatedActuator.water_OLvalve !== null ? updatedActuator.water_OLvalve : false,
-            nutrient_pump: updatedActuator.nutrient_pump !== null ? updatedActuator.nutrient_pump : false,
-            reboot_ack: updatedActuator.reboot_ack !== null ? updatedActuator.reboot_ack : false,
-          };
-          
-          setActuatorStatus(updatedActuator);
-          console.log(`🔧 Updated actuator status:`, updatedActuator);
-          
-          const actuatorFields = {};
-          if (parsed.water_pump !== undefined) actuatorFields.water_pump = parsed.water_pump;
-          if (parsed.water_ILvalve !== undefined) actuatorFields.water_ILvalve = parsed.water_ILvalve;
-          if (parsed.water_OLvalve !== undefined) actuatorFields.water_OLvalve = parsed.water_OLvalve;
-          if (parsed.nutrient_pump !== undefined) actuatorFields.nutrient_pump = parsed.nutrient_pump;
-          if (parsed.reboot_ack !== undefined) actuatorFields.reboot_ack = parsed.reboot_ack;
-          
-          const deviceList = Object.entries(actuatorFields)
-            .filter(([key]) => key in DEVICE_CONFIG)
-            .map(([key, value]) => {
-              const config = DEVICE_CONFIG[key];
-              return {
-                id: key,
-                n: key,
-                vb: value,
-                displayName: config.displayName,
-                icon: config.icon,
-                description: config.description,
-                category: config.category,
-              };
-            });
-          
-          if (deviceList.length > 0) {
-            setDevices(deviceList);
-            console.log(`📡 Updated ${deviceList.length} devices`);
-          }
-        }
-        
-        if (timeoutCheckInterval.current) {
-          clearInterval(timeoutCheckInterval.current);
-          timeoutCheckInterval.current = null;
-        }
-        setTimeout(() => {
-          if (isMountedRef.current && isConnected && hasEverBeenOnline) {
-            startTimeoutCheck();
-          }
-        }, 2000);
-      };
-
-      // ── Subscribe ONLY to data topic ──────────────────────────────────────
-      if (client.connected) {
-        console.log("✅ Client already connected");
-        setIsConnected(true);
-        setConnectionState('waiting');
-        hasInitializedRef.current = true;
-        setIsReady(true);
-        setIsInitializing(false);
-        
-        if (activeDeviceId) {
-          setDeviceConnectionStatus(prev => ({
-            ...prev,
-            [activeDeviceId]: 'waiting'
-          }));
-        }
-        
-        startInitialResponseCheck();
-        
-        client.subscribe(topics.data, (err) => {
-          if (!err) {
-            console.log(`📡 Subscribed to ${topics.data}`);
-          } else {
-            console.log(`❌ Subscribe error:`, err);
-          }
-        });
-        
-        client.on("message", onMessage);
-        
-        return;
-      }
-
-      console.log("⏳ Client not connected, starting connection check...");
-      startConnectionCheck();
-
-      const onConnect = () => {
+      client.removeAllListeners();
+      
+      client.on("connect", async () => {
         if (!isMountedRef.current) return;
         console.log("✅ MQTT Connected");
         setIsConnected(true);
         setConnectionState('waiting');
         hasInitializedRef.current = true;
+        setMqttClient(client);
         
-        if (activeDeviceId) {
-          setDeviceConnectionStatus(prev => ({
-            ...prev,
-            [activeDeviceId]: 'waiting'
-          }));
-        }
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await subscribeToAllDevices(client);
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
-        if (connectionCheckInterval.current) {
-          clearInterval(connectionCheckInterval.current);
-          connectionCheckInterval.current = null;
-        }
+        console.log("📡 Requesting status from all devices...");
+        await requestStatusForAllDevices();
+      });
 
-        startInitialResponseCheck();
-        
-        client.subscribe(topics.data, (err) => {
-          if (!err) {
-            console.log(`📡 Subscribed to ${topics.data}`);
-          } else {
-            console.log(`❌ Subscribe error:`, err);
-          }
-        });
-
-        client.on("message", onMessage);
-      };
-
-      const onClose = () => {
+      client.on("close", () => {
         if (isMountedRef.current) {
           console.log("🔌 MQTT Disconnected");
           setIsConnected(false);
           setConnectionState('disconnected');
-          if (activeDeviceId) {
-            setDeviceConnectionStatus(prev => ({
-              ...prev,
-              [activeDeviceId]: 'disconnected'
-            }));
-          }
           hasInitializedRef.current = false;
-          startConnectionCheck();
         }
-      };
+      });
 
-      client.removeAllListeners();
-      client.on("connect", onConnect);
-      client.on("close", onClose);
-      client.on("message", onMessage);
       client.on("reconnect", () => console.log("🔄 MQTT Reconnecting..."));
       client.on("error", (err) => console.log("❌ MQTT Error:", err));
+      client.on("message", handleIncomingMessage);
+
+      if (client.connected) {
+        console.log("✅ Client already connected");
+        setIsConnected(true);
+        setConnectionState('waiting');
+        hasInitializedRef.current = true;
+        setMqttClient(client);
+        
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        await subscribeToAllDevices(client);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        console.log("📡 Requesting status from all devices...");
+        await requestStatusForAllDevices();
+        setIsReady(true);
+        setIsInitializing(false);
+      }
 
       setIsReady(true);
-
     } catch (error) {
       console.error("❌ Error in MQTT initialization:", error);
       setIsReady(true);
       setConnectionState('error');
-      if (activeDeviceId) {
-        setDeviceConnectionStatus(prev => ({
-          ...prev,
-          [activeDeviceId]: 'error'
-        }));
-      }
     } finally {
       setIsInitializing(false);
     }
   };
 
-  // ── Reconnect ────────────────────────────────────────────────────────────
-  const reconnect = async () => {
-    console.log("🔄 Attempting to reconnect MQTT...");
-    hasInitializedRef.current = false;
-    if (connectionCheckInterval.current) {
-      clearInterval(connectionCheckInterval.current);
-      connectionCheckInterval.current = null;
+  const restoreAllDevicesData = async () => {
+    try {
+      const cached = await loadLastData();
+      if (!cached) {
+        console.log("🗂️ No cached MQTT snapshot found");
+        return false;
+      }
+
+      if (cached.devicesData) {
+        setDevicesData(cached.devicesData);
+        console.log("🗂️ Restored data for", Object.keys(cached.devicesData).length, "devices");
+      }
+
+      if (cached.deviceConnectionStatus) {
+        setDeviceConnectionStatus(cached.deviceConnectionStatus);
+      }
+
+      if (cached.deviceOnlineStatus) {
+        setDeviceOnlineStatus(cached.deviceOnlineStatus);
+      }
+
+      if (cached.sensorData) {
+        const restored = { ...cached.sensorData };
+        if (restored.lastUpdated) restored.lastUpdated = new Date(restored.lastUpdated);
+        setSensorData(restored);
+      }
+
+      if (cached.actuatorStatus) {
+        const restored = { ...cached.actuatorStatus };
+        if (restored.lastUpdated) restored.lastUpdated = new Date(restored.lastUpdated);
+        setActuatorStatus(restored);
+      }
+
+      if (cached.cropSettings) {
+        const restored = { ...cached.cropSettings };
+        if (restored.lastUpdated) restored.lastUpdated = new Date(restored.lastUpdated);
+        setCropSettings(restored);
+      }
+
+      if (cached.deviceConfig) {
+        const restored = { ...cached.deviceConfig };
+        if (restored.lastUpdated) restored.lastUpdated = new Date(restored.lastUpdated);
+        setDeviceConfig(restored);
+      }
+
+      console.log("🗂️ Restored last MQTT snapshot from AsyncStorage");
+      return true;
+    } catch (error) {
+      console.error("❌ Error restoring last MQTT snapshot:", error);
+      return false;
     }
+  };
+
+  const persistTimer = useRef(null);
+  useEffect(() => {
+    const hasRealData = Object.keys(devicesData).length > 0;
+    if (!hasRealData) return;
+
+    if (persistTimer.current) clearTimeout(persistTimer.current);
+    persistTimer.current = setTimeout(() => {
+      saveLastData({
+        devicesData,
+        deviceConnectionStatus,
+        deviceOnlineStatus,
+        sensorData,
+        actuatorStatus,
+        cropSettings,
+        deviceConfig,
+        savedAt: Date.now(),
+      });
+    }, 600);
+
+    return () => {
+      if (persistTimer.current) clearTimeout(persistTimer.current);
+    };
+  }, [devicesData, deviceConnectionStatus, deviceOnlineStatus, sensorData, actuatorStatus, cropSettings, deviceConfig]);
+
+  const cleanupMqtt = async () => {
     if (timeoutCheckInterval.current) {
       clearInterval(timeoutCheckInterval.current);
       timeoutCheckInterval.current = null;
     }
-    await cleanupMqtt();
-    await initializeMqtt();
+    if (connectionCheckInterval.current) {
+      clearInterval(connectionCheckInterval.current);
+      connectionCheckInterval.current = null;
+    }
+    if (dataCheckIntervalRef.current) {
+      clearInterval(dataCheckIntervalRef.current);
+      dataCheckIntervalRef.current = null;
+    }
+    if (mqttClient) {
+      try {
+        const devices = availableDevices.length > 0 ? availableDevices : await loadAvailableDevices();
+        for (const device of devices) {
+          const topics = [
+            `/messages/${device.external_key}/data`,
+            `/messages/${device.external_key}/get_stat`,
+          ];
+          for (const topic of topics) {
+            mqttClient.unsubscribe(topic, (err) => {
+              if (err) console.log(`⚠️ Error unsubscribing from ${topic}:`, err);
+            });
+          }
+        }
+        mqttClient.removeAllListeners();
+        await disconnectMqtt(true);
+        console.log("🧹 MQTT cleaned up");
+      } catch (error) {
+        console.error("Error cleaning up MQTT:", error);
+      }
+    }
+    setIsConnected(false);
+    setMqttClient(null);
+    setHasReceivedData(false);
+    hasReceivedDataRef.current = false;
+    setIsLiveData(false);
+    setDeviceStatus(null);
+    setConnectionState('idle');
+    
+    isUsingGetStat.current = true;
+    getStatStartTime.current = null;
   };
 
-  // ── UseEffect for Auth ──────────────────────────────────────────────────
+  const connectToDevice = async (deviceId, externalKey) => {
+    console.log(`🔌 Connecting to device: ${deviceId} (${externalKey})`);
+    setActiveDeviceId(deviceId);
+    setExternalKey(externalKey);
+    await saveDevice(externalKey, deviceId);
+    await forceReconnect(externalKey);
+    return true;
+  };
+
+  const forceReconnect = async (newKey) => {
+    console.log("🔄 Force reconnecting MQTT...");
+    
+    try {
+      if (newKey) {
+        console.log("   New external key:", newKey);
+        await AsyncStorage.setItem(STORAGE_KEYS.EXTERNAL_KEY, newKey);
+        setExternalKey(newKey);
+        await updateMqttPassword(newKey);
+      }
+      
+      hasInitializedRef.current = false;
+      await cleanupMqtt();
+      setIsConnected(false);
+      
+      if (newKey) {
+        await reconnectMqttClient(newKey);
+      } else {
+        await reconnectMqttClient();
+      }
+      
+      await initializeMqtt();
+      console.log(`✅ Force reconnect completed. isConnected: ${isConnected}`);
+    } catch (error) {
+      console.error("❌ Force reconnect error:", error);
+      throw error;
+    }
+  };
+
+  const switchToDevice = async (thingId, externalKey) => {
+    console.log(`🔄 Switching to device: ${thingId} (${externalKey})`);
+    setIsSwitchingDevice(true);
+    
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.PUBLISHER_ID, String(thingId));
+      await AsyncStorage.setItem(STORAGE_KEYS.EXTERNAL_KEY, externalKey);
+      await AsyncStorage.setItem(STORAGE_KEYS.ACTIVE_DEVICE_ID, thingId);
+      
+      setActiveDeviceId(thingId);
+      setExternalKey(externalKey);
+      await forceReconnect(externalKey);
+      
+      console.log("✅ Successfully switched to device:", thingId);
+      setIsSwitchingDevice(false);
+      return true;
+    } catch (error) {
+      console.error("❌ Error switching device:", error);
+      setIsSwitchingDevice(false);
+      return false;
+    }
+  };
+
+  const getDeviceData = (deviceKey) => {
+    return devicesData[deviceKey] || null;
+  };
+
+  const getDeviceStatus = (deviceKey) => {
+    return deviceOnlineStatus[deviceKey] || false;
+  };
+
+  const publishActuatorStatus = async (deviceKey, status) => {
+    if (!deviceKey) {
+      console.log("⚠️ No device key provided");
+      return false;
+    }
+    
+    const payload = buildActuatorPayload(status);
+    const success = await publish(`/messages/${deviceKey}/actuator`, JSON.stringify(payload));
+    
+    if (success) {
+      console.log(`✅ Actuator published to ${deviceKey}`);
+      setDevicesData(prev => ({
+        ...prev,
+        [deviceKey]: {
+          ...prev[deviceKey],
+          actuatorStatus: { ...status, lastUpdated: new Date() },
+        }
+      }));
+      
+      if (deviceKey === selectedExternalKey) {
+        setActuatorStatus({ ...status, lastUpdated: new Date() });
+      }
+    }
+    return success;
+  };
+
+  const publishSettings = async (deviceKey, settings) => {
+    if (!deviceKey) {
+      console.log("⚠️ No device key provided");
+      return false;
+    }
+    
+    const payload = buildSettingsPayload(settings, deviceKey);
+    const success = await publish(`/messages/${deviceKey}/settings`, JSON.stringify(payload));
+    
+    if (success) {
+      console.log(`✅ Settings published to ${deviceKey}`);
+      setDevicesData(prev => ({
+        ...prev,
+        [deviceKey]: {
+          ...prev[deviceKey],
+          cropSettings: { ...settings, lastUpdated: new Date() },
+        }
+      }));
+      
+      if (deviceKey === selectedExternalKey) {
+        setCropSettings({ ...settings, lastUpdated: new Date() });
+      }
+    }
+    return success;
+  };
+
+  const publishConfig = async (deviceKey, config) => {
+    if (!deviceKey) {
+      console.log("⚠️ No device key provided");
+      return false;
+    }
+    
+    const payload = buildConfigPayload(deviceKey, config);
+    const success = await publish(`/messages/${deviceKey}/cfg`, JSON.stringify(payload));
+    
+    if (success) {
+      console.log(`✅ Config published to ${deviceKey}`);
+      setDevicesData(prev => ({
+        ...prev,
+        [deviceKey]: {
+          ...prev[deviceKey],
+          deviceConfig: { ...config, lastUpdated: new Date() },
+        }
+      }));
+      
+      if (deviceKey === selectedExternalKey) {
+        setDeviceConfig({ ...config, lastUpdated: new Date() });
+      }
+    }
+    return success;
+  };
+
   useEffect(() => {
     isMountedRef.current = true;
     const init = async () => {
@@ -1429,9 +1453,7 @@ export const MqttProvider = ({ children }) => {
       }
       
       if (isAuthenticated && token) {
-        // ✅ Load saved device first
         await loadSavedDevice();
-        
         if (!hasInitializedRef.current) {
           await initializeMqtt();
         }
@@ -1449,182 +1471,145 @@ export const MqttProvider = ({ children }) => {
     init();
     return () => {
       isMountedRef.current = false;
-      if (connectionCheckInterval.current) {
-        clearInterval(connectionCheckInterval.current);
-        connectionCheckInterval.current = null;
-      }
-      if (timeoutCheckInterval.current) {
-        clearInterval(timeoutCheckInterval.current);
-        timeoutCheckInterval.current = null;
-      }
     };
   }, [isAuthenticated, token, authLoading, isSignupFlow]);
 
-  // ── Publish Functions ──────────────────────────────────────────────────
-  const publishSenML = async (senmlData, topic = 'settings') => {
-    if (!externalKey) {
-      console.log("⚠️ No external_key available for SenML publish");
-      return false;
-    }
-    
-    if (!isConnected) {
-      console.log("⚠️ MQTT not connected");
-      return false;
-    }
-    
+  const loadSavedDevice = async () => {
     try {
-      const fullTopic = `/messages/${externalKey}/${topic}`;
-      const message = JSON.stringify(senmlData);
-      console.log(`📤 Publishing SenML to ${fullTopic}`);
+      const savedKey = await AsyncStorage.getItem(STORAGE_KEYS.EXTERNAL_KEY);
+      const savedDeviceId = await AsyncStorage.getItem(STORAGE_KEYS.ACTIVE_DEVICE_ID);
       
-      return await publish(fullTopic, message);
+      if (savedKey) {
+        console.log("📦 Loaded saved external_key:", savedKey);
+        setExternalKey(savedKey);
+      }
+      
+      if (savedDeviceId) {
+        console.log("📦 Loaded saved activeDeviceId:", savedDeviceId);
+        setActiveDeviceId(savedDeviceId);
+      }
+      
+      return { savedKey, savedDeviceId };
     } catch (error) {
-      console.error("❌ Publish SenML error:", error);
-      return false;
+      console.error("❌ Error loading saved device:", error);
+      return { savedKey: null, savedDeviceId: null };
     }
   };
 
-  const publishActuatorStatus = async (status) => {
-    if (!externalKey) return false;
-    
-    const preservedStatus = {
-      ...lastKnownActuatorState,
-      ...status,
-    };
-    
-    const cleanStatus = {
-      water_pump: preservedStatus.water_pump || false,
-      water_ILvalve: preservedStatus.water_ILvalve || false,
-      water_OLvalve: preservedStatus.water_OLvalve || false,
-      nutrient_pump: preservedStatus.nutrient_pump || false,
-      reboot_ack: preservedStatus.reboot_ack || false,
-    };
-    
-    const payload = buildActuatorPayload(cleanStatus);
-    const success = await publish(`/messages/${externalKey}/actuator`, JSON.stringify(payload));
-    
-    if (success) {
-      lastKnownActuatorState = { ...cleanStatus };
-      setActuatorStatus({ ...cleanStatus, lastUpdated: new Date() });
-      
-      const deviceList = parseActuatorToDevices(JSON.stringify(payload));
-      if (deviceList.length > 0) {
-        setDevices(deviceList);
-      }
-      console.log("✅ Actuator published with preservation:", cleanStatus);
-    }
-    return success;
+  const reconnect = async () => {
+    console.log("🔄 Attempting to reconnect MQTT...");
+    hasInitializedRef.current = false;
+    await cleanupMqtt();
+    await initializeMqtt();
   };
 
-  const publishSettings = async (settings) => {
-    if (!externalKey) {
-      console.log("⚠️ No external_key available");
-      return false;
-    }
-    console.log(`📤 Publishing settings to /messages/${externalKey}/settings`);
-    
-    const payload = buildSettingsPayload(settings, externalKey);
-    const message = JSON.stringify(payload);
-    
-    const success = await publish(`/messages/${externalKey}/settings`, message);
-    
-    if (success) {
-      setCropSettings({ ...settings, lastUpdated: new Date() });
-      console.log("✅ Crop settings published successfully");
-    } else {
-      console.log("❌ Failed to publish crop settings");
-    }
-    
-    return success;
-  };
-
-  const publishConfig = async (config) => {
-    if (!externalKey) return false;
-    
-    const preservedConfig = {
-      ...lastKnownConfigState,
-      ...config,
-    };
-    
-    const cleanConfig = {
-      report_interval: preservedConfig.report_interval || 120,
-      sampling_interval: preservedConfig.sampling_interval || 30,
-      auto_mode: preservedConfig.auto_mode || false,
-    };
-    
-    const payload = buildConfigPayload(externalKey, cleanConfig);
-    const success = await publish(`/messages/${externalKey}/cfg`, JSON.stringify(payload));
-    
-    if (success) {
-      lastKnownConfigState = { ...cleanConfig };
-      setDeviceConfig({ ...cleanConfig, lastUpdated: new Date() });
-      
-      if (cleanConfig.report_interval) {
-        updateTimeoutFromReportInterval(cleanConfig.report_interval);
-      }
-      
-      console.log("✅ Config published with preservation:", cleanConfig);
-    }
-    return success;
-  };
-
-  // ── Context Value ──────────────────────────────────────────────────────────
   const contextValue = {
+    devicesData,
+    deviceConnectionStatus,
+    deviceOnlineStatus,
+    availableDevices,
+    getDeviceData,
+    getDeviceStatus,
+    connectToDevice,
+    switchToDevice,
+    requestDeviceStatus,
+    requestStatusForAllDevices,
+    publishActuatorStatus,
+    publishSettings,
+    publishConfig,
+    
+    selectedDeviceId,
+    selectedDeviceName,
+    selectedExternalKey,
+    selectDevice,
+    getSelectedDeviceId,
+    getSelectedDeviceName,
+    getSelectedExternalKey,
+    getSelectedDeviceData,
+    getSelectedDeviceSensorData,
+    getSelectedDeviceActuatorStatus,
+    getSelectedDeviceCropSettings,
+    getSelectedDeviceConfig,
+    getSelectedDeviceOnlineStatus,
+    
     sensorData,
     actuatorStatus,
     cropSettings,
     deviceConfig,
     devices,
+    deviceStatus,
+    deviceStatusFlags,
+    
     isConnected,
     isReady,
     externalKey,
     hasReceivedData,
     isLiveData,
-    deviceStatus,
-    deviceStatusFlags,
     connectionState,
     hasEverBeenOnline,
     reportInterval,
     timeoutDuration,
-    availableDevices,
     activeDeviceId,
-    deviceConnectionStatus,
     isSwitchingDevice,
-    switchToDevice,
-    loadAvailableDevices,
+    isInitializing,
+    
     publish,
     publishWithRetry: async (topic, msg, retries = 3) => publishWithRetry(topic, msg, retries),
-    publishActuatorStatus,
-    setActuatorStatus: async (status) => {
-      const mergedStatus = { ...lastKnownActuatorState, ...status };
-      const updated = { ...mergedStatus, lastUpdated: new Date() };
-      return await publishActuatorStatus(updated);
-    },
-    publishSettings,
-    publishSenML,
-    updateCropSettings: async (settings) => {
-      const updated = { ...cropSettings, ...settings, lastUpdated: new Date() };
-      return await publishSettings(updated);
-    },
-    publishConfig,
-    updateDeviceConfig: async (config) => {
-      const mergedConfig = { ...lastKnownConfigState, ...config };
-      const updated = { ...mergedConfig, lastUpdated: new Date() };
-      return await publishConfig(updated);
-    },
     reconnect,
     forceReconnect,
-    debugMqttState,
-    updateSensorData: (data) => setSensorData(prev => ({ ...prev, ...data, lastUpdated: new Date() })),
-    updateActuatorStatus: (status) => {
-      const merged = { ...lastKnownActuatorState, ...status };
-      setActuatorStatus(prev => ({ ...prev, ...merged, lastUpdated: new Date() }));
+    loadAvailableDevices,
+    debugMqttState: () => {
+      console.log("=== MQTT STATE DEBUG ===");
+      console.log("mqttClient exists:", !!mqttClient);
+      console.log("isConnected:", isConnected);
+      console.log("connectionState:", connectionState);
+      console.log("availableDevices:", availableDevices.length);
+      console.log("devicesData:", Object.keys(devicesData).length);
+      console.log("deviceConnectionStatus:", deviceConnectionStatus);
+      console.log("deviceOnlineStatus:", deviceOnlineStatus);
+      console.log("selectedDeviceId:", selectedDeviceId);
+      console.log("selectedDeviceName:", selectedDeviceName);
+      console.log("selectedExternalKey:", selectedExternalKey);
+      console.log("isUsingGetStat:", isUsingGetStat.current);
+      console.log("getStatStartTime:", getStatStartTime.current);
+      console.log("=== END DEBUG ===");
     },
-    subscribeToTopic,
-    publishMessage,
-    toggleDeviceStatus,
-    getLastKnownActuatorState: () => lastKnownActuatorState,
-    getLastKnownConfigState: () => lastKnownConfigState,
+    toggleDeviceStatus: async (deviceKey, deviceName, status) => {
+      const actuatorMap = {
+        water_pump: "water_pump",
+        water_ILvalve: "water_ILvalve",
+        water_OLvalve: "water_OLvalve",
+        nutrient_pump: "nutrient_pump",
+        reboot_ack: "reboot_ack",
+      };
+      
+      const actuatorKey = actuatorMap[deviceName];
+      if (!actuatorKey) {
+        console.log(`⚠️ Unknown device: ${deviceName}`);
+        return false;
+      }
+      
+      const currentData = devicesData[deviceKey];
+      const currentStatus = currentData?.actuatorStatus || {};
+      
+      const updatedStatus = {
+        ...currentStatus,
+        [actuatorKey]: status,
+      };
+      
+      return await publishActuatorStatus(deviceKey, updatedStatus);
+    },
+    
+    updateSensorData: (data) => setSensorData(prev => ({ ...prev, ...data, lastUpdated: new Date() })),
+    updateActuatorStatus: (status) => setActuatorStatus(prev => ({ ...prev, ...status, lastUpdated: new Date() })),
+    updateCropSettings: async (settings) => {
+      if (!selectedExternalKey) return false;
+      return await publishSettings(selectedExternalKey, { ...cropSettings, ...settings });
+    },
+    updateDeviceConfig: async (config) => {
+      if (!selectedExternalKey) return false;
+      return await publishConfig(selectedExternalKey, { ...deviceConfig, ...config });
+    },
   };
 
   return (

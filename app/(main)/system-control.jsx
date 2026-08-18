@@ -1,19 +1,19 @@
 // app/(main)/system-control.jsx — System Control tab
-// MANUAL/AUTO mode switcher + actuator toggles (pumps, valves, reboot)
+// MANUAL/AUTO mode switcher (routes to Config to actually change mode) + actuator toggles (pumps, valves, reboot)
 import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Dimensions,
   Platform,
-  RefreshControl,
   ScrollView,
   StyleSheet,
   Switch,
   Text,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
 import { useAlerts } from "../../src/context/AlertContext";
 import { useMqtt } from "../../src/context/MqttContext";
@@ -24,7 +24,10 @@ import { getDisplayStatus } from "../../src/utils/deviceStatusParser";
 
 const { height } = Dimensions.get("window");
 
-// ── Actuator configuration (from the live MQTT message) ─────────────────────
+// ── Constants ──
+const STATUS_CHECK_TIMEOUT = 2 * 60 * 1000; // 2 minutes
+
+// ── Actuator configuration ────────────────────────────────────────────────────
 const DEVICE_CONFIG = {
   water_pump: {
     displayName: "Water Pump",
@@ -71,7 +74,6 @@ const DEVICE_ORDER = [
   "reboot_ack",
 ];
 
-// Build the static device list (shape only, no live values yet)
 function buildStaticDeviceList() {
   return DEVICE_ORDER.filter((deviceName) => deviceName in DEVICE_CONFIG).map(
     (deviceName) => {
@@ -94,42 +96,47 @@ export default function SystemControl() {
   const { onScroll, headerHeight } = useScroll();
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
+
   const {
-    isConnected,
     actuatorStatus,
     setActuatorStatus,
     publishActuatorStatus,
     externalKey,
-    debugMqttState,
     deviceStatusFlags,
-    connectionState,
     devices: mqttDevices,
+    getSelectedDeviceName,
+    isConnected,
+    isLiveData,
   } = useMqtt();
 
-  const {
-    modeDisplay,
-    isManualMode,
-    toggleMode,
-    isSwitching,
-    isModeLoaded,
-    checkBeforeActuator,
-  } = useSystemMode();
+  // ✅ System Mode Context — used only for the actuator-lock guard rail
+  const { checkBeforeActuator, modeLocked } = useSystemMode();
 
   const { addAlert } = useAlerts();
 
   const [refreshing, setRefreshing] = useState(false);
   const [updating, setUpdating] = useState(null);
   const [deviceToggleTimes, setDeviceToggleTimes] = useState({});
-  const [expandedDevice, setExpandedDevice] = useState(null);
   const [devices, setDevices] = useState(buildStaticDeviceList);
+  const [statusCheckDone, setStatusCheckDone] = useState(false);
+  const [checkingTimeout, setCheckingTimeout] = useState(null);
+
+  // Get selected device name
+  const selectedDeviceName = getSelectedDeviceName();
 
   // Get display status from 32-bit flags
   const displayStatus = getDisplayStatus(deviceStatusFlags);
+  const rawMode = displayStatus?.mode;
+  const isModeLoaded = rawMode === "MANUAL" || rawMode === "AUTO";
+  const isManualMode = rawMode === "MANUAL";
+  const modeDisplay = isModeLoaded
+    ? rawMode.charAt(0) + rawMode.slice(1).toLowerCase()
+    : "Unknown";
 
-  // Check if offline
-  const isOffline = connectionState === "disconnected" || connectionState === "idle";
+  // ── Device is considered online if we're receiving live data ──
+  const isDeviceOnline = isLiveData && isConnected;
 
-  // ── Seed actuator list from MQTT ─────────────────────────────────────────
+  // ── Seed actuator list from MQTT ──
   useEffect(() => {
     if (mqttDevices && mqttDevices.length > 0) {
       setDevices(mqttDevices);
@@ -153,7 +160,37 @@ export default function SystemControl() {
     }
   }, [mqttDevices, actuatorStatus]);
 
-  // ── Monitor actuator changes for alerts ──────────────────────────────────
+  // ── Status check timeout (2 minutes) ──
+  useEffect(() => {
+    // Clear any existing timeout
+    if (checkingTimeout) {
+      clearTimeout(checkingTimeout);
+      setCheckingTimeout(null);
+    }
+
+    // Set a timeout to mark status as checked after 2 minutes
+    const timeout = setTimeout(() => {
+      setStatusCheckDone(true);
+      console.log("✅ Auto-marked status as checked after 2 minutes timeout");
+    }, STATUS_CHECK_TIMEOUT);
+
+    setCheckingTimeout(timeout);
+    return () => clearTimeout(timeout);
+  }, []);
+
+  // ── Mark status as checked when mode is loaded ──
+  useEffect(() => {
+    if (isModeLoaded && !statusCheckDone) {
+      setStatusCheckDone(true);
+      if (checkingTimeout) {
+        clearTimeout(checkingTimeout);
+        setCheckingTimeout(null);
+      }
+      console.log("✅ Status checked (mode loaded)");
+    }
+  }, [isModeLoaded]);
+
+  // ── Monitor actuator changes for alerts ──
   useEffect(() => {
     if (actuatorStatus) {
       const now = new Date().toLocaleTimeString();
@@ -169,18 +206,10 @@ export default function SystemControl() {
     }
   }, [actuatorStatus]);
 
-  useEffect(() => {
-    if (isConnected) {
-      console.log("📡 MQTT Connected, actuatorStatus:", actuatorStatus);
-      debugMqttState?.();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isConnected]);
-
-  // ── Actuator toggle ──────────────────────────────────────────────────────
+  // ── Actuator toggle ──
   const handleToggleDevice = async (device) => {
     if (updating === device.id) return;
-    if (device.vb === null) return; // still loading real status, ignore taps
+    if (device.vb === null) return;
 
     if (!checkBeforeActuator(device.displayName)) {
       return;
@@ -218,7 +247,6 @@ export default function SystemControl() {
     const newStatus = !device.vb;
     const time = new Date().toLocaleTimeString();
 
-    // Update local state immediately for UI feedback
     setDevices((prev) =>
       prev.map((d) => (d.id === device.id ? { ...d, vb: newStatus } : d))
     );
@@ -269,29 +297,34 @@ export default function SystemControl() {
     }
   };
 
-  // ── Refresh ─────────────────────────────────────────────────────────────
-  const onRefresh = async () => {
-    setRefreshing(true);
-    try {
-      if (externalKey && actuatorStatus) {
-        const fullStatus = {
-          water_pump: actuatorStatus.water_pump || false,
-          water_ILvalve: actuatorStatus.water_ILvalve || false,
-          water_OLvalve: actuatorStatus.water_OLvalve || false,
-          nutrient_pump: actuatorStatus.nutrient_pump || false,
-          reboot_ack: actuatorStatus.reboot_ack || false,
-          lastUpdated: new Date(),
-        };
-        await publishActuatorStatus(fullStatus);
-      }
-    } catch (error) {
-      console.error("Refresh error:", error);
-    } finally {
-      setRefreshing(false);
+  // ── Mode switch ── always sends the user to Config to change mode ───────
+  const handleModeToggle = () => {
+    if (modeLocked) {
+      Alert.alert('⏳ Busy', 'A mode change is already in progress. Please wait...');
+      return;
     }
+
+    if (!isModeLoaded) {
+      Alert.alert('⏳ Loading', 'Please wait for system mode to load.');
+      return;
+    }
+
+    Alert.alert(
+      isManualMode ? "🔄 Switch to AUTO Mode" : "🔄 Switch to MANUAL Mode",
+      isManualMode
+        ? "To switch to AUTO mode, you need to configure the device settings.\n\nThis ensures proper automation parameters are set."
+        : "To switch to MANUAL mode, you need to configure the device settings.\n\nThis will allow manual control of actuators.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Go to Config",
+          onPress: () => router.push("/(main)/config"),
+        },
+      ]
+    );
   };
 
-  // ── Actuator card helpers ───────────────────────────────────────────────
+  // ── Actuator card helpers ──
   const getDeviceColor = (device) => {
     if (device.vb === null) return theme.colors.textSecondary;
     if (!isManualMode || !isModeLoaded) return theme.colors.textSecondary;
@@ -332,13 +365,11 @@ export default function SystemControl() {
     system: "System",
   };
 
-  const toggleExpand = (deviceId) => {
-    setExpandedDevice(expandedDevice === deviceId ? null : deviceId);
-  };
-
   const primary = theme.colors.primary;
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // ── Check if status is still loading ──
+  const isLoading = !statusCheckDone;
+
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <ScrollView
@@ -347,21 +378,13 @@ export default function SystemControl() {
         contentContainerStyle={[
           styles.scrollViewContent,
           {
-            paddingBottom: Platform.OS === "ios" ? height * 0.06 : height * 0.04,
+            paddingBottom: Platform.OS === "ios" ? height * 0.04 : height * 0.04,
             paddingTop: headerHeight,
           },
         ]}
         showsVerticalScrollIndicator={false}
         onScroll={onScroll}
         scrollEventThrottle={16}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={[primary]}
-            tintColor={primary}
-          />
-        }
       >
         {/* ── Header ───────────────────────────────────────────────────────── */}
         <View style={styles.header}>
@@ -370,58 +393,62 @@ export default function SystemControl() {
               System Control
             </Text>
             <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
-              {isModeLoaded ? `${modeDisplay} mode` : "Waiting for device…"}
+              {selectedDeviceName || 'No Device'} · {isLoading ? "Loading..." : (isModeLoaded ? modeDisplay : "Unknown")}
             </Text>
           </View>
           <View
             style={[
               styles.modePill,
-              { backgroundColor: isManualMode ? "#4CAF50" : "#FF9800" },
+              { backgroundColor: isLoading ? "#FF9800" : (isManualMode ? "#4CAF50" : "#FF9800") },
             ]}
           >
-            <Ionicons
-              name={isManualMode ? "hand-left-outline" : "sync-outline"}
-              size={12}
-              color="#FFF"
-            />
+            {isLoading ? (
+              <ActivityIndicator size="small" color="#FFF" />
+            ) : (
+              <Ionicons
+                name={isManualMode ? "hand-left-outline" : "sync-outline"}
+                size={12}
+                color="#FFF"
+              />
+            )}
             <Text style={styles.modePillText}>
-              {isModeLoaded ? modeDisplay.toUpperCase() : "…"}
+              {isLoading ? "Loading…" : (isModeLoaded ? modeDisplay.toUpperCase() : "…")}
             </Text>
           </View>
         </View>
 
-        {/* ── Offline banner ───────────────────────────────────────────────── */}
-        {isOffline && (
-          <View style={[styles.offlineBanner, { backgroundColor: "#FFEBEE" }]}>
-            <Ionicons name="alert-circle" size={20} color="#F44336" />
-            <Text style={styles.offlineBannerText}>
-              Device is offline — live controls are disabled
+        {/* ── Status Check Info ── */}
+        {isLoading && (
+          <View style={[styles.infoBanner, { backgroundColor: `${theme.colors.textSecondary}0D` }]}>
+            <ActivityIndicator size="small" color={theme.colors.primary} />
+            <Text style={[styles.infoBannerText, { color: theme.colors.textSecondary }]}>
+              Checking device status... This may take up to 2 minutes.
             </Text>
           </View>
         )}
 
-        {/* Mode button */}
+        {/* ── Mode Button ──────────────────────────────────────────────────── */}
         <TouchableOpacity
           style={[
             styles.modeButton,
             {
-              backgroundColor: !isModeLoaded ? "#888" : isManualMode ? primary : "#FF9800",
-              shadowColor: !isModeLoaded ? "#888" : isManualMode ? primary : "#FF9800",
-              shadowOpacity: !isModeLoaded ? 0.1 : 0.3,
+              backgroundColor: isLoading ? "#FF9800" : (!isModeLoaded ? "#888" : isManualMode ? "#4CAF50" : "#FF9800"),
+              shadowColor: isLoading ? "#FF9800" : (!isModeLoaded ? "#888" : isManualMode ? "#4CAF50" : "#FF9800"),
+              shadowOpacity: 0.3,
               shadowRadius: 8,
               elevation: 4,
-              opacity: isSwitching ? 0.7 : 1,
+              opacity: isLoading ? 0.8 : 1,
             },
           ]}
-          onPress={toggleMode}
+          onPress={handleModeToggle}
           activeOpacity={0.8}
-          disabled={isSwitching || !isModeLoaded || isOffline}
+          disabled={!isModeLoaded || isLoading}
         >
           <View style={styles.modeButtonContent}>
-            {isSwitching ? (
+            {isLoading ? (
               <>
                 <ActivityIndicator size="small" color="#FFF" />
-                <Text style={styles.modeButtonText}>Switching Mode…</Text>
+                <Text style={styles.modeButtonText}>Loading Mode…</Text>
               </>
             ) : !isModeLoaded ? (
               <>
@@ -440,7 +467,7 @@ export default function SystemControl() {
                 </Text>
                 <View style={styles.modeIndicator}>
                   <View
-                    style={[styles.modeDot, { backgroundColor: isManualMode ? primary : "#FF9800" }]}
+                    style={[styles.modeDot, { backgroundColor: isManualMode ? "#4CAF50" : "#FF9800" }]}
                   />
                   <Text style={styles.modeStatusText}>
                     {isManualMode ? "Control Enabled" : "Auto Control"}
@@ -449,21 +476,70 @@ export default function SystemControl() {
               </>
             )}
           </View>
-          {!isSwitching && isModeLoaded && (
+          {!isLoading && isModeLoaded && (
             <Ionicons name="chevron-forward" size={20} color="#FFF" opacity={0.7} />
           )}
         </TouchableOpacity>
 
-        {isModeLoaded && !isManualMode && (
-          <View style={[styles.modeWarning, { backgroundColor: "#FFF3E0" }]}>
-            <Ionicons name="warning-outline" size={16} color="#FF9800" />
-            <Text style={[styles.modeWarningText, { color: "#E65100" }]}>
-              Manual control disabled. Switch to MANUAL mode to control devices.
+        {/* ── Mode Info ────────────────────────────────────────────────────── */}
+        {!isLoading && isModeLoaded && (
+          <View style={[styles.modeInfo, {
+            backgroundColor: isManualMode ? 'rgba(76,175,80,0.08)' : 'rgba(255,152,0,0.08)',
+            borderColor: isManualMode ? 'rgba(76,175,80,0.2)' : 'rgba(255,152,0,0.2)',
+          }]}>
+            <Ionicons
+              name="information-circle"
+              size={16}
+              color={isManualMode ? "#4CAF50" : "#FF9800"}
+            />
+            <Text style={[styles.modeInfoText, {
+              color: isManualMode ? "#2E7D32" : "#E65100"
+            }]}>
+              {isManualMode
+                ? "Manual mode active. You can control each device individually."
+                : "Auto mode active. System controls devices automatically."}
             </Text>
           </View>
         )}
 
-        {!isModeLoaded && (
+        {/* ── Switch mode CTA ── always routes to Config ───────────────────── */}
+        {!isLoading && isModeLoaded && (
+          <TouchableOpacity
+            style={[
+              styles.quickSwitchButton,
+              {
+                backgroundColor: isManualMode ? '#FFF3E0' : '#E8F5E9',
+                borderColor: isManualMode ? '#FFB74D' : '#81C784',
+              }
+            ]}
+            onPress={handleModeToggle}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name={isManualMode ? "sync-outline" : "hand-left-outline"}
+              size={18}
+              color={isManualMode ? "#FF9800" : "#4CAF50"}
+            />
+            <Text style={[styles.quickSwitchText, {
+              color: isManualMode ? "#E65100" : "#2E7D32"
+            }]}>
+              {isManualMode ? "Switch to AUTO Mode" : "Switch to MANUAL Mode"}
+            </Text>
+            <Ionicons name="chevron-forward" size={16} color={isManualMode ? "#FF9800" : "#4CAF50"} />
+          </TouchableOpacity>
+        )}
+
+        {/* ── Mode Warning ────────────────────────────────────────────────── */}
+        {!isLoading && isModeLoaded && !isManualMode && (
+          <View style={[styles.modeWarning, { backgroundColor: "#FFF3E0" }]}>
+            <Ionicons name="warning-outline" size={16} color="#FF9800" />
+            <Text style={[styles.modeWarningText, { color: "#E65100" }]}>
+              Manual control disabled. Tap "Switch to MANUAL Mode" to control devices.
+            </Text>
+          </View>
+        )}
+
+        {!isLoading && !isModeLoaded && (
           <View style={[styles.modeWarning, { backgroundColor: "#E3F2FD" }]}>
             <Ionicons name="information-outline" size={16} color="#1976D2" />
             <Text style={[styles.modeWarningText, { color: "#0D47A1" }]}>
@@ -472,7 +548,7 @@ export default function SystemControl() {
           </View>
         )}
 
-        {/* Actuator groups */}
+        {/* ── Actuator groups ──────────────────────────────────────────────── */}
         {Object.entries(groupedDevices).map(([category, devicesList]) => (
           <View key={category} style={styles.categorySection}>
             <Text style={[styles.categoryTitle, { color: theme.colors.textSecondary }]}>
@@ -486,41 +562,36 @@ export default function SystemControl() {
                 !isManualMode ||
                 !isModeLoaded ||
                 isStatusLoading ||
-                isOffline;
-              const isExpanded = expandedDevice === device.id;
+                !isDeviceOnline ||
+                isLoading;
+
               const toggleTime = deviceToggleTimes[device.id];
 
+              const showLocked = (!isManualMode && isModeLoaded) || isLoading;
+
               return (
-                <TouchableOpacity
+                <View
                   key={device.id}
                   style={[
                     styles.actuatorCard,
                     {
                       backgroundColor: theme.colors.card,
-                      borderColor:
-                        !isManualMode || !isModeLoaded || isOffline
-                          ? theme.colors.border
-                          : device.vb
-                          ? "#4CAF50"
-                          : theme.colors.border,
-                      borderWidth:
-                        !isManualMode || !isModeLoaded || isOffline
-                          ? 1
-                          : device.vb
-                          ? 2
-                          : 1,
-                      opacity: !isManualMode || !isModeLoaded || isOffline ? 0.6 : 1,
+                      borderColor: showLocked
+                        ? theme.colors.border
+                        : device.vb
+                        ? "#4CAF50"
+                        : theme.colors.border,
+                      borderWidth: showLocked ? 1 : device.vb ? 2 : 1,
+                      opacity: showLocked ? 0.7 : 1,
                     },
                   ]}
-                  onPress={() => toggleExpand(device.id)}
-                  activeOpacity={0.7}
                 >
                   <View style={styles.actuatorLeft}>
                     <View
                       style={[
                         styles.actuatorIconContainer,
                         {
-                          backgroundColor: deviceLocked
+                          backgroundColor: showLocked
                             ? `${theme.colors.textSecondary}20`
                             : `${getDeviceColor(device)}20`,
                         },
@@ -529,12 +600,17 @@ export default function SystemControl() {
                       <Ionicons
                         name={getDeviceIcon(device)}
                         size={26}
-                        color={deviceLocked ? theme.colors.textSecondary : getDeviceColor(device)}
+                        color={showLocked ? theme.colors.textSecondary : getDeviceColor(device)}
                       />
                     </View>
                     <View style={styles.actuatorInfo}>
                       <Text style={[styles.actuatorName, { color: theme.colors.text }]}>
                         {device.displayName}
+                        {showLocked && (
+                          <Text style={[styles.lockedLabel, { color: '#FF9800' }]}>
+                            {' '}🔒
+                          </Text>
+                        )}
                       </Text>
                       <Text
                         style={[styles.actuatorDescription, { color: theme.colors.textSecondary }]}
@@ -545,8 +621,8 @@ export default function SystemControl() {
                         style={[
                           styles.statusBadge,
                           {
-                            backgroundColor: deviceLocked
-                              ? "rgba(117,117,117,0.15)"
+                            backgroundColor: showLocked
+                              ? "rgba(255,152,0,0.15)"
                               : device.vb
                               ? "rgba(76,175,80,0.15)"
                               : "rgba(117,117,117,0.15)",
@@ -564,8 +640,8 @@ export default function SystemControl() {
                             style={[
                               styles.statusDotSmall,
                               {
-                                backgroundColor: deviceLocked
-                                  ? "#757575"
+                                backgroundColor: showLocked
+                                  ? "#FF9800"
                                   : device.vb
                                   ? "#4CAF50"
                                   : "#757575",
@@ -577,18 +653,21 @@ export default function SystemControl() {
                           style={[
                             styles.actuatorStatusText,
                             {
-                              color: deviceLocked
-                                ? "#757575"
+                              color: showLocked
+                                ? "#FF9800"
                                 : device.vb
                                 ? "#4CAF50"
                                 : "#757575",
                             },
                           ]}
                         >
-                          {isOffline ? "Offline" : getStatusText(device)}
+                          {isLoading ? "Loading..." :
+                           showLocked ? "Locked (Auto)" :
+                           isStatusLoading ? "Loading" :
+                           getStatusText(device)}
                         </Text>
                       </View>
-                      {toggleTime && isConnected && (
+                      {toggleTime && !isLoading && (
                         <Text style={[styles.toggleTime, { color: theme.colors.textSecondary }]}>
                           Last toggled: {toggleTime}
                         </Text>
@@ -607,92 +686,28 @@ export default function SystemControl() {
                         onValueChange={() => handleToggleDevice(device)}
                         trackColor={{
                           false: theme.colors.border,
-                          true:
-                            isManualMode && isModeLoaded && !isOffline
+                          true: isManualMode && isModeLoaded && !isLoading && isDeviceOnline
                               ? "#4CAF50"
                               : theme.colors.border,
                         }}
                         thumbColor={
-                          !isManualMode || !isModeLoaded || isOffline
+                          showLocked || !isDeviceOnline || isLoading
                             ? theme.colors.textSecondary
                             : updating === device.id
                             ? primary
                             : "#FFF"
                         }
-                        disabled={deviceLocked}
+                        disabled={deviceLocked || showLocked || !isDeviceOnline || isLoading}
                       />
                     )}
                   </View>
-
-                  <View style={styles.expandIcon}>
-                    <Ionicons
-                      name={isExpanded ? "chevron-up" : "chevron-down"}
-                      size={18}
-                      color={theme.colors.textSecondary}
-                    />
-                  </View>
-
-                  {isExpanded && deviceStatusFlags && (
-                    <View
-                      style={[
-                        styles.expandedContent,
-                        { borderTopColor: theme.colors.border },
-                      ]}
-                    >
-                      <Text style={[styles.expandedTitle, { color: theme.colors.textSecondary }]}>
-                        Related Status Flags
-                      </Text>
-                      <View style={styles.expandedFlags}>
-                        {Object.entries(displayStatus)
-                          .filter(([key]) => key !== "rawStatus")
-                          .slice(0, 8)
-                          .map(([key, value]) => {
-                            const isOn =
-                              value === "YES" ||
-                              value === "ON" ||
-                              value === "OPEN" ||
-                              value === "AUTO";
-                            const isOff =
-                              value === "NO" ||
-                              value === "OFF" ||
-                              value === "CLOSED" ||
-                              value === "MANUAL";
-                            const color =
-                              value === "_ _"
-                                ? "#999"
-                                : isOn
-                                ? "#4CAF50"
-                                : isOff
-                                ? "#F44336"
-                                : "#FF9800";
-                            const label = key
-                              .replace(/([A-Z])/g, " $1")
-                              .replace(/^./, (str) => str.toUpperCase());
-
-                            return (
-                              <View key={key} style={styles.expandedFlagItem}>
-                                <Text
-                                  style={[
-                                    styles.expandedFlagLabel,
-                                    { color: theme.colors.textSecondary },
-                                  ]}
-                                >
-                                  {label}
-                                </Text>
-                                <Text style={[styles.expandedFlagValue, { color }]}>{value}</Text>
-                              </View>
-                            );
-                          })}
-                      </View>
-                    </View>
-                  )}
-                </TouchableOpacity>
+                </View>
               );
             })}
           </View>
         ))}
 
-        {/* ── MQTT Status Footer ───────────────────────────────────────────── */}
+        {/* ── Footer ────────────────────────────────────────────────────────── */}
         <View
           style={[
             styles.footer,
@@ -702,28 +717,22 @@ export default function SystemControl() {
             },
           ]}
         >
-          <View style={styles.footerRow}>
+          <Text style={[styles.footerText, { color: theme.colors.textSecondary }]}>
+            {isLoading ? "⏳ Loading status..." : (selectedDeviceName || "No Device")}
+          </Text>
+          {!isLoading && isModeLoaded && (
             <View style={styles.footerStatus}>
               <View
                 style={[
                   styles.footerDot,
-                  { backgroundColor: isConnected && !isOffline ? "#4CAF50" : "#F44336" },
+                  { backgroundColor: isManualMode ? "#4CAF50" : "#FF9800" },
                 ]}
               />
-              <Text style={[styles.footerText, { color: theme.colors.textSecondary }]}>
-                {isOffline ? "Device Offline" : isConnected ? "MQTT Connected" : "MQTT Disconnected"}
+              <Text style={[styles.footerStatusText, { color: theme.colors.textSecondary }]}>
+                {isManualMode ? "Manual" : "Auto"}
               </Text>
             </View>
-            {externalKey && (
-              <Text style={[styles.deviceIdText, { color: theme.colors.textSecondary }]}>
-                ID: {externalKey.slice(0, 8)}…
-              </Text>
-            )}
-          </View>
-          <TouchableOpacity onPress={onRefresh} style={styles.refreshButton}>
-            <Ionicons name="refresh-outline" size={18} color={primary} />
-            <Text style={[styles.refreshText, { color: primary }]}>Refresh</Text>
-          </TouchableOpacity>
+          )}
         </View>
       </ScrollView>
     </View>
@@ -735,7 +744,6 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   scrollViewContent: { padding: 16, paddingTop: Platform.OS === "ios" ? 8 : 16 },
 
-  // ── Header ─────────────────────────────────────────────────────────────
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -755,23 +763,20 @@ const styles = StyleSheet.create({
   },
   modePillText: { color: "#FFF", fontSize: 11, fontWeight: "700", letterSpacing: 0.4 },
 
-  // ── Offline banner ─────────────────────────────────────────────────────
-  offlineBanner: {
+  infoBanner: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    padding: 12,
+    padding: 10,
     borderRadius: 10,
     marginBottom: 12,
   },
-  offlineBannerText: {
-    color: "#F44336",
-    fontWeight: "600",
-    fontSize: 13,
+  infoBannerText: {
+    fontSize: 12,
     flex: 1,
+    fontWeight: "500",
   },
 
-  // ── Mode control ───────────────────────────────────────────────────────
   modeButton: {
     flexDirection: "row",
     alignItems: "center",
@@ -801,6 +806,37 @@ const styles = StyleSheet.create({
   },
   modeDot: { width: 8, height: 8, borderRadius: 4 },
   modeStatusText: { color: "#FFF", fontSize: 11, fontWeight: "500" },
+
+  modeInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 10,
+    borderRadius: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+  },
+  modeInfoText: {
+    fontSize: 12,
+    flex: 1,
+    fontWeight: "500",
+  },
+
+  quickSwitchButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 8,
+  },
+  quickSwitchText: {
+    fontSize: 13,
+    fontWeight: "600",
+  },
+
   modeWarning: {
     flexDirection: "row",
     alignItems: "center",
@@ -811,7 +847,6 @@ const styles = StyleSheet.create({
   },
   modeWarningText: { fontSize: 12, flex: 1, fontWeight: "500" },
 
-  // ── Actuator groups ────────────────────────────────────────────────────
   categorySection: { marginTop: 14 },
   categoryTitle: {
     fontSize: 12,
@@ -830,7 +865,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 2,
-    position: "relative",
   },
   actuatorLeft: { flexDirection: "row", alignItems: "center", flex: 1, paddingRight: 60 },
   actuatorIconContainer: {
@@ -843,6 +877,7 @@ const styles = StyleSheet.create({
   },
   actuatorInfo: { flex: 1 },
   actuatorName: { fontSize: 16, fontWeight: "600", marginBottom: 2 },
+  lockedLabel: { fontSize: 14, fontWeight: "600" },
   actuatorDescription: { fontSize: 12, marginBottom: 4 },
   statusBadge: {
     flexDirection: "row",
@@ -858,7 +893,7 @@ const styles = StyleSheet.create({
   toggleTime: { fontSize: 9, marginTop: 2, opacity: 0.6 },
   actuatorRight: {
     position: "absolute",
-    right: 40,
+    right: 16,
     top: "50%",
     transform: [{ translateY: -15 }],
   },
@@ -868,21 +903,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
-  expandIcon: { position: "absolute", bottom: 8, right: 8 },
-  expandedContent: { borderTopWidth: 1, marginTop: 12, paddingTop: 12 },
-  expandedTitle: { fontSize: 11, fontWeight: "600", marginBottom: 8 },
-  expandedFlags: { flexDirection: "row", flexWrap: "wrap", gap: 4 },
-  expandedFlagItem: {
-    width: "30%",
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-  },
-  expandedFlagLabel: { fontSize: 9 },
-  expandedFlagValue: { fontSize: 9, fontWeight: "600" },
 
-  // ── Footer ─────────────────────────────────────────────────────────────
   footer: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -892,18 +913,19 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginTop: 8,
   },
-  footerRow: { flexDirection: "row", alignItems: "center", gap: 12, flex: 1 },
-  footerStatus: { flexDirection: "row", alignItems: "center", gap: 8 },
-  footerDot: { width: 8, height: 8, borderRadius: 4 },
   footerText: { fontSize: 12, fontWeight: "500" },
-  deviceIdText: { fontSize: 10, opacity: 0.6 },
-  refreshButton: {
+  footerStatus: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
+    gap: 6,
   },
-  refreshText: { fontSize: 12, fontWeight: "500" },
+  footerDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  footerStatusText: {
+    fontSize: 11,
+    fontWeight: "500",
+  },
 });

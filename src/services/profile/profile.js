@@ -21,26 +21,15 @@ export const profile_creat = async (group_id, name) => {
       metadata: {
         username: name,
       },
-      config: {
-        content_type: "application/senml+json",
-        write_enabled: true,
-        webhook_enabled: true,
-        rule_enabled: true,
-        transformer: {
-          data_filters: [
-            "temp", "humidity", "water_temp", "co2", "ec",
-            "ph", "level", "lux", "device_status",
-            "water_pump", "water_ILvalve", "water_OLvalve",
-            "nutrient_pump", "reboot_ack"
-          ],
-          data_field: "",
-          // ✅ IMPORTANT: Use "created" for individual timestamps
-          time_field: "created",
-          time_format: "rfc3339",  // RFC3339 format (ISO 8601)
-          time_location: "UTC"
-        }
-      }
-    }
+    
+  "config": {
+    "content_type": "application/senml+json",
+    "write_enabled": true,
+    "webhook_enabled": true,
+    "rule_enabled": true
+  }
+}
+    
   ];
 
   console.log("📤 Sending profile data:", JSON.stringify(profileData, null, 2));

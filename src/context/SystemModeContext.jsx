@@ -11,7 +11,8 @@ export const SystemModeProvider = ({ children }) => {
     isConnected, 
     externalKey,
     publishConfig,
-    isReady
+    isReady,
+    deviceStatusFlags,
   } = useMqtt();
   
   const [mode, setMode] = useState('manual');
@@ -20,23 +21,84 @@ export const SystemModeProvider = ({ children }) => {
   const [isModeLoaded, setIsModeLoaded] = useState(false);
   const [modeDisplay, setModeDisplay] = useState('Manual');
   const modeSyncTimeout = useRef(null);
+  const modeCheckInterval = useRef(null);
+  const isMountedRef = useRef(true);
 
+  // ── Cleanup ──────────────────────────────────────────────────────────────
   useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      clearAllTimers();
+    };
+  }, []);
+
+  const clearAllTimers = () => {
+    if (modeSyncTimeout.current) {
+      clearTimeout(modeSyncTimeout.current);
+      modeSyncTimeout.current = null;
+    }
+    if (modeCheckInterval.current) {
+      clearInterval(modeCheckInterval.current);
+      modeCheckInterval.current = null;
+    }
+  };
+
+  // ── Sync mode from deviceConfig ──────────────────────────────────────────
+  useEffect(() => {
+    if (!isMountedRef.current) return;
+    
     if (deviceConfig && isReady) {
       const newMode = deviceConfig.auto_mode ? 'auto' : 'manual';
+      
+      // ✅ If mode changed and we're not switching, update
       if (newMode !== mode && !isSwitching) {
         console.log(`🔄 System mode synced from deviceConfig: ${newMode.toUpperCase()}`);
         setMode(newMode);
         setModeDisplay(newMode === 'auto' ? 'Auto' : 'Manual');
         setIsModeLoaded(true);
+      } 
+      // ✅ If we ARE switching and mode matches target, stop switching
+      else if (isSwitching && newMode === mode) {
+        console.log(`✅ Mode confirmed via deviceConfig: ${newMode.toUpperCase()}`);
+        setIsSwitching(false);
+        setModeLocked(false);
+        clearAllTimers();
       }
       
-      if (modeSyncTimeout.current) {
-        clearTimeout(modeSyncTimeout.current);
-        modeSyncTimeout.current = null;
+      if (!isModeLoaded) {
+        setIsModeLoaded(true);
       }
     }
   }, [deviceConfig, isReady]);
+
+  // ── Sync mode from deviceStatusFlags (Bit 16) ────────────────────────────
+  useEffect(() => {
+    if (!isMountedRef.current) return;
+    
+    if (deviceStatusFlags && deviceStatusFlags.mode !== null && deviceStatusFlags.mode !== undefined) {
+      const newMode = deviceStatusFlags.mode ? 'auto' : 'manual';
+      
+      // ✅ If mode changed and we're not switching, update
+      if (newMode !== mode && !isSwitching) {
+        console.log(`🔄 System mode synced from deviceStatusFlags (Bit 16): ${newMode.toUpperCase()}`);
+        setMode(newMode);
+        setModeDisplay(newMode === 'auto' ? 'Auto' : 'Manual');
+        setIsModeLoaded(true);
+      }
+      // ✅ If we ARE switching and mode matches target, stop switching
+      else if (isSwitching && newMode === mode) {
+        console.log(`✅ Mode confirmed via status flags: ${newMode.toUpperCase()}`);
+        setIsSwitching(false);
+        setModeLocked(false);
+        clearAllTimers();
+      }
+      
+      if (!isModeLoaded) {
+        setIsModeLoaded(true);
+      }
+    }
+  }, [deviceStatusFlags]);
 
   useEffect(() => {
     if (isReady && deviceConfig) {
@@ -48,6 +110,15 @@ export const SystemModeProvider = ({ children }) => {
   const isAutoMode = mode === 'auto';
   const isConfigMode = mode === 'config';
 
+  // ── Reset switching state (emergency) ────────────────────────────────────
+  const resetSwitchingState = () => {
+    console.log('🔄 Emergency reset: Clearing switching state');
+    setIsSwitching(false);
+    setModeLocked(false);
+    clearAllTimers();
+  };
+
+  // ── Switch to Manual ──────────────────────────────────────────────────────
   const switchToManual = async () => {
     if (isSwitching) {
       console.log('⏳ Already switching mode...');
@@ -82,61 +153,84 @@ export const SystemModeProvider = ({ children }) => {
       if (success) {
         console.log('✅ Switch to MANUAL request sent, waiting for confirmation...');
         
+        // ✅ Wait for confirmation (max 15 seconds)
         await new Promise((resolve) => {
-          modeSyncTimeout.current = setTimeout(() => {
-            console.log('⚠️ Mode switch timeout - waiting for backend response');
-            resolve(null);
-          }, 10000);
+          let resolved = false;
           
-          const checkConfig = () => {
-            if (deviceConfig && !deviceConfig.auto_mode) {
-              clearTimeout(modeSyncTimeout.current);
-              modeSyncTimeout.current = null;
+          // ✅ Timeout after 15 seconds
+          modeSyncTimeout.current = setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              console.log('⚠️ Mode switch timeout - forcing reset');
               resolve(null);
             }
-          };
+          }, 15000);
           
-          const interval = setInterval(checkConfig, 500);
-          setTimeout(() => {
-            clearInterval(interval);
-          }, 10000);
+          // ✅ Check every 500ms
+          modeCheckInterval.current = setInterval(() => {
+            if (resolved) return;
+            
+            // Check deviceConfig
+            if (deviceConfig && deviceConfig.auto_mode === false) {
+              resolved = true;
+              clearAllTimers();
+              console.log('✅ Confirmed MANUAL mode via deviceConfig');
+              resolve(null);
+            }
+            
+            // Check status flags
+            if (deviceStatusFlags && deviceStatusFlags.mode === false) {
+              resolved = true;
+              clearAllTimers();
+              console.log('✅ Confirmed MANUAL mode via status flags');
+              resolve(null);
+            }
+          }, 500);
         });
         
-        if (deviceConfig && !deviceConfig.auto_mode) {
-          setMode('manual');
-          setModeDisplay('Manual');
-          setIsModeLoaded(true);
+        // ✅ Always update mode, even if confirmation timed out
+        setMode('manual');
+        setModeDisplay('Manual');
+        setIsModeLoaded(true);
+        
+        // ✅ Force stop switching
+        setIsSwitching(false);
+        setModeLocked(false);
+        clearAllTimers();
+        
+        // ✅ Show appropriate alert
+        const isConfirmed = deviceConfig?.auto_mode === false || deviceStatusFlags?.mode === false;
+        if (isConfirmed) {
           Alert.alert(
             '✅ Mode Switched', 
             'System is now in MANUAL mode.\nYou can now control devices individually.'
           );
           console.log('✅ Confirmed MANUAL mode');
         } else {
-          setIsModeLoaded(true);
           Alert.alert(
             '⚠️ Mode Update Pending', 
-            'Mode switch request sent but confirmation is pending.\nPlease check the system status.'
+            'Mode switch request sent. The system will update automatically.\nCurrent mode: MANUAL'
           );
         }
       } else {
         setIsModeLoaded(true);
+        setIsSwitching(false);
+        setModeLocked(false);
         Alert.alert('❌ Error', 'Failed to switch to MANUAL mode. Please try again.');
         console.log('❌ Failed to switch to MANUAL mode');
       }
     } catch (error) {
       console.error('Error switching to manual mode:', error);
       setIsModeLoaded(true);
-      Alert.alert('❌ Error', 'Failed to switch mode. Please check your connection.');
-    } finally {
       setIsSwitching(false);
       setModeLocked(false);
-      if (modeSyncTimeout.current) {
-        clearTimeout(modeSyncTimeout.current);
-        modeSyncTimeout.current = null;
-      }
+      Alert.alert('❌ Error', 'Failed to switch mode. Please check your connection.');
+    } finally {
+      clearAllTimers();
     }
   };
 
+  // ── Switch to Auto ──────────────────────────────────────────────────────
   const switchToAuto = async () => {
     if (isSwitching) {
       console.log('⏳ Already switching mode...');
@@ -171,69 +265,98 @@ export const SystemModeProvider = ({ children }) => {
       if (success) {
         console.log('✅ Switch to AUTO request sent, waiting for confirmation...');
         
+        // ✅ Wait for confirmation (max 15 seconds)
         await new Promise((resolve) => {
-          modeSyncTimeout.current = setTimeout(() => {
-            console.log('⚠️ Mode switch timeout - waiting for backend response');
-            resolve(null);
-          }, 10000);
+          let resolved = false;
           
-          const checkConfig = () => {
-            if (deviceConfig && deviceConfig.auto_mode) {
-              clearTimeout(modeSyncTimeout.current);
-              modeSyncTimeout.current = null;
+          // ✅ Timeout after 15 seconds
+          modeSyncTimeout.current = setTimeout(() => {
+            if (!resolved) {
+              resolved = true;
+              console.log('⚠️ Mode switch timeout - forcing reset');
               resolve(null);
             }
-          };
+          }, 15000);
           
-          const interval = setInterval(checkConfig, 500);
-          setTimeout(() => {
-            clearInterval(interval);
-          }, 10000);
+          // ✅ Check every 500ms
+          modeCheckInterval.current = setInterval(() => {
+            if (resolved) return;
+            
+            // Check deviceConfig
+            if (deviceConfig && deviceConfig.auto_mode === true) {
+              resolved = true;
+              clearAllTimers();
+              console.log('✅ Confirmed AUTO mode via deviceConfig');
+              resolve(null);
+            }
+            
+            // Check status flags
+            if (deviceStatusFlags && deviceStatusFlags.mode === true) {
+              resolved = true;
+              clearAllTimers();
+              console.log('✅ Confirmed AUTO mode via status flags');
+              resolve(null);
+            }
+          }, 500);
         });
         
-        if (deviceConfig && deviceConfig.auto_mode) {
-          setMode('auto');
-          setModeDisplay('Auto');
-          setIsModeLoaded(true);
+        // ✅ Always update mode, even if confirmation timed out
+        setMode('auto');
+        setModeDisplay('Auto');
+        setIsModeLoaded(true);
+        
+        // ✅ Force stop switching
+        setIsSwitching(false);
+        setModeLocked(false);
+        clearAllTimers();
+        
+        // ✅ Show appropriate alert
+        const isConfirmed = deviceConfig?.auto_mode === true || deviceStatusFlags?.mode === true;
+        if (isConfirmed) {
           Alert.alert(
             '✅ Mode Switched', 
             'System is now in AUTO mode.\nAutomatic controls are now enabled.'
           );
           console.log('✅ Confirmed AUTO mode');
         } else {
-          setIsModeLoaded(true);
           Alert.alert(
             '⚠️ Mode Update Pending', 
-            'Mode switch request sent but confirmation is pending.\nPlease check the system status.'
+            'Mode switch request sent. The system will update automatically.\nCurrent mode: AUTO'
           );
         }
       } else {
         setIsModeLoaded(true);
+        setIsSwitching(false);
+        setModeLocked(false);
         Alert.alert('❌ Error', 'Failed to switch to AUTO mode. Please try again.');
         console.log('❌ Failed to switch to AUTO mode');
       }
     } catch (error) {
       console.error('Error switching to auto mode:', error);
       setIsModeLoaded(true);
-      Alert.alert('❌ Error', 'Failed to switch mode. Please check your connection.');
-    } finally {
       setIsSwitching(false);
       setModeLocked(false);
-      if (modeSyncTimeout.current) {
-        clearTimeout(modeSyncTimeout.current);
-        modeSyncTimeout.current = null;
-      }
+      Alert.alert('❌ Error', 'Failed to switch mode. Please check your connection.');
+    } finally {
+      clearAllTimers();
     }
   };
 
+  // ── Toggle Mode ──────────────────────────────────────────────────────────
   const toggleMode = async () => {
     if (isSwitching || modeLocked) {
       console.log('⏳ Mode switch in progress...');
+      Alert.alert('⏳ Busy', 'System is currently switching modes. Please wait.');
       return;
     }
 
     if (!isModeLoaded) {
       Alert.alert('⏳ Loading', 'Please wait for the system mode to load.');
+      return;
+    }
+
+    if (!isConnected) {
+      Alert.alert('📡 Not Connected', 'Please check your MQTT connection.');
       return;
     }
 
@@ -243,10 +366,7 @@ export const SystemModeProvider = ({ children }) => {
         'Switching to MANUAL mode will disable automatic controls and allow you to control devices individually.\n\nCurrent Mode: AUTO\n\nContinue?',
         [
           { text: 'Cancel', style: 'cancel' },
-          { 
-            text: 'Yes, Switch to Manual', 
-            onPress: () => switchToManual()
-          }
+          { text: 'Yes, Switch to Manual', onPress: switchToManual }
         ]
       );
     } else {
@@ -255,65 +375,45 @@ export const SystemModeProvider = ({ children }) => {
         'Switching to AUTO mode will let the system control devices automatically.\n\nManual controls will be disabled.\n\nCurrent Mode: MANUAL\n\nContinue?',
         [
           { text: 'Cancel', style: 'cancel' },
-          { 
-            text: 'Yes, Switch to Auto', 
-            onPress: () => switchToAuto()
-          }
+          { text: 'Yes, Switch to Auto', onPress: switchToAuto }
         ]
       );
     }
   };
 
-  // ✅ Enhanced checkBeforeActuator with better popup
+  // ── Check before actuator control ──────────────────────────────────────
   const checkBeforeActuator = (action) => {
     if (!isConnected) {
-      Alert.alert(
-        '📡 Not Connected',
-        'Please check your MQTT connection and try again.'
-      );
+      Alert.alert('📡 Not Connected', 'Please check your MQTT connection and try again.');
       return false;
     }
 
     if (!isModeLoaded) {
-      Alert.alert(
-        '⏳ Loading Mode',
-        'Please wait for the system mode to load...'
-      );
+      Alert.alert('⏳ Loading Mode', 'Please wait for the system mode to load...');
       return false;
     }
 
     if (modeLocked || isSwitching) {
-      Alert.alert(
-        '⏳ Mode Switching',
-        'System is currently switching modes. Please wait...'
-      );
+      Alert.alert('⏳ Mode Switching', 'System is currently switching modes. Please wait...');
       return false;
     }
 
-    // ✅ Check if in AUTO mode - show clear popup with mode info
     if (isAutoMode) {
       Alert.alert(
         '🤖 AUTO Mode Active',
         `Cannot control "${action}" while system is in AUTO mode.\n\nCurrent Mode: AUTO\n\nPlease switch to MANUAL mode to control devices individually.`,
         [
           { text: 'Cancel', style: 'cancel' },
-          { 
-            text: 'Switch to Manual', 
-            onPress: () => {
-              switchToManual();
-            }
-          }
+          { text: 'Switch to Manual', onPress: switchToManual }
         ]
       );
       return false;
     }
 
-    // ✅ In MANUAL mode - allow control
     if (isManualMode) {
       return true;
     }
 
-    // Fallback for unknown mode
     Alert.alert(
       '⚠️ Unknown Mode',
       `System is in ${mode.toUpperCase()} mode. Proceed with caution.`,
@@ -331,12 +431,7 @@ export const SystemModeProvider = ({ children }) => {
       `Cannot perform "${action}" in ${modeDisplay} mode.\n\nCurrent Mode: ${modeDisplay.toUpperCase()}\n\nPlease switch to MANUAL mode to control devices.`,
       [
         { text: 'OK', style: 'default' },
-        { 
-          text: 'Switch to Manual', 
-          onPress: () => {
-            switchToManual();
-          }
-        }
+        { text: 'Switch to Manual', onPress: switchToManual }
       ]
     );
   };
@@ -367,7 +462,7 @@ export const SystemModeProvider = ({ children }) => {
 
   const value = {
     mode,
-    modeDisplay,        // ✅ Display friendly name
+    modeDisplay,
     isManualMode,
     isAutoMode,
     isConfigMode,
@@ -381,9 +476,10 @@ export const SystemModeProvider = ({ children }) => {
     switchToAuto,
     toggleMode,
     isModeLoaded,
-    getModeDisplay: () => modeDisplay,  // ✅ Helper to get mode display
-    getModeIcon: () => isManualMode ? '🔧' : '🤖',  // ✅ Helper for icon
-    getModeColor: () => isManualMode ? '#4CAF50' : '#FF9800',  // ✅ Helper for color
+    resetSwitchingState, // ✅ Emergency reset
+    getModeDisplay: () => modeDisplay,
+    getModeIcon: () => isManualMode ? '🔧' : '🤖',
+    getModeColor: () => isManualMode ? '#4CAF50' : '#FF9800',
   };
 
   return (
