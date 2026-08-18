@@ -7,13 +7,24 @@ const SystemModeContext = createContext(undefined);
 
 export const SystemModeProvider = ({ children }) => {
   const { 
-    deviceConfig, 
+    getSelectedDeviceConfig,
+    getSelectedDeviceSensorData,
+    getSelectedDeviceOnlineStatus,
     isConnected, 
     externalKey,
     publishConfig,
     isReady,
-    deviceStatusFlags,
+    deviceStatusFlags: legacyDeviceStatusFlags,
+    selectedExternalKey,
   } = useMqtt();
+  
+  // ✅ Get data for the selected device using external key
+  const deviceConfig = getSelectedDeviceConfig();
+  const sensorData = getSelectedDeviceSensorData();
+  const isDeviceOnline = getSelectedDeviceOnlineStatus();
+  
+  // ✅ Get mode from deviceStatusFlags (Bit 16) - from selected device's sensor data
+  const deviceStatusFlags = sensorData?.deviceStatusFlags || legacyDeviceStatusFlags;
   
   const [mode, setMode] = useState('manual');
   const [modeLocked, setModeLocked] = useState(false);
@@ -51,14 +62,12 @@ export const SystemModeProvider = ({ children }) => {
     if (deviceConfig && isReady) {
       const newMode = deviceConfig.auto_mode ? 'auto' : 'manual';
       
-      // ✅ If mode changed and we're not switching, update
       if (newMode !== mode && !isSwitching) {
         console.log(`🔄 System mode synced from deviceConfig: ${newMode.toUpperCase()}`);
         setMode(newMode);
         setModeDisplay(newMode === 'auto' ? 'Auto' : 'Manual');
         setIsModeLoaded(true);
       } 
-      // ✅ If we ARE switching and mode matches target, stop switching
       else if (isSwitching && newMode === mode) {
         console.log(`✅ Mode confirmed via deviceConfig: ${newMode.toUpperCase()}`);
         setIsSwitching(false);
@@ -79,14 +88,12 @@ export const SystemModeProvider = ({ children }) => {
     if (deviceStatusFlags && deviceStatusFlags.mode !== null && deviceStatusFlags.mode !== undefined) {
       const newMode = deviceStatusFlags.mode ? 'auto' : 'manual';
       
-      // ✅ If mode changed and we're not switching, update
       if (newMode !== mode && !isSwitching) {
         console.log(`🔄 System mode synced from deviceStatusFlags (Bit 16): ${newMode.toUpperCase()}`);
         setMode(newMode);
         setModeDisplay(newMode === 'auto' ? 'Auto' : 'Manual');
         setIsModeLoaded(true);
       }
-      // ✅ If we ARE switching and mode matches target, stop switching
       else if (isSwitching && newMode === mode) {
         console.log(`✅ Mode confirmed via status flags: ${newMode.toUpperCase()}`);
         setIsSwitching(false);
@@ -100,11 +107,16 @@ export const SystemModeProvider = ({ children }) => {
     }
   }, [deviceStatusFlags]);
 
+  // ── Mark mode as loaded when we have data ────────────────────────────────
   useEffect(() => {
     if (isReady && deviceConfig) {
       setIsModeLoaded(true);
     }
-  }, [isReady, deviceConfig]);
+    // ✅ Also mark loaded if we have sensor data with status flags
+    if (deviceStatusFlags && deviceStatusFlags.mode !== null && deviceStatusFlags.mode !== undefined) {
+      setIsModeLoaded(true);
+    }
+  }, [isReady, deviceConfig, deviceStatusFlags]);
 
   const isManualMode = mode === 'manual';
   const isAutoMode = mode === 'auto';
@@ -125,8 +137,8 @@ export const SystemModeProvider = ({ children }) => {
       return;
     }
 
-    if (!externalKey) {
-      Alert.alert('❌ Error', 'No device ID available');
+    if (!selectedExternalKey && !externalKey) {
+      Alert.alert('❌ Error', 'No device selected');
       return;
     }
 
@@ -148,16 +160,16 @@ export const SystemModeProvider = ({ children }) => {
         auto_mode: false
       };
 
-      const success = await publishConfig(updatedConfig);
+      // ✅ Use selectedExternalKey for publishing
+      const deviceKey = selectedExternalKey || externalKey;
+      const success = await publishConfig(deviceKey, updatedConfig);
       
       if (success) {
         console.log('✅ Switch to MANUAL request sent, waiting for confirmation...');
         
-        // ✅ Wait for confirmation (max 15 seconds)
         await new Promise((resolve) => {
           let resolved = false;
           
-          // ✅ Timeout after 15 seconds
           modeSyncTimeout.current = setTimeout(() => {
             if (!resolved) {
               resolved = true;
@@ -166,11 +178,9 @@ export const SystemModeProvider = ({ children }) => {
             }
           }, 15000);
           
-          // ✅ Check every 500ms
           modeCheckInterval.current = setInterval(() => {
             if (resolved) return;
             
-            // Check deviceConfig
             if (deviceConfig && deviceConfig.auto_mode === false) {
               resolved = true;
               clearAllTimers();
@@ -178,7 +188,6 @@ export const SystemModeProvider = ({ children }) => {
               resolve(null);
             }
             
-            // Check status flags
             if (deviceStatusFlags && deviceStatusFlags.mode === false) {
               resolved = true;
               clearAllTimers();
@@ -188,17 +197,13 @@ export const SystemModeProvider = ({ children }) => {
           }, 500);
         });
         
-        // ✅ Always update mode, even if confirmation timed out
         setMode('manual');
         setModeDisplay('Manual');
         setIsModeLoaded(true);
-        
-        // ✅ Force stop switching
         setIsSwitching(false);
         setModeLocked(false);
         clearAllTimers();
         
-        // ✅ Show appropriate alert
         const isConfirmed = deviceConfig?.auto_mode === false || deviceStatusFlags?.mode === false;
         if (isConfirmed) {
           Alert.alert(
@@ -237,8 +242,8 @@ export const SystemModeProvider = ({ children }) => {
       return;
     }
 
-    if (!externalKey) {
-      Alert.alert('❌ Error', 'No device ID available');
+    if (!selectedExternalKey && !externalKey) {
+      Alert.alert('❌ Error', 'No device selected');
       return;
     }
 
@@ -260,16 +265,16 @@ export const SystemModeProvider = ({ children }) => {
         auto_mode: true
       };
 
-      const success = await publishConfig(updatedConfig);
+      // ✅ Use selectedExternalKey for publishing
+      const deviceKey = selectedExternalKey || externalKey;
+      const success = await publishConfig(deviceKey, updatedConfig);
       
       if (success) {
         console.log('✅ Switch to AUTO request sent, waiting for confirmation...');
         
-        // ✅ Wait for confirmation (max 15 seconds)
         await new Promise((resolve) => {
           let resolved = false;
           
-          // ✅ Timeout after 15 seconds
           modeSyncTimeout.current = setTimeout(() => {
             if (!resolved) {
               resolved = true;
@@ -278,11 +283,9 @@ export const SystemModeProvider = ({ children }) => {
             }
           }, 15000);
           
-          // ✅ Check every 500ms
           modeCheckInterval.current = setInterval(() => {
             if (resolved) return;
             
-            // Check deviceConfig
             if (deviceConfig && deviceConfig.auto_mode === true) {
               resolved = true;
               clearAllTimers();
@@ -290,7 +293,6 @@ export const SystemModeProvider = ({ children }) => {
               resolve(null);
             }
             
-            // Check status flags
             if (deviceStatusFlags && deviceStatusFlags.mode === true) {
               resolved = true;
               clearAllTimers();
@@ -300,17 +302,13 @@ export const SystemModeProvider = ({ children }) => {
           }, 500);
         });
         
-        // ✅ Always update mode, even if confirmation timed out
         setMode('auto');
         setModeDisplay('Auto');
         setIsModeLoaded(true);
-        
-        // ✅ Force stop switching
         setIsSwitching(false);
         setModeLocked(false);
         clearAllTimers();
         
-        // ✅ Show appropriate alert
         const isConfirmed = deviceConfig?.auto_mode === true || deviceStatusFlags?.mode === true;
         if (isConfirmed) {
           Alert.alert(
@@ -476,7 +474,7 @@ export const SystemModeProvider = ({ children }) => {
     switchToAuto,
     toggleMode,
     isModeLoaded,
-    resetSwitchingState, // ✅ Emergency reset
+    resetSwitchingState,
     getModeDisplay: () => modeDisplay,
     getModeIcon: () => isManualMode ? '🔧' : '🤖',
     getModeColor: () => isManualMode ? '#4CAF50' : '#FF9800',
