@@ -25,6 +25,7 @@ const DEFAULT_CONFIG = {
 };
 
 function formatDuration(seconds) {
+  if (!seconds || seconds < 0) return 'N/A';
   if (seconds < 60) return `${seconds}s`;
   if (seconds % 60 === 0) return `${seconds / 60} min`;
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
@@ -34,16 +35,15 @@ function formatDuration(seconds) {
 function IntervalPicker({
   label,
   value,
-  disabled,
   onSelect,
   theme,
+  isRequired = false,
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [customText, setCustomText] = useState(String(value));
+  const [customText, setCustomText] = useState(String(value || ''));
 
   const handleTogglePress = () => {
-    if (disabled) return;
-    setCustomText(String(value));
+    setCustomText(String(value || ''));
     setExpanded((e) => !e);
   };
 
@@ -51,8 +51,9 @@ function IntervalPicker({
     const parsed = parseInt(customText, 10);
     if (!Number.isNaN(parsed) && parsed > 0) {
       onSelect(parsed);
+      setExpanded(false);
     } else {
-      setCustomText(String(value));
+      Alert.alert("Invalid Value", "Please enter a positive number.");
     }
   };
 
@@ -60,24 +61,27 @@ function IntervalPicker({
     <View>
       <View style={styles.settingItem}>
         <Ionicons name="time-outline" size={24} color={theme.colors.primary} />
-        <Text style={[styles.settingText, { color: theme.colors.text }]}>
-          {label}
-        </Text>
+        <View style={styles.settingLabelContainer}>
+          <Text style={[styles.settingText, { color: theme.colors.text }]}>
+            {label}
+          </Text>
+          {isRequired && (
+            <Text style={[styles.requiredBadge, { color: '#F44336' }]}>*</Text>
+          )}
+        </View>
 
         <Pressable
-          disabled={disabled}
           onPress={handleTogglePress}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           style={[
             styles.dropdownTrigger,
             {
               borderColor: theme.colors.border,
-              opacity: disabled ? 0.5 : 1,
             },
           ]}
         >
           <Text style={{ color: theme.colors.text }}>
-            {formatDuration(value)}
+            {value ? formatDuration(value) : 'Select'}
           </Text>
           <Ionicons
             name={expanded ? "chevron-up" : "chevron-down"}
@@ -87,7 +91,7 @@ function IntervalPicker({
         </Pressable>
       </View>
 
-      {expanded && !disabled && (
+      {expanded && (
         <View
           style={[
             styles.chipPanel,
@@ -133,7 +137,7 @@ function IntervalPicker({
             <Text
               style={[styles.hintText, { color: theme.colors.textSecondary }]}
             >
-              Current: {formatDuration(value)}
+              Current: {value ? formatDuration(value) : 'Not set'}
             </Text>
           </View>
         </View>
@@ -154,41 +158,68 @@ export default function ConfigScreen() {
     isConnected, 
     publishConfig, 
     deviceConfig,
-    isReady 
+    isReady,
+    getSelectedDeviceName,
+    getSelectedDeviceOnlineStatus,
+    selectedDeviceId,
   } = useMqtt();
 
   const [notifications, setNotifications] = useState(true);
-  const [isDefaultMode, setIsDefaultMode] = useState(true);
-  const [config, setConfig] = useState(DEFAULT_CONFIG);
+  const [config, setConfig] = useState({
+    report_interval: null,
+    sampling_interval: null,
+    auto_mode: false,
+  });
   const [publishing, setPublishing] = useState(false);
+  const [showError, setShowError] = useState(false);
+
+  // Get selected device info
+  const selectedDeviceName = getSelectedDeviceName();
+  const isDeviceOnline = getSelectedDeviceOnlineStatus();
 
   // Load device config from context
   useEffect(() => {
     if (deviceConfig && deviceConfig.report_interval) {
       setConfig({
-        report_interval: deviceConfig.report_interval || 120,
-        sampling_interval: deviceConfig.sampling_interval || 30,
+        report_interval: deviceConfig.report_interval || null,
+        sampling_interval: deviceConfig.sampling_interval || null,
         auto_mode: deviceConfig.auto_mode || false,
       });
     }
   }, [deviceConfig]);
-
-  const activeConfig = isDefaultMode ? DEFAULT_CONFIG : config;
 
   const switchColors = {
     trackColor: { false: theme.colors.border, true: theme.colors.primary },
     thumbColor: "#fff",
   };
 
-  const handleToggleDefaultMode = (value) => {
-    setIsDefaultMode(value);
-    if (value) {
-      setConfig(DEFAULT_CONFIG);
+  // ── Validate all fields are filled ──
+  const validateConfig = () => {
+    const errors = [];
+    if (!config.report_interval || config.report_interval <= 0) {
+      errors.push("Report Interval");
     }
+    if (!config.sampling_interval || config.sampling_interval <= 0) {
+      errors.push("Sampling Interval");
+    }
+    // Auto mode is a boolean, it's always set (true/false)
+    return errors;
   };
 
-  // Publish configuration using MQTT context
+  // ── Publish configuration using MQTT context ──
   const handlePublish = async () => {
+    // Validate all fields are filled
+    const errors = validateConfig();
+    if (errors.length > 0) {
+      setShowError(true);
+      Alert.alert(
+        "⚠️ Missing Configuration",
+        `Please set the following parameters:\n\n• ${errors.join('\n• ')}\n\nAll three parameters are required.`,
+        [{ text: "OK" }]
+      );
+      return;
+    }
+
     if (!isConnected) {
       Alert.alert(
         "Not Connected",
@@ -206,20 +237,26 @@ export default function ConfigScreen() {
     }
 
     setPublishing(true);
+    setShowError(false);
     try {
-      // Send the current config values (whether default or custom)
-      const success = await publishConfig(activeConfig);
+      const configToSend = {
+        report_interval: config.report_interval,
+        sampling_interval: config.sampling_interval,
+        auto_mode: config.auto_mode,
+      };
+
+      const success = await publishConfig(configToSend);
 
       if (success) {
         const summary =
-          `Report Interval: ${formatDuration(activeConfig.report_interval)}\n` +
-          `Sampling Interval: ${formatDuration(activeConfig.sampling_interval)}\n` +
-          `Auto Mode: ${activeConfig.auto_mode ? "ON" : "OFF"}\n\n` +
-          `Mode: ${isDefaultMode ? "Default" : "Custom"}`;
+          `Report Interval: ${formatDuration(configToSend.report_interval)}\n` +
+          `Sampling Interval: ${formatDuration(configToSend.sampling_interval)}\n` +
+          `Auto Mode: ${configToSend.auto_mode ? "ON" : "OFF"}\n\n` +
+          `✅ Configuration sent to: ${selectedDeviceName || externalKey}`;
 
-        Alert.alert("Configuration Published ✅", summary);
+        Alert.alert("✅ Configuration Published", summary);
       } else {
-        Alert.alert("Publish Failed", "Could not publish configuration.");
+        Alert.alert("❌ Publish Failed", "Could not publish configuration. Please try again.");
       }
     } catch (error) {
       console.error("Publish error:", error);
@@ -229,7 +266,7 @@ export default function ConfigScreen() {
     }
   };
 
-  // Show loading state
+  // ── Show loading state ──
   if (!isReady) {
     return (
       <View style={[styles.container, { 
@@ -253,17 +290,24 @@ export default function ConfigScreen() {
       onScroll={onScroll}
       scrollEventThrottle={16}
     >
-      {/* Header with Connection Status */}
+      {/* Header with Connection Status and Device Info */}
       <View style={styles.headerRow}>
-        <Text style={[styles.title, { color: theme.colors.text }]}>
-          Configuration
-        </Text>
+        <View>
+          <Text style={[styles.title, { color: theme.colors.text }]}>
+            Configuration
+          </Text>
+          {selectedDeviceName && (
+            <Text style={[styles.deviceNameSubtitle, { color: theme.colors.textSecondary }]}>
+              {selectedDeviceName}
+            </Text>
+          )}
+        </View>
         <View style={[
           styles.statusBadge,
-          { backgroundColor: isConnected ? '#4CAF50' : '#f44336' }
+          { backgroundColor: isConnected && isDeviceOnline ? '#4CAF50' : '#f44336' }
         ]}>
           <Text style={styles.statusText}>
-            {isConnected ? '● Online' : '● Offline'}
+            {isConnected && isDeviceOnline ? '● Online' : '● Offline'}
           </Text>
         </View>
       </View>
@@ -281,6 +325,9 @@ export default function ConfigScreen() {
           <Text style={[styles.deviceId, { color: theme.colors.text }]}>
             Device: {externalKey}
           </Text>
+          {isConnected && isDeviceOnline && (
+            <View style={[styles.onlineDot, { backgroundColor: '#4CAF50' }]} />
+          )}
         </View>
       )}
 
@@ -300,66 +347,90 @@ export default function ConfigScreen() {
           Device Configuration
         </Text>
 
-        <View style={styles.settingItem}>
-          <Ionicons
-            name="options-outline"
-            size={24}
-            color={theme.colors.primary}
-          />
-          <Text style={[styles.settingText, { color: theme.colors.text }]}>
-            Use Default Mode
-          </Text>
-          <Switch
-            value={isDefaultMode}
-            onValueChange={handleToggleDefaultMode}
-            {...switchColors}
-          />
-        </View>
-        {isDefaultMode && (
-          <Text style={[styles.hintText, { color: theme.colors.textSecondary }]}>
-            Turn this off to customize the intervals and Auto Mode below.
-          </Text>
-        )}
+        <Text style={[styles.sectionSubtitle, { color: theme.colors.textSecondary }]}>
+          All fields are required. Please configure each parameter.
+        </Text>
 
         <IntervalPicker
           label="Report Interval"
-          value={activeConfig.report_interval}
-          disabled={isDefaultMode}
+          value={config.report_interval}
           onSelect={(v) => setConfig((c) => ({ ...c, report_interval: v }))}
           theme={theme}
+          isRequired={true}
         />
 
         <IntervalPicker
           label="Sampling Interval"
-          value={activeConfig.sampling_interval}
-          disabled={isDefaultMode}
+          value={config.sampling_interval}
           onSelect={(v) => setConfig((c) => ({ ...c, sampling_interval: v }))}
           theme={theme}
+          isRequired={true}
         />
 
         <View style={styles.settingItem}>
           <Ionicons name="sync-outline" size={24} color={theme.colors.primary} />
-          <Text style={[styles.settingText, { color: theme.colors.text }]}>
-            Auto Mode
-          </Text>
+          <View style={styles.settingLabelContainer}>
+            <Text style={[styles.settingText, { color: theme.colors.text }]}>
+              Auto Mode
+            </Text>
+            <Text style={[styles.requiredBadge, { color: '#F44336' }]}>*</Text>
+          </View>
           <Switch
-            value={activeConfig.auto_mode}
-            disabled={isDefaultMode}
+            value={config.auto_mode}
             onValueChange={(v) => setConfig((c) => ({ ...c, auto_mode: v }))}
             {...switchColors}
           />
         </View>
 
-        {/* Show current values */}
-        <View style={styles.currentValuesContainer}>
+        {/* Show current values with validation status */}
+        <View style={[styles.currentValuesContainer, { 
+          backgroundColor: showError && (!config.report_interval || !config.sampling_interval) 
+            ? 'rgba(244,67,54,0.08)' 
+            : 'rgba(0,0,0,0.05)'
+        }]}>
           <Text style={[styles.currentValuesLabel, { color: theme.colors.textSecondary }]}>
             Current Configuration:
           </Text>
-          <Text style={[styles.currentValuesText, { color: theme.colors.text }]}>
-            Report: {formatDuration(activeConfig.report_interval)} | 
-            Sampling: {formatDuration(activeConfig.sampling_interval)} | 
-            Auto: {activeConfig.auto_mode ? "ON" : "OFF"}
-          </Text>
+          <View style={styles.currentValuesRow}>
+            <View style={styles.currentValueItem}>
+              <Text style={[styles.currentValueLabel, { color: theme.colors.textSecondary }]}>
+                Report:
+              </Text>
+              <Text style={[styles.currentValueText, { 
+                color: config.report_interval ? theme.colors.text : '#F44336',
+                fontWeight: config.report_interval ? '500' : '700',
+              }]}>
+                {config.report_interval ? formatDuration(config.report_interval) : '⚠️ Required'}
+              </Text>
+            </View>
+            <View style={styles.currentValueItem}>
+              <Text style={[styles.currentValueLabel, { color: theme.colors.textSecondary }]}>
+                Sampling:
+              </Text>
+              <Text style={[styles.currentValueText, { 
+                color: config.sampling_interval ? theme.colors.text : '#F44336',
+                fontWeight: config.sampling_interval ? '500' : '700',
+              }]}>
+                {config.sampling_interval ? formatDuration(config.sampling_interval) : '⚠️ Required'}
+              </Text>
+            </View>
+            <View style={styles.currentValueItem}>
+              <Text style={[styles.currentValueLabel, { color: theme.colors.textSecondary }]}>
+                Auto:
+              </Text>
+              <Text style={[styles.currentValueText, { 
+                color: theme.colors.text,
+                fontWeight: '500',
+              }]}>
+                {config.auto_mode ? 'ON' : 'OFF'}
+              </Text>
+            </View>
+          </View>
+          {showError && (!config.report_interval || !config.sampling_interval) && (
+            <Text style={[styles.errorText, { color: '#F44336' }]}>
+              ⚠️ Please set all required fields before publishing.
+            </Text>
+          )}
         </View>
 
         <Pressable
@@ -368,20 +439,25 @@ export default function ConfigScreen() {
           style={[
             styles.publishButton,
             { 
-              backgroundColor: isConnected ? theme.colors.primary : '#888',
-              opacity: publishing || !isConnected ? 0.6 : 1 
+              backgroundColor: isConnected && isDeviceOnline ? theme.colors.primary : '#888',
+              opacity: publishing || !isConnected || !isDeviceOnline ? 0.6 : 1 
             },
           ]}
         >
           <Ionicons name="cloud-upload-outline" size={18} color="#fff" />
           <Text style={styles.publishButtonText}>
-            {publishing ? "Publishing..." : "Publish Configuration"}
+            {publishing ? "Publishing..." : "Set Configuration"}
           </Text>
         </Pressable>
 
         {!isConnected && (
           <Text style={[styles.warningText, { color: '#f44336' }]}>
             ⚠️ MQTT not connected. Please check your connection.
+          </Text>
+        )}
+        {isConnected && !isDeviceOnline && (
+          <Text style={[styles.warningText, { color: '#FF9800' }]}>
+            ⚠️ Device is offline. Please wait for device to connect.
           </Text>
         )}
       </View>
@@ -458,6 +534,11 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   title: { fontSize: 28, fontWeight: "700" },
+  deviceNameSubtitle: { 
+    fontSize: 14, 
+    fontWeight: "500",
+    marginTop: 2,
+  },
   statusBadge: {
     paddingHorizontal: 12,
     paddingVertical: 6,
@@ -480,6 +561,12 @@ const styles = StyleSheet.create({
   deviceId: {
     fontSize: 14,
     fontWeight: '500',
+    flex: 1,
+  },
+  onlineDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
   },
   section: {
     borderRadius: 12,
@@ -493,13 +580,30 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 8,
   },
+  sectionSubtitle: {
+    fontSize: 12,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+    opacity: 0.8,
+  },
   settingItem: {
     flexDirection: "row",
     alignItems: "center",
     padding: 16,
     gap: 16,
   },
-  settingText: { flex: 1, fontSize: 16 },
+  settingLabelContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    gap: 4,
+  },
+  settingText: { fontSize: 16, fontWeight: "500" },
+  requiredBadge: {
+    fontSize: 16,
+    fontWeight: "700",
+    marginLeft: 2,
+  },
   hintText: {
     fontSize: 12,
     paddingHorizontal: 16,
@@ -511,6 +615,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 16,
     paddingBottom: 16,
+  },
+  errorText: {
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 6,
+    fontWeight: '600',
   },
   dropdownTrigger: {
     flexDirection: "row",
@@ -556,24 +666,38 @@ const styles = StyleSheet.create({
     gap: 8,
     margin: 16,
     marginTop: 4,
-    paddingVertical: 12,
+    paddingVertical: 14,
     borderRadius: 10,
   },
   publishButtonText: { color: "#fff", fontWeight: "600", fontSize: 15 },
   currentValuesContainer: {
     paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingVertical: 12,
     marginHorizontal: 16,
-    marginVertical: 4,
-    borderRadius: 8,
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    marginVertical: 8,
+    borderRadius: 10,
   },
   currentValuesLabel: {
     fontSize: 12,
     fontWeight: '600',
-    marginBottom: 4,
+    marginBottom: 8,
   },
-  currentValuesText: {
+  currentValuesRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  currentValueItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  currentValueLabel: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  currentValueText: {
     fontSize: 13,
   },
 });

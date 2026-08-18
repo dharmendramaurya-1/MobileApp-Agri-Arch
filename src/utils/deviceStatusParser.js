@@ -35,14 +35,22 @@
  * @returns {Object} Parsed status object with all fields
  */
 export const parseDeviceStatus = (statusValue) => {
+  console.log("🔍 parseDeviceStatus called with:", statusValue);
+  console.log("   Type:", typeof statusValue);
+  console.log("   Value:", statusValue);
+  
   if (statusValue === null || statusValue === undefined) {
+    console.log("⚠️ statusValue is null or undefined, returning default");
     return getDefaultDeviceStatus();
   }
 
   // Ensure it's a 32-bit integer
   const status = statusValue >>> 0;
+  console.log("📊 Parsed status (32-bit):", status);
+  console.log("   Hex:", `0x${status.toString(16).padStart(8, '0').toUpperCase()}`);
+  console.log("   Binary:", status.toString(2).padStart(32, '0'));
 
-  return {
+  const result = {
     // ── STATUS FLAGS (Bit 0-18) ──
     // Bit 0: Tank Low (0x00000001)
     tankLow: !!(status & 0x00000001),
@@ -93,6 +101,32 @@ export const parseDeviceStatus = (statusValue) => {
     // Raw status for debugging
     rawStatus: `0x${status.toString(16).padStart(8, '0').toUpperCase()}`,
   };
+
+  console.log("📊 Parsed device status result:");
+  console.log("   Online:", result.online);
+  console.log("   Mode:", result.mode ? 'AUTO' : 'MANUAL');
+  console.log("   Water Pump:", result.waterPump ? 'ON' : 'OFF');
+  console.log("   Nutrient Pump:", result.nutrientPump ? 'ON' : 'OFF');
+  console.log("   Inlet Valve:", result.inletValve ? 'OPEN' : 'CLOSED');
+  console.log("   Outlet Valve:", result.outletValve ? 'OPEN' : 'CLOSED');
+  console.log("   AC Status:", result.acStatus ? 'ON' : 'OFF');
+  console.log("   Buzzer:", result.buzzer ? 'ON' : 'OFF');
+  console.log("   Reboot ACK:", result.rebootAck ? 'YES' : 'NO');
+  console.log("   Sensor Fault:", result.sensorFault);
+  console.log("   Dimming Level:", result.dimmingLevel);
+  console.log("   Raw Status:", result.rawStatus);
+  console.log("   Tank Low:", result.tankLow);
+  console.log("   Tank High:", result.tankHigh);
+  console.log("   EC High:", result.ecHigh);
+  console.log("   EC Low:", result.ecLow);
+  console.log("   pH High:", result.phHigh);
+  console.log("   pH Low:", result.phLow);
+  console.log("   Lux Low:", result.luxLow);
+  console.log("   Lux High:", result.luxHigh);
+  console.log("   CO2 High:", result.co2High);
+  console.log("   CO2 Low:", result.co2Low);
+
+  return result;
 };
 
 /**
