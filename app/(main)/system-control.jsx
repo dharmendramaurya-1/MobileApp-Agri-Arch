@@ -98,19 +98,37 @@ export default function SystemControl() {
   useScrollReset(scrollRef);
 
   const {
-    actuatorStatus,
-    setActuatorStatus,
-    publishActuatorStatus,
-    externalKey,
+    getSelectedDeviceActuatorStatus,
+    getSelectedDeviceOnlineStatus,
+    getSelectedDeviceName,
+    selectedExternalKey,
     deviceStatusFlags,
     devices: mqttDevices,
-    getSelectedDeviceName,
     isConnected,
     isLiveData,
+    toggleDeviceStatus: mqttToggleDeviceStatus,
+    getSelectedDeviceSensorData,
+    hasReceivedData,
+    connectionState,
   } = useMqtt();
 
-  // ✅ System Mode Context — used only for the actuator-lock guard rail
-  const { checkBeforeActuator, modeLocked } = useSystemMode();
+  // ✅ Get data for the selected device using external key
+  const actuatorStatus = getSelectedDeviceActuatorStatus();
+  const isDeviceOnlineFromContext = getSelectedDeviceOnlineStatus();
+  const selectedDeviceName = getSelectedDeviceName();
+  const sensorData = getSelectedDeviceSensorData();
+
+  // ✅ System Mode Context
+  const { 
+    checkBeforeActuator, 
+    modeLocked, 
+    isModeLoaded, 
+    isManualMode, 
+    modeDisplay,
+    switchToManual,
+    switchToAuto,
+    toggleMode,
+  } = useSystemMode();
 
   const { addAlert } = useAlerts();
 
@@ -121,20 +139,25 @@ export default function SystemControl() {
   const [statusCheckDone, setStatusCheckDone] = useState(false);
   const [checkingTimeout, setCheckingTimeout] = useState(null);
 
-  // Get selected device name
-  const selectedDeviceName = getSelectedDeviceName();
+  // ✅ Device is considered online if we're receiving live data
+  const isDeviceOnline = isDeviceOnlineFromContext && isLiveData && isConnected;
 
-  // Get display status from 32-bit flags
+  // ✅ Get mode from deviceStatusFlags only when we have received data
   const displayStatus = getDisplayStatus(deviceStatusFlags);
   const rawMode = displayStatus?.mode;
-  const isModeLoaded = rawMode === "MANUAL" || rawMode === "AUTO";
-  const isManualMode = rawMode === "MANUAL";
-  const modeDisplay = isModeLoaded
+  
+  // ✅ Only show mode if we have received data AND mode is loaded
+  const hasModeData = hasReceivedData && (rawMode === "MANUAL" || rawMode === "AUTO");
+  const isModeLoadedFromFlags = hasModeData && (rawMode === "MANUAL" || rawMode === "AUTO");
+  const isManualModeFromFlags = hasModeData && rawMode === "MANUAL";
+  const modeDisplayFromFlags = hasModeData
     ? rawMode.charAt(0) + rawMode.slice(1).toLowerCase()
     : "Unknown";
 
-  // ── Device is considered online if we're receiving live data ──
-  const isDeviceOnline = isLiveData && isConnected;
+  // ✅ Use mode from SystemModeContext only if we have data
+  const effectiveIsModeLoaded = hasReceivedData && (isModeLoaded || isModeLoadedFromFlags);
+  const effectiveIsManualMode = hasReceivedData && (isManualMode || isManualModeFromFlags);
+  const effectiveModeDisplay = hasReceivedData ? (modeDisplay || modeDisplayFromFlags) : "Waiting for data...";
 
   // ── Seed actuator list from MQTT ──
   useEffect(() => {
@@ -162,13 +185,11 @@ export default function SystemControl() {
 
   // ── Status check timeout (2 minutes) ──
   useEffect(() => {
-    // Clear any existing timeout
     if (checkingTimeout) {
       clearTimeout(checkingTimeout);
       setCheckingTimeout(null);
     }
 
-    // Set a timeout to mark status as checked after 2 minutes
     const timeout = setTimeout(() => {
       setStatusCheckDone(true);
       console.log("✅ Auto-marked status as checked after 2 minutes timeout");
@@ -180,7 +201,7 @@ export default function SystemControl() {
 
   // ── Mark status as checked when mode is loaded ──
   useEffect(() => {
-    if (isModeLoaded && !statusCheckDone) {
+    if (effectiveIsModeLoaded && !statusCheckDone) {
       setStatusCheckDone(true);
       if (checkingTimeout) {
         clearTimeout(checkingTimeout);
@@ -188,7 +209,7 @@ export default function SystemControl() {
       }
       console.log("✅ Status checked (mode loaded)");
     }
-  }, [isModeLoaded]);
+  }, [effectiveIsModeLoaded]);
 
   // ── Monitor actuator changes for alerts ──
   useEffect(() => {
@@ -206,7 +227,7 @@ export default function SystemControl() {
     }
   }, [actuatorStatus]);
 
-  // ── Actuator toggle ──
+  // ── Actuator toggle handler ──
   const handleToggleDevice = async (device) => {
     if (updating === device.id) return;
     if (device.vb === null) return;
@@ -225,7 +246,7 @@ export default function SystemControl() {
             text: "Reboot",
             style: "destructive",
             onPress: () => {
-              toggleDeviceStatus(device);
+              performToggleDevice(device);
               addAlert(
                 "system",
                 "🔄 System Reboot Initiated",
@@ -239,10 +260,19 @@ export default function SystemControl() {
       return;
     }
 
-    toggleDeviceStatus(device);
+    performToggleDevice(device);
   };
 
-  const toggleDeviceStatus = async (device) => {
+  // ── Perform device toggle ──
+  const performToggleDevice = async (device) => {
+    if (!selectedExternalKey) {
+      Alert.alert("Error", "No device selected");
+      console.log("❌ performToggleDevice - selectedExternalKey is null!");
+      return;
+    }
+
+    console.log(`🔄 Toggling ${device.id} on device ${selectedExternalKey}`);
+
     setUpdating(device.id);
     const newStatus = !device.vb;
     const time = new Date().toLocaleTimeString();
@@ -254,20 +284,11 @@ export default function SystemControl() {
     setDeviceToggleTimes((prev) => ({ ...prev, [device.id]: time }));
 
     try {
-      const config = DEVICE_CONFIG[device.id];
-      const currentStatus = actuatorStatus || {};
-
-      const fullStatus = {
-        water_pump: currentStatus.water_pump || false,
-        water_ILvalve: currentStatus.water_ILvalve || false,
-        water_OLvalve: currentStatus.water_OLvalve || false,
-        nutrient_pump: currentStatus.nutrient_pump || false,
-        reboot_ack: currentStatus.reboot_ack || false,
-        [config.actuatorKey]: newStatus,
-        lastUpdated: new Date(),
-      };
-
-      const success = await publishActuatorStatus(fullStatus);
+      const success = await mqttToggleDeviceStatus(
+        selectedExternalKey,
+        device.id,
+        newStatus
+      );
 
       if (!success) {
         setDevices((prev) =>
@@ -282,7 +303,6 @@ export default function SystemControl() {
           `${deviceName} ${newStatus ? "activated" : "deactivated"} at ${time}`,
           newStatus ? "success" : "info"
         );
-        await setActuatorStatus(fullStatus);
       }
     } catch (error) {
       console.error("Toggle error:", error);
@@ -304,21 +324,21 @@ export default function SystemControl() {
       return;
     }
 
-    if (!isModeLoaded) {
-      Alert.alert('⏳ Loading', 'Please wait for system mode to load.');
+    if (!effectiveIsModeLoaded || !hasReceivedData) {
+      Alert.alert('⏳ Waiting for Data', 'Please wait for device data to load before switching mode.');
       return;
     }
 
     Alert.alert(
-      isManualMode ? "🔄 Switch to AUTO Mode" : "🔄 Switch to MANUAL Mode",
-      isManualMode
+      effectiveIsManualMode ? "🔄 Switch to AUTO Mode" : "🔄 Switch to MANUAL Mode",
+      effectiveIsManualMode
         ? "To switch to AUTO mode, you need to configure the device settings.\n\nThis ensures proper automation parameters are set."
         : "To switch to MANUAL mode, you need to configure the device settings.\n\nThis will allow manual control of actuators.",
       [
         { text: "Cancel", style: "cancel" },
         {
           text: "Go to Config",
-          onPress: () => router.push("/(main)/config"),
+          onPress: () => router.push("/(main)/setting"),
         },
       ]
     );
@@ -327,7 +347,7 @@ export default function SystemControl() {
   // ── Actuator card helpers ──
   const getDeviceColor = (device) => {
     if (device.vb === null) return theme.colors.textSecondary;
-    if (!isManualMode || !isModeLoaded) return theme.colors.textSecondary;
+    if (!effectiveIsManualMode || !effectiveIsModeLoaded || !hasReceivedData) return theme.colors.textSecondary;
     if (device.id === "reboot_ack") {
       return device.vb ? "#FF9800" : theme.colors.primary;
     }
@@ -336,7 +356,7 @@ export default function SystemControl() {
 
   const getStatusText = (device) => {
     if (device.vb === null) return "Loading";
-    if (!isManualMode || !isModeLoaded) return "Locked";
+    if (!effectiveIsManualMode || !effectiveIsModeLoaded || !hasReceivedData) return "Locked";
     if (device.id === "reboot_ack") {
       return device.vb ? "Restarting" : "Idle";
     }
@@ -345,7 +365,7 @@ export default function SystemControl() {
 
   const getDeviceIcon = (device) => {
     if (device.vb === null) return `${device.icon}-outline`;
-    if (!isManualMode || !isModeLoaded) return `${device.icon}-outline`;
+    if (!effectiveIsManualMode || !effectiveIsModeLoaded || !hasReceivedData) return `${device.icon}-outline`;
     if (device.id === "reboot_ack") {
       return device.vb ? "sync" : "refresh-outline";
     }
@@ -368,7 +388,10 @@ export default function SystemControl() {
   const primary = theme.colors.primary;
 
   // ── Check if status is still loading ──
-  const isLoading = !statusCheckDone;
+  const isLoading = !statusCheckDone || !hasReceivedData;
+
+  // ── Check connection status ──
+  const isNotConnected = connectionState === 'idle' || connectionState === 'disconnected' || connectionState === 'error';
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -393,64 +416,101 @@ export default function SystemControl() {
               System Control
             </Text>
             <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
-              {selectedDeviceName || 'No Device'} · {isLoading ? "Loading..." : (isModeLoaded ? modeDisplay : "Unknown")}
+              {selectedDeviceName || 'No Device'} · 
+              {isNotConnected ? "🔴 Not Connected" : 
+               !hasReceivedData ? "⏳ Waiting for data..." : 
+               (effectiveIsModeLoaded ? effectiveModeDisplay : "Unknown")}
             </Text>
           </View>
           <View
             style={[
               styles.modePill,
-              { backgroundColor: isLoading ? "#FF9800" : (isManualMode ? "#4CAF50" : "#FF9800") },
+              { 
+                backgroundColor: isNotConnected ? "#F44336" : 
+                               !hasReceivedData ? "#FF9800" : 
+                               (effectiveIsManualMode ? "#4CAF50" : "#FF9800") 
+              },
             ]}
           >
-            {isLoading ? (
+            {isNotConnected ? (
+              <Ionicons name="wifi-outline" size={12} color="#FFF" />
+            ) : !hasReceivedData ? (
               <ActivityIndicator size="small" color="#FFF" />
             ) : (
               <Ionicons
-                name={isManualMode ? "hand-left-outline" : "sync-outline"}
+                name={effectiveIsManualMode ? "hand-left-outline" : "sync-outline"}
                 size={12}
                 color="#FFF"
               />
             )}
             <Text style={styles.modePillText}>
-              {isLoading ? "Loading…" : (isModeLoaded ? modeDisplay.toUpperCase() : "…")}
+              {isNotConnected ? "Offline" : 
+               !hasReceivedData ? "Waiting…" : 
+               (effectiveIsModeLoaded ? effectiveModeDisplay.toUpperCase() : "…")}
             </Text>
           </View>
         </View>
 
         {/* ── Status Check Info ── */}
-        {isLoading && (
-          <View style={[styles.infoBanner, { backgroundColor: `${theme.colors.textSecondary}0D` }]}>
-            <ActivityIndicator size="small" color={theme.colors.primary} />
-            <Text style={[styles.infoBannerText, { color: theme.colors.textSecondary }]}>
-              Checking device status... This may take up to 2 minutes.
+        {isNotConnected && (
+          <View style={[styles.infoBanner, { backgroundColor: "#F4433615" }]}>
+            <Ionicons name="wifi-outline" size={16} color="#F44336" />
+            <Text style={[styles.infoBannerText, { color: "#F44336" }]}>
+              🔴 Device is not connected. Please check your connection.
             </Text>
           </View>
         )}
+
+        {!isNotConnected && (!statusCheckDone || !hasReceivedData) && (
+          <View style={[styles.infoBanner, { backgroundColor: `${theme.colors.textSecondary}0D` }]}>
+            <ActivityIndicator size="small" color={theme.colors.primary} />
+            <Text style={[styles.infoBannerText, { color: theme.colors.textSecondary }]}>
+              {!hasReceivedData ? "⏳ Waiting for device data..." : "Checking device status... This may take up to 2 minutes."}
+            </Text>
+          </View>
+        )}
+
+        {/* ── External Key Debug Info ── */}
+        <View style={[styles.infoBanner, { backgroundColor: `${theme.colors.textSecondary}0D` }]}>
+          <Text style={[styles.infoBannerText, { color: theme.colors.textSecondary }]}>
+            🔑 Device: {selectedExternalKey || 'Not Connected'} 
+            {isNotConnected ? ' 🔴' : !hasReceivedData ? ' ⏳' : ' ✅'}
+          </Text>
+        </View>
 
         {/* ── Mode Button ──────────────────────────────────────────────────── */}
         <TouchableOpacity
           style={[
             styles.modeButton,
             {
-              backgroundColor: isLoading ? "#FF9800" : (!isModeLoaded ? "#888" : isManualMode ? "#4CAF50" : "#FF9800"),
-              shadowColor: isLoading ? "#FF9800" : (!isModeLoaded ? "#888" : isManualMode ? "#4CAF50" : "#FF9800"),
+              backgroundColor: isNotConnected ? "#F44336" : 
+                             !hasReceivedData ? "#FF9800" : 
+                             (!effectiveIsModeLoaded ? "#888" : effectiveIsManualMode ? "#4CAF50" : "#FF9800"),
+              shadowColor: isNotConnected ? "#F44336" : 
+                          !hasReceivedData ? "#FF9800" : 
+                          (!effectiveIsModeLoaded ? "#888" : effectiveIsManualMode ? "#4CAF50" : "#FF9800"),
               shadowOpacity: 0.3,
               shadowRadius: 8,
               elevation: 4,
-              opacity: isLoading ? 0.8 : 1,
+              opacity: (isNotConnected || !hasReceivedData || isLoading) ? 0.8 : 1,
             },
           ]}
           onPress={handleModeToggle}
           activeOpacity={0.8}
-          disabled={!isModeLoaded || isLoading}
+          disabled={isNotConnected || !effectiveIsModeLoaded || isLoading || !hasReceivedData}
         >
           <View style={styles.modeButtonContent}>
-            {isLoading ? (
+            {isNotConnected ? (
+              <>
+                <Ionicons name="wifi-outline" size={20} color="#FFF" />
+                <Text style={styles.modeButtonText}>Not Connected</Text>
+              </>
+            ) : !hasReceivedData ? (
               <>
                 <ActivityIndicator size="small" color="#FFF" />
-                <Text style={styles.modeButtonText}>Loading Mode…</Text>
+                <Text style={styles.modeButtonText}>Waiting for data…</Text>
               </>
-            ) : !isModeLoaded ? (
+            ) : !effectiveIsModeLoaded ? (
               <>
                 <Ionicons name="time-outline" size={20} color="#FFF" />
                 <Text style={styles.modeButtonText}>Loading Mode…</Text>
@@ -458,92 +518,101 @@ export default function SystemControl() {
             ) : (
               <>
                 <Ionicons
-                  name={isManualMode ? "hand-left-outline" : "sync-outline"}
+                  name={effectiveIsManualMode ? "hand-left-outline" : "sync-outline"}
                   size={20}
                   color="#FFF"
                 />
                 <Text style={styles.modeButtonText}>
-                  {isManualMode ? `🔧 ${modeDisplay.toUpperCase()} MODE` : `🤖 ${modeDisplay.toUpperCase()} MODE`}
+                  {effectiveIsManualMode ? `🔧 ${effectiveModeDisplay.toUpperCase()} MODE` : `🤖 ${effectiveModeDisplay.toUpperCase()} MODE`}
                 </Text>
                 <View style={styles.modeIndicator}>
                   <View
-                    style={[styles.modeDot, { backgroundColor: isManualMode ? "#4CAF50" : "#FF9800" }]}
+                    style={[styles.modeDot, { backgroundColor: effectiveIsManualMode ? "#4CAF50" : "#FF9800" }]}
                   />
                   <Text style={styles.modeStatusText}>
-                    {isManualMode ? "Control Enabled" : "Auto Control"}
+                    {effectiveIsManualMode ? "Control Enabled" : "Auto Control"}
                   </Text>
                 </View>
               </>
             )}
           </View>
-          {!isLoading && isModeLoaded && (
+          {hasReceivedData && effectiveIsModeLoaded && !isNotConnected && (
             <Ionicons name="chevron-forward" size={20} color="#FFF" opacity={0.7} />
           )}
         </TouchableOpacity>
 
         {/* ── Mode Info ────────────────────────────────────────────────────── */}
-        {!isLoading && isModeLoaded && (
+        {hasReceivedData && effectiveIsModeLoaded && !isNotConnected && (
           <View style={[styles.modeInfo, {
-            backgroundColor: isManualMode ? 'rgba(76,175,80,0.08)' : 'rgba(255,152,0,0.08)',
-            borderColor: isManualMode ? 'rgba(76,175,80,0.2)' : 'rgba(255,152,0,0.2)',
+            backgroundColor: effectiveIsManualMode ? 'rgba(76,175,80,0.08)' : 'rgba(255,152,0,0.08)',
+            borderColor: effectiveIsManualMode ? 'rgba(76,175,80,0.2)' : 'rgba(255,152,0,0.2)',
           }]}>
             <Ionicons
               name="information-circle"
               size={16}
-              color={isManualMode ? "#4CAF50" : "#FF9800"}
+              color={effectiveIsManualMode ? "#4CAF50" : "#FF9800"}
             />
             <Text style={[styles.modeInfoText, {
-              color: isManualMode ? "#2E7D32" : "#E65100"
+              color: effectiveIsManualMode ? "#2E7D32" : "#E65100"
             }]}>
-              {isManualMode
+              {effectiveIsManualMode
                 ? "Manual mode active. You can control each device individually."
                 : "Auto mode active. System controls devices automatically."}
             </Text>
           </View>
         )}
 
+        {isNotConnected && (
+          <View style={[styles.modeWarning, { backgroundColor: "#FFEBEE" }]}>
+            <Ionicons name="warning-outline" size={16} color="#F44336" />
+            <Text style={[styles.modeWarningText, { color: "#C62828" }]}>
+              🔴 Device not connected. Please check your connection.
+            </Text>
+          </View>
+        )}
+
+        {!isNotConnected && !hasReceivedData && (
+          <View style={[styles.modeWarning, { backgroundColor: "#E3F2FD" }]}>
+            <Ionicons name="information-outline" size={16} color="#1976D2" />
+            <Text style={[styles.modeWarningText, { color: "#0D47A1" }]}>
+              ⏳ Waiting for device data to show system mode...
+            </Text>
+          </View>
+        )}
+
         {/* ── Switch mode CTA ── always routes to Config ───────────────────── */}
-        {!isLoading && isModeLoaded && (
+        {hasReceivedData && effectiveIsModeLoaded && !isNotConnected && (
           <TouchableOpacity
             style={[
               styles.quickSwitchButton,
               {
-                backgroundColor: isManualMode ? '#FFF3E0' : '#E8F5E9',
-                borderColor: isManualMode ? '#FFB74D' : '#81C784',
+                backgroundColor: effectiveIsManualMode ? '#FFF3E0' : '#E8F5E9',
+                borderColor: effectiveIsManualMode ? '#FFB74D' : '#81C784',
               }
             ]}
             onPress={handleModeToggle}
             activeOpacity={0.7}
           >
             <Ionicons
-              name={isManualMode ? "sync-outline" : "hand-left-outline"}
+              name={effectiveIsManualMode ? "sync-outline" : "hand-left-outline"}
               size={18}
-              color={isManualMode ? "#FF9800" : "#4CAF50"}
+              color={effectiveIsManualMode ? "#FF9800" : "#4CAF50"}
             />
             <Text style={[styles.quickSwitchText, {
-              color: isManualMode ? "#E65100" : "#2E7D32"
+              color: effectiveIsManualMode ? "#E65100" : "#2E7D32"
             }]}>
-              {isManualMode ? "Switch to AUTO Mode" : "Switch to MANUAL Mode"}
+              {effectiveIsManualMode ? "Switch to AUTO Mode" : "Switch to MANUAL Mode"}
             </Text>
-            <Ionicons name="chevron-forward" size={16} color={isManualMode ? "#FF9800" : "#4CAF50"} />
+            <Ionicons name="chevron-forward" size={16} color={effectiveIsManualMode ? "#FF9800" : "#4CAF50"} />
           </TouchableOpacity>
         )}
 
         {/* ── Mode Warning ────────────────────────────────────────────────── */}
-        {!isLoading && isModeLoaded && !isManualMode && (
+        {hasReceivedData && effectiveIsModeLoaded && !effectiveIsManualMode && !isNotConnected && (
           <View style={[styles.modeWarning, { backgroundColor: "#FFF3E0" }]}>
             <Ionicons name="warning-outline" size={16} color="#FF9800" />
             <Text style={[styles.modeWarningText, { color: "#E65100" }]}>
               Manual control disabled. Tap "Switch to MANUAL Mode" to control devices.
-            </Text>
-          </View>
-        )}
-
-        {!isLoading && !isModeLoaded && (
-          <View style={[styles.modeWarning, { backgroundColor: "#E3F2FD" }]}>
-            <Ionicons name="information-outline" size={16} color="#1976D2" />
-            <Text style={[styles.modeWarningText, { color: "#0D47A1" }]}>
-              Waiting for system mode from device…
             </Text>
           </View>
         )}
@@ -559,15 +628,17 @@ export default function SystemControl() {
               const isStatusLoading = device.vb === null;
               const deviceLocked =
                 updating === device.id ||
-                !isManualMode ||
-                !isModeLoaded ||
+                !effectiveIsManualMode ||
+                !effectiveIsModeLoaded ||
+                !hasReceivedData ||
                 isStatusLoading ||
                 !isDeviceOnline ||
-                isLoading;
+                isLoading ||
+                isNotConnected;
 
               const toggleTime = deviceToggleTimes[device.id];
 
-              const showLocked = (!isManualMode && isModeLoaded) || isLoading;
+              const showLocked = (!effectiveIsManualMode && effectiveIsModeLoaded) || isLoading || !hasReceivedData || isNotConnected;
 
               return (
                 <View
@@ -661,13 +732,14 @@ export default function SystemControl() {
                             },
                           ]}
                         >
-                          {isLoading ? "Loading..." :
+                          {isNotConnected ? "Not Connected" :
+                           isLoading ? "Loading..." :
                            showLocked ? "Locked (Auto)" :
                            isStatusLoading ? "Loading" :
                            getStatusText(device)}
                         </Text>
                       </View>
-                      {toggleTime && !isLoading && (
+                      {toggleTime && !isLoading && !isNotConnected && (
                         <Text style={[styles.toggleTime, { color: theme.colors.textSecondary }]}>
                           Last toggled: {toggleTime}
                         </Text>
@@ -686,18 +758,18 @@ export default function SystemControl() {
                         onValueChange={() => handleToggleDevice(device)}
                         trackColor={{
                           false: theme.colors.border,
-                          true: isManualMode && isModeLoaded && !isLoading && isDeviceOnline
+                          true: effectiveIsManualMode && effectiveIsModeLoaded && !isLoading && isDeviceOnline && hasReceivedData && !isNotConnected
                               ? "#4CAF50"
                               : theme.colors.border,
                         }}
                         thumbColor={
-                          showLocked || !isDeviceOnline || isLoading
+                          showLocked || !isDeviceOnline || isLoading || !hasReceivedData || isNotConnected
                             ? theme.colors.textSecondary
                             : updating === device.id
                             ? primary
                             : "#FFF"
                         }
-                        disabled={deviceLocked || showLocked || !isDeviceOnline || isLoading}
+                        disabled={deviceLocked || showLocked || !isDeviceOnline || isLoading || !hasReceivedData || isNotConnected}
                       />
                     )}
                   </View>
@@ -718,18 +790,20 @@ export default function SystemControl() {
           ]}
         >
           <Text style={[styles.footerText, { color: theme.colors.textSecondary }]}>
-            {isLoading ? "⏳ Loading status..." : (selectedDeviceName || "No Device")}
+            {isNotConnected ? "🔴 Not Connected" : 
+             !hasReceivedData ? "⏳ Waiting for data..." : 
+             (selectedDeviceName || "No Device")}
           </Text>
-          {!isLoading && isModeLoaded && (
+          {hasReceivedData && effectiveIsModeLoaded && !isNotConnected && (
             <View style={styles.footerStatus}>
               <View
                 style={[
                   styles.footerDot,
-                  { backgroundColor: isManualMode ? "#4CAF50" : "#FF9800" },
+                  { backgroundColor: effectiveIsManualMode ? "#4CAF50" : "#FF9800" },
                 ]}
               />
               <Text style={[styles.footerStatusText, { color: theme.colors.textSecondary }]}>
-                {isManualMode ? "Manual" : "Auto"}
+                {effectiveIsManualMode ? "Manual" : "Auto"}
               </Text>
             </View>
           )}

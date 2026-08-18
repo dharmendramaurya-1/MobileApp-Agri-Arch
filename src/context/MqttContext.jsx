@@ -1,6 +1,6 @@
 // src/context/MqttContext.jsx
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import {
   getActiveDevice,
   getAllThings,
@@ -325,8 +325,8 @@ export const MqttProvider = ({ children }) => {
     return !!(deviceStatus & 0x00020000);
   };
 
-  // ── ✅ Check if external key matches selected device ──
-  const isSelectedExternalKey = (extKey) => {
+  // ── Check if external key matches selected device ──
+  const isSelectedExternalKey = useCallback((extKey) => {
     if (!extKey) return false;
     // ✅ Use refs to avoid stale closures from MQTT handlers
     const selKey = selectedExternalKeyRef.current;
@@ -340,9 +340,9 @@ export const MqttProvider = ({ children }) => {
       if (device && device.external_key === extKey) return true;
     }
     return false;
-  };
+  }, [selectedExternalKey, selectedDeviceId, availableDevices]);
 
-  // ── ✅ Load selected device from AsyncStorage ──
+  // ── Load selected device from AsyncStorage ──
   const loadSelectedDevice = async () => {
     try {
       const deviceId = await AsyncStorage.getItem(STORAGE_KEYS.SELECTED_DEVICE_ID);
@@ -361,7 +361,6 @@ export const MqttProvider = ({ children }) => {
           return { deviceId, deviceName, externalKey: extKey };
         }
         
-        // Try to find external key from available devices
         const device = availableDevices.find(d => d.id === deviceId);
         if (device && device.external_key) {
           setSelectedExternalKey(device.external_key);
@@ -370,7 +369,6 @@ export const MqttProvider = ({ children }) => {
           return { deviceId, deviceName, externalKey: device.external_key };
         }
         
-        // Try to use the main external_key
         const storedKey = await AsyncStorage.getItem(STORAGE_KEYS.EXTERNAL_KEY);
         if (storedKey) {
           setSelectedExternalKey(storedKey);
@@ -388,7 +386,7 @@ export const MqttProvider = ({ children }) => {
     }
   };
 
-  // ── ✅ Save selected device ──
+  // ── Save selected device ──
   const saveSelectedDevice = async (deviceId, deviceName, extKey) => {
     try {
       if (deviceId) {
@@ -406,11 +404,10 @@ export const MqttProvider = ({ children }) => {
     }
   };
 
-  // ── ✅ Select/Activate a device ──
+  // ── Select/Activate a device ──
   const selectDevice = async (deviceId, deviceName) => {
     console.log(`🔌 Selecting device: ${deviceId} (${deviceName})`);
     
-    // Find the device to get its external key
     let device = availableDevices.find(d => d.id === deviceId);
     if (!device) {
       console.log("🔄 Device not in availableDevices, refreshing...");
@@ -430,7 +427,6 @@ export const MqttProvider = ({ children }) => {
     setSelectedExternalKey(extKey);
     await saveSelectedDevice(deviceId, deviceName, extKey);
     
-    // Also update the active device
     try {
       await setActiveDevice(deviceId, extKey);
       setActiveDeviceId(deviceId);
@@ -440,7 +436,6 @@ export const MqttProvider = ({ children }) => {
       console.error("Error updating active device:", error);
     }
     
-    // Request status for the selected device
     setTimeout(() => {
       console.log(`📡 Requesting status for selected device: ${extKey}`);
       requestDeviceStatus(extKey);
@@ -680,30 +675,84 @@ export const MqttProvider = ({ children }) => {
     }, DATA_CHECK_INTERVAL);
   };
 
-  const handleIncomingMessage = (topic, message) => {
-    if (!isMountedRef.current) return;
-    
-    const msgStr = message.toString();
-    console.log(`📨 Received on ${topic}: ${msgStr.substring(0, 100)}...`);
-    
-    const topicParts = topic.split('/');
-    if (topicParts.length < 3) return;
-    
-    const deviceKey = topicParts[2];
-    const topicType = topicParts[3] || '';
-    
-    if (topicType === 'get_stat') {
-      handleStatusResponse(deviceKey, msgStr);
-      return;
+  // ── Handle Data Message ──
+  const handleDataMessage = useCallback((deviceKey, msgStr) => {
+    try {
+      const parsed = parseSenMLToObject(msgStr);
+      console.log(`📊 Data from ${deviceKey}:`, parsed);
+      
+      lastDataReceivedTimePerDevice.current[deviceKey] = Date.now();
+      updateDeviceData(deviceKey, parsed);
+      
+      let isOnline = false;
+      if (parsed.deviceStatus !== undefined && parsed.deviceStatus !== null) {
+        isOnline = isDeviceOnlineFromDevStat(parsed.deviceStatus);
+      }
+      if (parsed.deviceStatusFlags && parsed.deviceStatusFlags.online !== undefined) {
+        isOnline = parsed.deviceStatusFlags.online;
+      }
+      
+      if (!isOnline && Object.keys(parsed).length > 0) {
+        const hasSensorData = parsed.ambientTemperature !== undefined || 
+                             parsed.ambientHumidity !== undefined ||
+                             parsed.waterLevel !== undefined ||
+                             parsed.deviceStatus !== undefined;
+        if (hasSensorData) {
+          isOnline = true;
+        }
+      }
+      
+      // ✅ Update online status for ALL devices (independent of selection)
+      setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: isOnline }));
+      setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: isOnline ? 'online' : 'offline' }));
+      
+      setDevicesData(prev => ({
+        ...prev,
+        [deviceKey]: {
+          ...prev[deviceKey],
+          lastDataReceived: Date.now(),
+          hasReceivedData: true,
+          isLiveData: true,
+          isOnline: isOnline,
+        }
+      }));
+      
+      // ✅ Check if this is the selected device for UI updates
+      const currentSelectedKey = selectedExternalKey;
+      const isSelected = currentSelectedKey === deviceKey;
+      
+      console.log(`🔍 Data check - ${deviceKey} is selected: ${isSelected} (selectedExternalKey: ${currentSelectedKey || 'none'})`);
+      
+      if (isSelected) {
+        console.log(`📊 Updating selected device data: ${deviceKey}`);
+        updateLegacyState(parsed);
+        setConnectionState(isOnline ? 'online' : 'offline');
+        if (isOnline) {
+          setHasEverBeenOnline(true);
+          hasEverBeenOnlineRef.current = true;
+        }
+        setHasReceivedData(true);
+        hasReceivedDataRef.current = true;
+        setIsLiveData(true);
+        console.log(`✅ Selected device ${deviceKey} updated, online: ${isOnline}`);
+      } else {
+        console.log(`📊 Data for non-selected device: ${deviceKey} (selected: ${currentSelectedKey || 'none'})`);
+      }
+      
+      console.log(`✅ Data received from ${deviceKey}, online: ${isOnline}`);
+      
+      if (isUsingGetStat.current) {
+        console.log(`🔄 Switching to DATA mode for ${deviceKey}`);
+        isUsingGetStat.current = false;
+        startDataCheckInterval();
+      }
+    } catch (error) {
+      console.error(`❌ Error processing data from ${deviceKey}:`, error);
     }
-    
-    if (topicType === 'data') {
-      handleDataMessage(deviceKey, msgStr);
-      return;
-    }
-  };
+  }, [selectedExternalKey]);
 
-  const handleStatusResponse = (deviceKey, msgStr) => {
+  // ── Handle Status Response ──
+  const handleStatusResponse = useCallback((deviceKey, msgStr) => {
     try {
       let parsed = {};
       let isJsonResponse = false;
@@ -740,11 +789,15 @@ export const MqttProvider = ({ children }) => {
         lastGetStatResponseTime.current[deviceKey] = Date.now();
         updateDeviceData(deviceKey, parsed);
         
+        // ✅ Update online status for ALL devices (independent of selection)
         setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: isOnline }));
         setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: isOnline ? 'online' : 'offline' }));
         
-        const isSelected = isSelectedExternalKey(deviceKey);
-        console.log(`🔍 Status check - ${deviceKey} is selected: ${isSelected} (selectedExternalKey: ${selectedExternalKey || 'none'})`);
+        // ✅ Check if this is the selected device for UI updates
+        const currentSelectedKey = selectedExternalKey;
+        const isSelected = currentSelectedKey === deviceKey;
+        
+        console.log(`🔍 Status check - ${deviceKey} is selected: ${isSelected} (selectedExternalKey: ${currentSelectedKey || 'none'})`);
         
         if (isSelected) {
           console.log(`📊 Updating selected device: ${deviceKey}`);
@@ -763,78 +816,31 @@ export const MqttProvider = ({ children }) => {
     } catch (error) {
       console.error(`❌ Error processing status for ${deviceKey}:`, error);
     }
-  };
+  }, [selectedExternalKey]);
 
-  const handleDataMessage = (deviceKey, msgStr) => {
-    try {
-      const parsed = parseSenMLToObject(msgStr);
-      console.log(`📊 Data from ${deviceKey}:`, parsed);
-      
-      lastDataReceivedTimePerDevice.current[deviceKey] = Date.now();
-      updateDeviceData(deviceKey, parsed);
-      
-      let isOnline = false;
-      if (parsed.deviceStatus !== undefined && parsed.deviceStatus !== null) {
-        isOnline = isDeviceOnlineFromDevStat(parsed.deviceStatus);
-      }
-      if (parsed.deviceStatusFlags && parsed.deviceStatusFlags.online !== undefined) {
-        isOnline = parsed.deviceStatusFlags.online;
-      }
-      
-      if (!isOnline && Object.keys(parsed).length > 0) {
-        const hasSensorData = parsed.ambientTemperature !== undefined || 
-                             parsed.ambientHumidity !== undefined ||
-                             parsed.waterLevel !== undefined ||
-                             parsed.deviceStatus !== undefined;
-        if (hasSensorData) {
-          isOnline = true;
-        }
-      }
-      
-      setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: isOnline }));
-      setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: isOnline ? 'online' : 'offline' }));
-      
-      setDevicesData(prev => ({
-        ...prev,
-        [deviceKey]: {
-          ...prev[deviceKey],
-          lastDataReceived: Date.now(),
-          hasReceivedData: true,
-          isLiveData: true,
-          isOnline: isOnline,
-        }
-      }));
-      
-      const isSelected = isSelectedExternalKey(deviceKey);
-      console.log(`🔍 Data check - ${deviceKey} is selected: ${isSelected} (selectedExternalKey: ${selectedExternalKey || 'none'})`);
-      
-      if (isSelected) {
-        console.log(`📊 Updating selected device data: ${deviceKey}`);
-        updateLegacyState(parsed);
-        setConnectionState(isOnline ? 'online' : 'offline');
-        if (isOnline) {
-          setHasEverBeenOnline(true);
-          hasEverBeenOnlineRef.current = true;
-        }
-        setHasReceivedData(true);
-        hasReceivedDataRef.current = true;
-        setIsLiveData(true);
-        console.log(`✅ Selected device ${deviceKey} updated, online: ${isOnline}`);
-      } else {
-        console.log(`📊 Data for non-selected device: ${deviceKey} (selected: ${selectedExternalKey || 'none'})`);
-      }
-      
-      console.log(`✅ Data received from ${deviceKey}, online: ${isOnline}`);
-      
-      if (isUsingGetStat.current) {
-        console.log(`🔄 Switching to DATA mode for ${deviceKey}`);
-        isUsingGetStat.current = false;
-        startDataCheckInterval();
-      }
-    } catch (error) {
-      console.error(`❌ Error processing data from ${deviceKey}:`, error);
+  // ── Message Handler ──
+  const handleIncomingMessage = useCallback((topic, message) => {
+    if (!isMountedRef.current) return;
+    
+    const msgStr = message.toString();
+    console.log(`📨 Received on ${topic}: ${msgStr.substring(0, 100)}...`);
+    
+    const topicParts = topic.split('/');
+    if (topicParts.length < 3) return;
+    
+    const deviceKey = topicParts[2];
+    const topicType = topicParts[3] || '';
+    
+    if (topicType === 'get_stat') {
+      handleStatusResponse(deviceKey, msgStr);
+      return;
     }
-  };
+    
+    if (topicType === 'data') {
+      handleDataMessage(deviceKey, msgStr);
+      return;
+    }
+  }, [handleStatusResponse, handleDataMessage]);
 
   const checkAndSwitchToDataMode = () => {
     if (!isUsingGetStat.current || !getStatStartTime.current) return;
@@ -914,7 +920,42 @@ export const MqttProvider = ({ children }) => {
               category: cfg.category,
             };
           });
+    }
+    
+    if (hasActuatorUpdate) {
+      updatedDevices = Object.entries(updatedActuatorStatus)
+        .filter(([key]) => key in DEVICE_CONFIG && key !== 'lastUpdated')
+        .map(([key, value]) => {
+          const config = DEVICE_CONFIG[key];
+          return {
+            id: key,
+            n: key,
+            vb: value || false,
+            displayName: config.displayName,
+            icon: config.icon,
+            description: config.description,
+            category: config.category,
+          };
+        });
+    }
+    
+    setDevicesData(prev => ({
+      ...prev,
+      [deviceKey]: {
+        ...currentData,
+        sensorData: updatedSensorData,
+        actuatorStatus: updatedActuatorStatus,
+        devices: updatedDevices,
+        deviceStatus: newDeviceStatus,
+        deviceStatusFlags: newDeviceStatusFlags,
+        lastUpdated: new Date(),
+        lastDataReceived: Date.now(),
+        hasReceivedData: true,
+        isLiveData: true,
+        isOnline: newDeviceStatusFlags?.online || false,
       }
+    }
+    ))
       
       return {
         ...prev,
@@ -1101,18 +1142,15 @@ export const MqttProvider = ({ children }) => {
     
     await loadAvailableDevices();
     
-    // Load selected device from storage
     const selected = await loadSelectedDevice();
     console.log("📦 Selected device loaded:", selected);
     
-    // If no selected device but we have available devices, select the first one
     if (!selected && availableDevices.length > 0) {
       const firstDevice = availableDevices[0];
       console.log("🔌 No selected device, auto-selecting first:", firstDevice.id);
       await selectDevice(firstDevice.id, firstDevice.name);
     }
     
-    // If selected device exists but no external key, try to set it
     if (selected && !selectedExternalKey) {
       const device = availableDevices.find(d => d.id === selected.deviceId);
       if (device && device.external_key) {

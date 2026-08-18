@@ -36,9 +36,9 @@ const SENSOR_CONFIG = SENSORS.map((sensor) => ({
 }));
 
 // ── Connection status dot ─────────────────────────────────────────────────────
-function ConnectionDot({ connectionState, isLiveData, deviceStatusFlags, background }) {
-  // ✅ Green: Device is online and LIVE data received this session
-  const isOnline = isLiveData && deviceStatusFlags?.online === true;
+function ConnectionDot({ connectionState, isLiveData, deviceStatusFlags, background, hasReceivedData }) {
+  // ✅ Green: Device is online and we have received data (from either get_stat or data topic)
+  const isOnline = (isLiveData || hasReceivedData) && deviceStatusFlags?.online === true;
   
   // ✅ Orange: Connecting or waiting
   const isWaiting = connectionState === 'connecting' || 
@@ -85,11 +85,24 @@ function fmt(value) {
   return String(value);
 }
 
-function formatDuration(seconds) {
-  if (!seconds || seconds < 0) return 'N/A';
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds % 60 === 0) return `${seconds / 60} min`;
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+// ── Safe date formatter ──────────────────────────────────────────────────────
+function formatLastUpdated(date) {
+  if (!date) return null;
+  try {
+    if (typeof date === 'string') {
+      const parsed = new Date(date);
+      if (!isNaN(parsed.getTime())) {
+        return parsed.toLocaleTimeString();
+      }
+      return date;
+    }
+    if (date instanceof Date && !isNaN(date.getTime())) {
+      return date.toLocaleTimeString();
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -123,7 +136,7 @@ export default function Dashboard() {
     getSelectedDeviceOnlineStatus,
     getSelectedDeviceName,
     selectedDeviceId,
-    selectedExternalKey, // ✅ Get the external key
+    selectedExternalKey,
     sensorData: legacySensorData,
     actuatorStatus: legacyActuatorStatus,
     isConnected,
@@ -153,7 +166,8 @@ export default function Dashboard() {
     console.log("📊 Dashboard - Is Online:", isDeviceOnlineFromContext);
     console.log("📊 Dashboard - Connection State:", connectionState);
     console.log("📊 Dashboard - isLiveData:", isLiveData);
-  }, [selectedDeviceId, selectedExternalKey, selectedDeviceName, sensorData, actuatorStatus, isDeviceOnlineFromContext, connectionState, isLiveData]);
+    console.log("📊 Dashboard - hasReceivedData:", hasReceivedData);
+  }, [selectedDeviceId, selectedExternalKey, selectedDeviceName, sensorData, actuatorStatus, isDeviceOnlineFromContext, connectionState, isLiveData, hasReceivedData]);
 
   // ✅ System Mode Context
   const {
@@ -182,7 +196,9 @@ export default function Dashboard() {
   const [pumpToggleTime, setPumpToggleTime] = useState(null);
 
   // ── Check device status ──
-  const isDeviceOnline = isDeviceOnlineFromContext && isLiveData;
+  // ✅ Device is online if we have received data (from get_stat or data) AND device is marked online
+  const hasData = hasReceivedData || isLiveData;
+  const isDeviceOnline = isDeviceOnlineFromContext && hasData;
   const isDeviceWaiting = connectionState === 'connecting' || 
                           connectionState === 'waiting' || 
                           connectionState === 'idle';
@@ -228,7 +244,6 @@ export default function Dashboard() {
       return;
     }
 
-    // ✅ FIX: Use external key instead of device ID
     const currentDeviceKey = selectedExternalKey;
     if (!currentDeviceKey) {
       Alert.alert("Error", "No device selected");
@@ -243,11 +258,10 @@ export default function Dashboard() {
     setIsPublishing(true);
 
     try {
-      // ✅ FIX: Use external key as deviceKey
       const success = await toggleDeviceStatus(
-        currentDeviceKey,   // deviceKey - use external key
-        "water_pump",       // deviceName - the actuator name
-        newStatus           // status - true/false
+        currentDeviceKey,
+        "water_pump",
+        newStatus
       );
 
       if (!success) {
@@ -318,14 +332,6 @@ export default function Dashboard() {
     router.push("/(main)/settings");
   };
 
-  const lastUpdatedLabel = sensorData.lastUpdated
-    ? (isDeviceOnline
-        ? `Updated ${new Date(sensorData.lastUpdated).toLocaleTimeString()}`
-        : `Last known: ${new Date(sensorData.lastUpdated).toLocaleTimeString()}`)
-    : "No data received yet";
-
-  const displayPumpStatus = optimisticPumpStatus || pumpStatus;
-
   // ── Get mode display info ──
   const modeIcon = isModeSwitching ? '⏳' : (getModeIcon ? getModeIcon() : (isManualMode ? '🔧' : '🤖'));
   const modeColor = isModeSwitching ? '#FF9800' : (getModeColor ? getModeColor() : (isManualMode ? '#4CAF50' : '#FF9800'));
@@ -341,6 +347,22 @@ export default function Dashboard() {
       return "#9E9E9E";
     }
   };
+
+  // ── Format last updated label ──
+  const formattedTime = formatLastUpdated(sensorData?.lastUpdated);
+  const lastUpdatedLabel = formattedTime
+    ? (isDeviceOnline
+        ? `Updated ${formattedTime}`
+        : `Last known: ${formattedTime}`)
+    : "No data received yet";
+
+  const displayPumpStatus = optimisticPumpStatus || pumpStatus;
+
+  // ── Check if mode should be shown ──
+  const showMode = isModeLoaded && (isDeviceOnline || hasData);
+
+  // ── Check if connected but no data ──
+  const isConnectedButNoData = isConnected && !hasData;
 
   return (
     <ScrollView
@@ -366,16 +388,17 @@ export default function Dashboard() {
             {selectedDeviceName ? `📡 ${selectedDeviceName}` : 'Real-time Farm Analytics Dashboard'}
           </Text>
           
-          {/* ✅ Connection Status */}
+          {/* ✅ Connection Status - Now uses hasReceivedData */}
           <ConnectionDot
             connectionState={connectionState}
             isLiveData={isLiveData}
             deviceStatusFlags={deviceStatusFlags}
             background={theme.colors.surface}
+            hasReceivedData={hasReceivedData}
           />
 
-          {/* ✅ System Mode Status - Always show if loaded */}
-          {isModeLoaded && (
+          {/* ✅ System Mode Status - Show when loaded and device is online or has data */}
+          {showMode && (
             <TouchableOpacity 
               style={styles.modeStatusContainer}
               onPress={() => {
@@ -440,6 +463,18 @@ export default function Dashboard() {
               </View>
             </TouchableOpacity>
           )}
+
+          {/* ✅ Show waiting for data status when connected but no data yet */}
+          {isConnectedButNoData && (
+            <View style={styles.modeStatusRow}>
+              <Text style={[styles.modeStatusLabel, { color: theme.colors.textSecondary }]}>
+                Status:
+              </Text>
+              <Text style={[styles.modeStatusValue, { color: '#FF9800', fontWeight: '700' }]}>
+                ⏳ Waiting for data...
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.headerRight}>
@@ -463,7 +498,7 @@ export default function Dashboard() {
         <Text style={[styles.lastUpdated, { color: theme.colors.textSecondary }]}>
           {lastUpdatedLabel}
         </Text>
-        {sensorData.lastUpdated && !isDeviceOnline && (
+        {sensorData?.lastUpdated && !isDeviceOnline && (
           <View style={[styles.lastKnownBadge, { backgroundColor: `${'#FF9800'}1A` }]}>
             <Ionicons name="cloud-download-outline" size={12} color="#FF9800" />
             <Text style={[styles.lastKnownBadgeText, { color: '#FF9800' }]}>
@@ -513,7 +548,7 @@ export default function Dashboard() {
             )}
           </View>
 
-          {/* ✅ Mode Badge */}
+          {/* ✅ Mode Badge - Show when mode is loaded */}
           {isModeLoaded && (
             <View style={[styles.pumpModeBadge, { 
               backgroundColor: isDeviceOnline ? 'rgba(255,255,255,0.2)' : 'rgba(255,255,255,0.1)'
@@ -567,7 +602,7 @@ export default function Dashboard() {
 
       <View style={styles.sensorsGrid}>
         {SENSOR_CONFIG.map((sensor) => {
-          const liveValue = sensorData[sensor.dataKey];
+          const liveValue = sensorData?.[sensor.dataKey];
           const hasValue = liveValue !== null && liveValue !== undefined;
           const active = isDeviceOnline && hasValue;
           const tint = hasValue
@@ -681,6 +716,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
     flexWrap: "wrap",
+    marginTop: 4,
   },
   modeStatusLabel: {
     fontSize: 12,

@@ -50,22 +50,19 @@ function DeviceCard({
 
   // ── Determine status ──
   const getStatus = () => {
-    // If we have a definitive online status from GET_STAT
+    // ✅ Each device has its own independent status
     if (isStatusChecked) {
       if (isOnline === true) return "online";
       if (isOnline === false) return "offline";
     }
     
-    // If globally selected but not checked yet, show checking
     if (isGloballySelected && !isStatusChecked) {
       return "checking";
     }
     
-    // Fallback for other states
     if (isActive || isGloballySelected) {
       if (connectionStatus === "connecting") return "connecting";
       if (connectionStatus === "error") return "error";
-      // If not checked yet, show checking
       if (!isStatusChecked) return "checking";
       return "offline";
     }
@@ -76,19 +73,20 @@ function DeviceCard({
   const isDeviceOnline = status === "online";
   const isDeviceOffline = status === "offline";
   const isDeviceChecking = status === "checking" || status === "connecting";
+  const isDeviceDisconnected = status === "disconnected";
 
   const statusConfig = {
     online: {
       color: "#4CAF50",
       bg: "rgba(76,175,80,0.12)",
       label: "Active",
-      message: "✅ Device is active and ready",
+      message: "✅ Device is active and receiving data",
     },
     offline: {
       color: "#F44336",
       bg: "rgba(244,67,54,0.10)",
       label: "Offline",
-      message: "❌ Device is offline - Cannot select as Global",
+      message: "❌ Device is offline - No data received",
     },
     checking: {
       color: "#FF9800",
@@ -117,7 +115,6 @@ function DeviceCard({
   }[status];
 
   const handleSelect = () => {
-    // ✅ Check if device is selectable (online and status checked)
     if (!isSelectable) {
       if (isDeviceOffline) {
         Alert.alert(
@@ -154,7 +151,6 @@ function DeviceCard({
     await onDelete(device);
   };
 
-  // ── Derived card data ──
   const typeLabel = device.type === "device" ? "Controller" : "Sensor";
   const keyOrId = device.external_key || device.id || "";
   const metaLine = keyOrId
@@ -171,30 +167,31 @@ function DeviceCard({
     if (isDeviceOffline && isStatusChecked) {
       return "#F4433644";
     }
+    if (isDeviceDisconnected) {
+      return theme.colors.border;
+    }
     return theme.colors.border;
   };
 
-  // Card opacity for offline devices
-  const cardOpacity = (isDeviceOffline && isStatusChecked) ? 0.7 : 1;
+  const cardOpacity = (isDeviceOffline && isStatusChecked) || isDeviceDisconnected ? 0.7 : 1;
 
   return (
     <>
       <TouchableOpacity
         style={[
           styles.deviceCard,
-          isGloballySelected && styles.deviceCardGloballySelected,
+          isGloballySelected && isDeviceOnline && styles.deviceCardGloballySelected,
           isActive && styles.deviceCardActive,
           {
             backgroundColor: theme.colors.surface,
             borderColor: getCardBorderColor(),
-            borderLeftColor: isGloballySelected ? "#4CAF50" : (isActive ? theme.colors.primary : theme.colors.border),
+            borderLeftColor: isGloballySelected && isDeviceOnline ? "#4CAF50" : (isActive ? theme.colors.primary : theme.colors.border),
             opacity: cardOpacity,
           },
         ]}
         activeOpacity={0.85}
         onPress={handleSelect}
       >
-        {/* ── Header row: icon · name · status ──────────────────────────── */}
         <View style={styles.cardHeader}>
           <View
             style={[
@@ -224,10 +221,16 @@ function DeviceCard({
               >
                 {device.name || "Unnamed Device"}
               </Text>
-              {isGloballySelected && (
+              {isGloballySelected && isDeviceOnline && (
                 <View style={[styles.globalPill, { backgroundColor: "#4CAF50" }]}>
                   <Ionicons name="globe-outline" size={10} color="#FFF" />
                   <Text style={styles.globalPillText}>GLOBAL</Text>
+                </View>
+              )}
+              {isGloballySelected && !isDeviceOnline && isStatusChecked && (
+                <View style={[styles.globalPill, { backgroundColor: "#FF9800" }]}>
+                  <Ionicons name="globe-outline" size={10} color="#FFF" />
+                  <Text style={styles.globalPillText}>SELECTED</Text>
                 </View>
               )}
               {isActive && !isGloballySelected && (
@@ -240,11 +243,16 @@ function DeviceCard({
                   <Text style={styles.activePillText}>ACTIVE</Text>
                 </View>
               )}
-              {/* ✅ Show offline badge */}
               {isDeviceOffline && isStatusChecked && (
                 <View style={[styles.offlinePill, { backgroundColor: "#F44336" }]}>
                   <Ionicons name="wifi-outline" size={10} color="#FFF" />
                   <Text style={styles.offlinePillText}>OFFLINE</Text>
+                </View>
+              )}
+              {isDeviceDisconnected && (
+                <View style={[styles.offlinePill, { backgroundColor: "#757575" }]}>
+                  <Ionicons name="wifi-outline" size={10} color="#FFF" />
+                  <Text style={[styles.offlinePillText, { color: "#FFF" }]}>INACTIVE</Text>
                 </View>
               )}
             </View>
@@ -268,14 +276,12 @@ function DeviceCard({
           </View>
         </View>
 
-        {/* ── Status message ── */}
         <View style={styles.statusMessageContainer}>
           <Text style={[styles.statusMessage, { color: theme.colors.textSecondary }]}>
             {statusConfig.message}
           </Text>
         </View>
 
-        {/* ── Footer: delete button only ── */}
         <View style={styles.cardFooter}>
           <TouchableOpacity
             style={[styles.deleteBtn, { borderColor: theme.colors.border }]}
@@ -289,7 +295,6 @@ function DeviceCard({
         </View>
       </TouchableOpacity>
 
-      {/* ── Delete Confirmation Modal ── */}
       <Modal
         visible={showDeleteModal}
         transparent
@@ -407,11 +412,11 @@ export default function Devices() {
     selectedDeviceId,
     selectedDeviceName,
     selectedExternalKey,
+    hasReceivedData,
   } = useMqtt();
 
   const { deleteThing } = useAuth();
 
-  // ── Registered device state ──
   const [registeredDevices, setRegisteredDevices] = useState([]);
   const [loadingDevices, setLoadingDevices] = useState(true);
   const [activeDevice, setActiveDeviceState] = useState(null);
@@ -422,29 +427,24 @@ export default function Devices() {
   const [checkingTimeout, setCheckingTimeout] = useState(null);
 
   // ── Helper to get device online status ──
-  const getDeviceOnlineStatus = (deviceId) => {
-    // First check by UUID
+  const getDeviceOnlineStatus = (deviceId, externalKey) => {
+    if (externalKey && deviceOnlineStatus && deviceOnlineStatus[externalKey] !== undefined) {
+      return deviceOnlineStatus[externalKey];
+    }
     if (deviceOnlineStatus && deviceOnlineStatus[deviceId] !== undefined) {
       return deviceOnlineStatus[deviceId];
-    }
-    // Then check by external key
-    const device = registeredDevices.find(d => d.id === deviceId);
-    if (device && device.external_key && deviceOnlineStatus[device.external_key] !== undefined) {
-      return deviceOnlineStatus[device.external_key];
     }
     return null;
   };
 
-  // ── Check if device is selectable (online and status checked) ──
-  const isDeviceSelectable = (deviceId) => {
-    const isChecked = statusCheckedDevices[deviceId] === true;
-    const isOnline = getDeviceOnlineStatus(deviceId);
-    
-    // Device must be checked AND online to be selectable
+  // ── Check if device is selectable ──
+  const isDeviceSelectable = (deviceId, externalKey) => {
+    const isChecked = statusCheckedDevices[deviceId] === true || statusCheckedDevices[externalKey] === true;
+    const isOnline = getDeviceOnlineStatus(deviceId, externalKey);
     return isChecked && isOnline === true;
   };
 
-  // ── Load registered devices ──────────────────────────────────────────────
+  // ── Load registered devices ──
   const loadDevices = async () => {
     try {
       const allThings = await getAllThings();
@@ -452,69 +452,63 @@ export default function Devices() {
       if (allThings && allThings.length > 0) {
         setRegisteredDevices(allThings);
 
-        // Check if selected device exists and is online
         let selectedExists = false;
-        let selectedExternal = null;
-        
-        if (selectedDeviceId) {
-          const selectedThing = allThings.find((t) => t.id === selectedDeviceId);
+        let selectedThing = null;
+
+        if (selectedExternalKey) {
+          selectedThing = allThings.find((t) => t.external_key === selectedExternalKey);
           if (selectedThing) {
             selectedExists = true;
-            selectedExternal = selectedThing.external_key;
             setActiveDeviceState(selectedThing);
           }
         }
 
-        // If selected device doesn't exist or no device selected, auto-select first ONLINE device
-        if (!selectedExists || !selectedDeviceId) {
+        if (!selectedExists && selectedDeviceId) {
+          selectedThing = allThings.find((t) => t.id === selectedDeviceId);
+          if (selectedThing) {
+            selectedExists = true;
+            setActiveDeviceState(selectedThing);
+          }
+        }
+
+        if (!selectedExists || !selectedExternalKey) {
           const active = await getActiveDevice();
           let deviceToSelect = null;
-          
+
           if (active && active.publisherId) {
             const activeThing = allThings.find((t) => t.id === active.publisherId);
             if (activeThing) {
               deviceToSelect = activeThing;
             }
           }
-          
-          // If no active device found, try to find first online device
+
           if (!deviceToSelect) {
-            // Wait a bit for status checks to complete
             await new Promise(resolve => setTimeout(resolve, 3000));
-            
-            // Find first device that is online
             for (const thing of allThings) {
-              const isOnline = getDeviceOnlineStatus(thing.id) || getDeviceOnlineStatus(thing.external_key);
+              const isOnline = getDeviceOnlineStatus(thing.id, thing.external_key);
               if (isOnline === true) {
                 deviceToSelect = thing;
                 break;
               }
             }
-            
-            // If still no online device, just pick the first one
             if (!deviceToSelect && allThings.length > 0) {
               deviceToSelect = allThings[0];
             }
           }
-          
+
           if (deviceToSelect) {
             await selectDevice(deviceToSelect.id, deviceToSelect.name);
             setActiveDeviceState(deviceToSelect);
-            selectedExternal = deviceToSelect.external_key;
             setTimeout(() => {
               requestDeviceStatus(deviceToSelect.external_key);
             }, 1000);
           }
-        } else {
-          // Request status for the selected device
-          if (selectedExternal) {
-            setTimeout(() => {
-              requestDeviceStatus(selectedExternal);
-            }, 1000);
-          }
+        } else if (selectedThing) {
+          setTimeout(() => {
+            requestDeviceStatus(selectedThing.external_key);
+          }, 1000);
         }
 
-        // Auto-request status for all devices
         setTimeout(() => {
           requestStatusForAllDevices();
         }, 2000);
@@ -544,25 +538,37 @@ export default function Devices() {
       }
 
       const timeout = setTimeout(() => {
+        // ✅ Only mark devices as checked if they haven't been checked yet
         const checked = { ...statusCheckedDevices };
         let hasNewCheck = false;
-        
+
         registeredDevices.forEach((device) => {
           const deviceId = device.id;
-          if (!checked[deviceId]) {
-            checked[deviceId] = true;
-            hasNewCheck = true;
+          const extKey = device.external_key;
+          // ✅ Check if this specific device has been checked
+          if (!checked[deviceId] && !checked[extKey]) {
+            // ✅ Only mark as checked if we have received status for this device
+            const isOnline = getDeviceOnlineStatus(deviceId, extKey);
+            if (isOnline !== null) {
+              checked[deviceId] = true;
+              checked[extKey] = true;
+              hasNewCheck = true;
+              console.log(`✅ Device ${extKey} marked as checked (status: ${isOnline})`);
+            }
           }
         });
-        
+
         if (hasNewCheck) {
           setStatusCheckedDevices(checked);
-          console.log("✅ Auto-marked devices as checked after 2 minutes timeout");
-          setStatusCheckDone(true);
           
-          // Try to auto-select an online device if none is selected
-          if (!selectedDeviceId) {
-            autoSelectOnlineDevice();
+          // ✅ Check if ALL devices are now checked
+          const allChecked = registeredDevices.every((device) => 
+            checked[device.id] === true || checked[device.external_key] === true
+          );
+          
+          if (allChecked) {
+            setStatusCheckDone(true);
+            console.log("✅ All devices status checked");
           }
         }
       }, STATUS_CHECK_TIMEOUT);
@@ -574,10 +580,10 @@ export default function Devices() {
 
   // ── Auto-select online device ──
   const autoSelectOnlineDevice = async () => {
-    if (selectedDeviceId) return;
-    
+    if (selectedExternalKey || selectedDeviceId) return;
+
     for (const device of registeredDevices) {
-      const isOnline = getDeviceOnlineStatus(device.id) || getDeviceOnlineStatus(device.external_key);
+      const isOnline = getDeviceOnlineStatus(device.id, device.external_key);
       if (isOnline === true) {
         console.log(`🤖 Auto-selecting online device: ${device.name}`);
         await selectDevice(device.id, device.name);
@@ -587,38 +593,45 @@ export default function Devices() {
     }
   };
 
-  // ── Mark devices as checked when status is received ──
+  // ── Mark device as checked when status is received ──
   useEffect(() => {
     if (deviceOnlineStatus) {
       const checked = { ...statusCheckedDevices };
       let hasNewCheck = false;
-      
+
       for (const key of Object.keys(deviceOnlineStatus)) {
-        let deviceId = key;
         const device = registeredDevices.find(d => d.external_key === key || d.id === key);
         if (device) {
-          deviceId = device.id;
-        }
-        
-        if (!checked[deviceId]) {
-          checked[deviceId] = true;
-          hasNewCheck = true;
+          // ✅ Mark this specific device as checked
+          if (!checked[device.id]) {
+            checked[device.id] = true;
+            hasNewCheck = true;
+          }
+          if (!checked[device.external_key]) {
+            checked[device.external_key] = true;
+            hasNewCheck = true;
+          }
+          console.log(`✅ Device ${device.external_key} marked as checked via status response`);
         }
       }
-      
+
       if (hasNewCheck) {
         setStatusCheckedDevices(checked);
-        console.log("✅ Devices status checked via response:", Object.keys(checked));
         
-        if (Object.keys(checked).length >= registeredDevices.length) {
+        // ✅ Check if ALL devices are now checked
+        const allChecked = registeredDevices.length > 0 && registeredDevices.every((device) => 
+          checked[device.id] === true || checked[device.external_key] === true
+        );
+        
+        if (allChecked) {
           if (checkingTimeout) {
             clearTimeout(checkingTimeout);
             setCheckingTimeout(null);
           }
           setStatusCheckDone(true);
-          
-          // Auto-select online device if none selected
-          if (!selectedDeviceId) {
+          console.log("✅ All devices status checked via responses");
+
+          if (!selectedExternalKey && !selectedDeviceId) {
             autoSelectOnlineDevice();
           }
         }
@@ -626,20 +639,18 @@ export default function Devices() {
     }
   }, [deviceOnlineStatus, registeredDevices.length]);
 
-  // ── Select/Activate a device (GLOBAL CONTROL) ──
+  // ── Select/Activate a device ──
   const handleSelectDevice = async (device) => {
-    if (selectedDeviceId === device.id) {
+    if (selectedExternalKey === device.external_key) {
       return;
     }
 
     console.log(`🔌 Selecting device for global control: ${device.id} (${device.name})`);
     console.log(`   External key: ${device.external_key}`);
-    
-    // ✅ Double check - device should already be validated in the card
-    // but we check again for safety
-    const isOnline = getDeviceOnlineStatus(device.id);
-    const isChecked = statusCheckedDevices[device.id] === true;
-    
+
+    const isOnline = getDeviceOnlineStatus(device.id, device.external_key);
+    const isChecked = statusCheckedDevices[device.id] === true || statusCheckedDevices[device.external_key] === true;
+
     if (!isChecked || isOnline !== true) {
       Alert.alert(
         "⚠️ Device Not Available",
@@ -648,23 +659,17 @@ export default function Devices() {
       );
       return;
     }
-    
+
     try {
       await selectDevice(device.id, device.name);
       setActiveDeviceState(device);
-      
+
       if (device.external_key) {
         setTimeout(() => {
           requestDeviceStatus(device.external_key);
         }, 500);
       }
-      
-      // Reset status check for this device
-      setStatusCheckedDevices(prev => ({
-        ...prev,
-        [device.id]: false
-      }));
-      
+
       Alert.alert(
         "✅ Device Selected",
         `${device.name || "Device"} is now the GLOBAL device.\n\nAll controls and data will use this device.`,
@@ -692,19 +697,17 @@ export default function Devices() {
               text: "OK",
               onPress: () => {
                 loadDevices();
-                if (selectedDeviceId === device.id) {
+                if (selectedExternalKey === device.external_key || selectedDeviceId === device.id) {
                   const remaining = registeredDevices.filter(d => d.id !== device.id);
                   if (remaining.length > 0) {
-                    // Try to select an online device first
                     for (const d of remaining) {
-                      const isOnline = getDeviceOnlineStatus(d.id) || getDeviceOnlineStatus(d.external_key);
+                      const isOnline = getDeviceOnlineStatus(d.id, d.external_key);
                       if (isOnline === true) {
                         selectDevice(d.id, d.name);
                         setActiveDeviceState(d);
                         return;
                       }
                     }
-                    // If no online device, select first one
                     selectDevice(remaining[0].id, remaining[0].name);
                     setActiveDeviceState(remaining[0]);
                   }
@@ -753,22 +756,22 @@ export default function Devices() {
     setRefreshing(true);
     setStatusCheckDone(false);
     setStatusCheckedDevices({});
-    
+
     if (checkingTimeout) {
       clearTimeout(checkingTimeout);
       setCheckingTimeout(null);
     }
-    
+
     await loadDevices();
-    
+
     setTimeout(() => {
       requestStatusForAllDevices();
     }, 2000);
   };
 
   // ── Get device connection status ──
-  const getDeviceConnectionStatus = (deviceId) => {
-    if (selectedDeviceId === deviceId) {
+  const getDeviceConnectionStatus = (deviceId, externalKey) => {
+    if (selectedExternalKey === externalKey || selectedDeviceId === deviceId) {
       return connectionState || "offline";
     }
     return "disconnected";
@@ -779,7 +782,6 @@ export default function Devices() {
   const primary = theme.colors.primary;
   const primaryDark = theme.colors.primaryDark;
 
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <ScrollView
@@ -804,7 +806,6 @@ export default function Devices() {
           />
         }
       >
-        {/* ── Loading / Empty states ───────────────────────────────────────── */}
         {loadingDevices ? (
           <View style={styles.loadingBox}>
             <ActivityIndicator size="large" color={primary} />
@@ -847,7 +848,6 @@ export default function Devices() {
           </View>
         ) : (
           <>
-            {/* ── My Devices ────────────────────────────────────────────────── */}
             <View style={styles.sectionHeader}>
               <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
                 My Devices
@@ -859,31 +859,29 @@ export default function Devices() {
               </View>
             </View>
 
-            {/* ── Active device indicator ── */}
             {selectedDeviceName && selectedExternalKey && (
               <View style={[styles.activeIndicator, { backgroundColor: `${primary}0D` }]}>
                 <Ionicons name="checkmark-circle" size={16} color={primary} />
                 <Text style={[styles.activeIndicatorText, { color: theme.colors.text }]}>
-                  Global Device: {selectedDeviceName}
+                  Global Device: {selectedDeviceName} ({selectedExternalKey})
                 </Text>
               </View>
             )}
 
-            {/* ── Info: Only online devices can be selected ── */}
             <View style={[styles.infoBanner, { backgroundColor: `${theme.colors.textSecondary}0D` }]}>
               <Ionicons name="information-circle" size={16} color={theme.colors.textSecondary} />
               <Text style={[styles.infoBannerText, { color: theme.colors.textSecondary }]}>
-                💡 Only devices with <Text style={{ fontWeight: "700" }}>Active</Text> status can be set as the Global device.
+                💡 Each device shows its own <Text style={{ fontWeight: "700", color: "#4CAF50" }}>Active</Text> status based on data reception.
               </Text>
             </View>
 
             {registeredDevices.map((item) => {
-              const isGloballySelected = selectedDeviceId === item.id;
+              const isGloballySelected = selectedExternalKey === item.external_key;
               const isActive = activeDevice?.id === item.id;
-              const isOnline = getDeviceOnlineStatus(item.id);
-              const isChecked = statusCheckedDevices[item.id] === true;
-              const isSelectable = isChecked && isOnline === true;
-              
+              const isOnline = getDeviceOnlineStatus(item.id, item.external_key);
+              const isChecked = statusCheckedDevices[item.id] === true || statusCheckedDevices[item.external_key] === true;
+              const isSelectable = isDeviceSelectable(item.id, item.external_key);
+
               return (
                 <DeviceCard
                   key={item.id}
@@ -893,7 +891,7 @@ export default function Devices() {
                   onSelect={handleSelectDevice}
                   onDelete={handleDeleteDevice}
                   theme={theme}
-                  connectionStatus={getDeviceConnectionStatus(item.id)}
+                  connectionStatus={getDeviceConnectionStatus(item.id, item.external_key)}
                   isOnline={isOnline}
                   isStatusChecked={isChecked}
                   isSelectable={isSelectable}
@@ -901,7 +899,6 @@ export default function Devices() {
               );
             })}
 
-            {/* ── Status check info ── */}
             {!statusCheckDone && (
               <View style={[styles.infoBanner, { backgroundColor: `${theme.colors.textSecondary}0D` }]}>
                 <ActivityIndicator size="small" color={theme.colors.primary} />
@@ -914,7 +911,6 @@ export default function Devices() {
         )}
       </ScrollView>
 
-      {/* ── Floating Action Button ────────────────────────────────────────── */}
       <TouchableOpacity
         style={[styles.fab, { shadowColor: primaryDark }]}
         onPress={openAddWizard}
@@ -932,7 +928,6 @@ export default function Devices() {
         </LinearGradient>
       </TouchableOpacity>
 
-      {/* ── Add Device Wizard (fullscreen modal) ──────────────────────────── */}
       <AddDeviceWizard
         visible={showAddWizard}
         onClose={() => setShowAddWizard(false)}
@@ -1232,4 +1227,4 @@ const styles = StyleSheet.create({
   modalDeleteButton: { backgroundColor: "#F44336" },
   modalButtonText: { fontSize: 15, fontWeight: "600" },
   modalDeleteButtonText: { color: "#FFF", fontSize: 15, fontWeight: "700" },
-});
+});w
