@@ -538,16 +538,13 @@ export default function Devices() {
       }
 
       const timeout = setTimeout(() => {
-        // ✅ Only mark devices as checked if they haven't been checked yet
         const checked = { ...statusCheckedDevices };
         let hasNewCheck = false;
 
         registeredDevices.forEach((device) => {
           const deviceId = device.id;
           const extKey = device.external_key;
-          // ✅ Check if this specific device has been checked
           if (!checked[deviceId] && !checked[extKey]) {
-            // ✅ Only mark as checked if we have received status for this device
             const isOnline = getDeviceOnlineStatus(deviceId, extKey);
             if (isOnline !== null) {
               checked[deviceId] = true;
@@ -561,7 +558,6 @@ export default function Devices() {
         if (hasNewCheck) {
           setStatusCheckedDevices(checked);
           
-          // ✅ Check if ALL devices are now checked
           const allChecked = registeredDevices.every((device) => 
             checked[device.id] === true || checked[device.external_key] === true
           );
@@ -602,7 +598,6 @@ export default function Devices() {
       for (const key of Object.keys(deviceOnlineStatus)) {
         const device = registeredDevices.find(d => d.external_key === key || d.id === key);
         if (device) {
-          // ✅ Mark this specific device as checked
           if (!checked[device.id]) {
             checked[device.id] = true;
             hasNewCheck = true;
@@ -618,7 +613,6 @@ export default function Devices() {
       if (hasNewCheck) {
         setStatusCheckedDevices(checked);
         
-        // ✅ Check if ALL devices are now checked
         const allChecked = registeredDevices.length > 0 && registeredDevices.every((device) => 
           checked[device.id] === true || checked[device.external_key] === true
         );
@@ -1227,4 +1221,4 @@ const styles = StyleSheet.create({
   modalDeleteButton: { backgroundColor: "#F44336" },
   modalButtonText: { fontSize: 15, fontWeight: "600" },
   modalDeleteButtonText: { color: "#FFF", fontSize: 15, fontWeight: "700" },
-});w
+});
