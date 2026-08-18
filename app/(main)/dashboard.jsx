@@ -123,7 +123,8 @@ export default function Dashboard() {
     getSelectedDeviceOnlineStatus,
     getSelectedDeviceName,
     selectedDeviceId,
-    sensorData: legacySensorData, // Keep for fallback
+    selectedExternalKey, // ✅ Get the external key
+    sensorData: legacySensorData,
     actuatorStatus: legacyActuatorStatus,
     isConnected,
     hasReceivedData,
@@ -144,14 +145,15 @@ export default function Dashboard() {
 
   // ✅ Log for debugging
   useEffect(() => {
-    console.log("📊 Dashboard - Selected Device:", selectedDeviceId);
+    console.log("📊 Dashboard - Selected Device ID:", selectedDeviceId);
+    console.log("📊 Dashboard - Selected External Key:", selectedExternalKey);
     console.log("📊 Dashboard - Device Name:", selectedDeviceName);
     console.log("📊 Dashboard - Sensor Data:", sensorData);
     console.log("📊 Dashboard - Actuator Status:", actuatorStatus);
     console.log("📊 Dashboard - Is Online:", isDeviceOnlineFromContext);
     console.log("📊 Dashboard - Connection State:", connectionState);
     console.log("📊 Dashboard - isLiveData:", isLiveData);
-  }, [selectedDeviceId, selectedDeviceName, sensorData, actuatorStatus, isDeviceOnlineFromContext, connectionState, isLiveData]);
+  }, [selectedDeviceId, selectedExternalKey, selectedDeviceName, sensorData, actuatorStatus, isDeviceOnlineFromContext, connectionState, isLiveData]);
 
   // ✅ System Mode Context
   const {
@@ -226,9 +228,9 @@ export default function Dashboard() {
       return;
     }
 
-    // ✅ FIX: Get the current selected device ID
-    const currentDeviceId = selectedDeviceId;
-    if (!currentDeviceId) {
+    // ✅ FIX: Use external key instead of device ID
+    const currentDeviceKey = selectedExternalKey;
+    if (!currentDeviceKey) {
       Alert.alert("Error", "No device selected");
       return;
     }
@@ -241,10 +243,9 @@ export default function Dashboard() {
     setIsPublishing(true);
 
     try {
-      // ✅ FIX: Call toggleDeviceStatus with correct parameters: (deviceKey, deviceName, status)
-      // The function signature in MqttContext is: toggleDeviceStatus: async (deviceKey, deviceName, status)
+      // ✅ FIX: Use external key as deviceKey
       const success = await toggleDeviceStatus(
-        currentDeviceId,    // deviceKey - the device ID/external key
+        currentDeviceKey,   // deviceKey - use external key
         "water_pump",       // deviceName - the actuator name
         newStatus           // status - true/false
       );
@@ -272,7 +273,7 @@ export default function Dashboard() {
     } finally {
       setIsPublishing(false);
     }
-  }, [actuatorStatus, isPublishing, isDeviceOffline, selectedDeviceId, toggleDeviceStatus, addAlert]);
+  }, [actuatorStatus, isPublishing, isDeviceOffline, selectedExternalKey, toggleDeviceStatus, addAlert]);
 
   // ── PUMP CONTROL WITH SYSTEM MODE ──────────────────────────────────────────
   const togglePump = useCallback(async () => {
