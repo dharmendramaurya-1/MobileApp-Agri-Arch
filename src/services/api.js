@@ -1,5 +1,6 @@
 // src/services/api.js
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { router } from "expo-router";
 import axios from "axios";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_URL;
@@ -13,6 +14,7 @@ const api = axios.create({
   },
 });
 
+
 // Request interceptor to add token to all requests
 api.interceptors.request.use(
   async (config) => {
@@ -23,6 +25,43 @@ api.interceptors.request.use(
     return config;
   },
   (error) => Promise.reject(error)
+);
+
+// ── Response interceptor: catch 401 (expired / invalid token) ──
+let _isRedirecting = false;
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const status = error.response?.status;
+    if (status === 401 && !_isRedirecting) {
+      _isRedirecting = true;
+      console.warn("🔒 401 received — token expired or invalid. Logging out...");
+      try {
+        // Clear stored auth data
+        const keysToRemove = [
+          "authToken",
+          "isAuthenticated",
+          "isSignupFlow",
+          "user",
+          "userEmail",
+          "external_key",
+          "publisher_id",
+          "Username",
+          "profile_id",
+          "org_id",
+          "group_id",
+        ];
+        await AsyncStorage.multiRemove(keysToRemove);
+      } catch (e) {
+        console.error("Error clearing auth on 401:", e);
+      }
+      // Redirect to login
+      router.replace("/(auth)/login");
+      // Allow future 401s to trigger again after a short cooldown
+      setTimeout(() => { _isRedirecting = false; }, 3000);
+    }
+    return Promise.reject(error);
+  }
 );
 
 // ============ AUTHENTICATION API ============

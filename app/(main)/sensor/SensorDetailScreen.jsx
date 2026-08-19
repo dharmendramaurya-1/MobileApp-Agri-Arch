@@ -36,7 +36,7 @@ export default function SensorDetailScreen({
   contentPaddingTop,
 }) {
   const { theme } = useTheme();
-  const { getSelectedDeviceSensorData } = useMqtt();
+  const { getSelectedDeviceSensorData, getSelectedDeviceId, getSelectedExternalKey, availableDevices } = useMqtt();
   const sensorData = getSelectedDeviceSensorData();
   const { onScroll, headerHeight } = useScroll();
   const scrollRef = useRef(null);
@@ -55,6 +55,29 @@ export default function SensorDetailScreen({
   const [isGraphLoading, setIsGraphLoading] = useState(false);
 
   const liveValue = sensorData[config.dataKey];
+
+  // ✅ Get the selected device's publisher ID (thing ID) and external key
+  const getDevicePublisherAndKey = useCallback(() => {
+    const selectedDevId = getSelectedDeviceId();
+    const selectedExtKey = getSelectedExternalKey();
+
+    // If we have a selected device, find its thing ID from availableDevices
+    if (selectedDevId && availableDevices) {
+      const device = availableDevices.find(d => d.id === selectedDevId);
+      if (device) {
+        return {
+          publisherId: device.id,
+          externalKey: device.external_key || selectedExtKey,
+        };
+      }
+    }
+
+    // Fallback: try to get from context
+    return {
+      publisherId: selectedDevId,
+      externalKey: selectedExtKey,
+    };
+  }, [getSelectedDeviceId, getSelectedExternalKey, availableDevices]);
 
   // ✅ Get the sensor name for the API - use apiName from config
   const getSensorName = () => {
@@ -126,17 +149,21 @@ export default function SensorDetailScreen({
   }, [timeRange]);
 
   // Fetch one page of the historical table
+  console.log("sensor keys", getSensorName())
   const fetchTablePage = useCallback(
     async (page) => {
       setIsTableLoading(true);
       try {
         const { from, to } = getTimeWindow();
+        const { publisherId, externalKey } = getDevicePublisherAndKey();
         const result = await fetchSensorHistorical({
           sensorKey: getSensorName(),
           from,
           to,
           limit: PAGE_SIZE,
           offset: (page - 1) * PAGE_SIZE,
+          publisherId,
+          externalKey,
         });
 
         if (result.success) {
@@ -156,7 +183,7 @@ export default function SensorDetailScreen({
         setIsTableLoading(false);
       }
     },
-    [getTimeWindow]
+    [getTimeWindow, getDevicePublisherAndKey]
   );
 
   // Fetch ALL data points in the range for the graph
@@ -164,11 +191,14 @@ export default function SensorDetailScreen({
     setIsGraphLoading(true);
     try {
       const { from, to } = getTimeWindow();
+      const { publisherId, externalKey } = getDevicePublisherAndKey();
       const result = await fetchAllSensorHistorical({
         sensorKey: getSensorName(),
         from,
         to,
         pageSize: 100,
+        publisherId,
+        externalKey,
       });
 
       if (result.success) {
@@ -183,7 +213,7 @@ export default function SensorDetailScreen({
     } finally {
       setIsGraphLoading(false);
     }
-  }, [getTimeWindow]);
+  }, [getTimeWindow, getDevicePublisherAndKey]);
 
   // Fetch data when the sensor or time range changes
   useEffect(() => {

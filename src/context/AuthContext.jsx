@@ -3,12 +3,48 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useRef,
   useState
 } from "react";
+import { AppState } from "react-native";
+import { jwtDecode } from "jwt-decode";
 import { loginUser } from "../services/api";
 import { LAST_DATA_CACHE_KEY } from "../services/lastDataCache";
+
+// ── Token helpers ──────────────────────────────────────────────────────────
+/** Decode a JWT and return its payload, or null if invalid */
+const decodeToken = (token) => {
+  try {
+    return jwtDecode(token);
+  } catch {
+    return null;
+  }
+};
+
+/** Returns true if the decoded token has an exp claim that has already passed */
+const isTokenExpired = (token) => {
+  const payload = decodeToken(token);
+  if (!payload || !payload.exp) return true; // no exp → treat as expired
+  // exp is in seconds; add 10 s safety margin to avoid edge races
+  return Date.now() >= (payload.exp - 10) * 1000;
+};
+
+/** Returns true if the token will expire within `withinMs` milliseconds */
+const isTokenExpiringSoon = (token, withinMs = 5 * 60 * 1000) => {
+  const payload = decodeToken(token);
+  if (!payload || !payload.exp) return false;
+  return Date.now() >= (payload.exp * 1000) - withinMs;
+};
+
+/** Seconds until token expires (or 0) */
+const tokenExpiresInSeconds = (token) => {
+  const payload = decodeToken(token);
+  if (!payload || !payload.exp) return 0;
+  return Math.max(0, payload.exp - Math.floor(Date.now() / 1000));
+};
 
 // ✅ Create context without TypeScript types
 const AuthContext = createContext(null);
@@ -25,6 +61,37 @@ export function AuthProvider({ children }) {
   const [token, setToken] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSignupFlow, setIsSignupFlow] = useState(false);
+
+  const appState = useRef(AppState.currentState);
+
+  // ── Re-validate token when app comes to foreground ──
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (nextState) => {
+      if (appState.current.match(/inactive|background/) && nextState === "active") {
+        console.log("📱 App foregrounded — validating token");
+        validateToken();
+      }
+      appState.current = nextState;
+    });
+    return () => sub.remove();
+  }, []);
+
+  // ── Periodic expiry check (every 60 s) ──
+  useEffect(() => {
+    if (!token) return;
+    const interval = setInterval(() => {
+      if (isTokenExpired(token)) {
+        console.log("⏰ Token expired (periodic check) — logging out");
+        clearAuth();
+        router.replace("/(auth)/login");
+      } else if (isTokenExpiringSoon(token)) {
+        const secs = tokenExpiresInSeconds(token);
+        console.warn(`⚠️ Token expires in ${secs}s`);
+        // Could emit a warning event here if desired
+      }
+    }, 60 * 1000);
+    return () => clearInterval(interval);
+  }, [token]);
 
   useEffect(() => {
     loadAuth();
@@ -44,12 +111,20 @@ export function AuthProvider({ children }) {
       console.log("   isSignupFlow from storage:", signupFlowFlag);
       
       if (savedToken && isAuthenticated === "true") {
+        // ✅ Validate token expiry before accepting
+        if (isTokenExpired(savedToken)) {
+          console.log("⏰ Token is expired — clearing auth");
+          setToken(null);
+          await clearAuth();
+          return;
+        }
+        const secs = tokenExpiresInSeconds(savedToken);
+        console.log(`✅ Auth loaded — token expires in ${Math.round(secs / 60)} min`);
         setToken(savedToken);
         if (signupFlowFlag === "true") {
           setIsSignupFlow(true);
           console.log("✅ Restored signup flow flag from storage");
         }
-        console.log("✅ Auth loaded successfully - Token present");
       } else {
         console.log("⚠️ No token found - User is NOT authenticated");
         setToken(null);
@@ -176,6 +251,31 @@ export function AuthProvider({ children }) {
     await AsyncStorage.removeItem("isSignupFlow");
     console.log("✅ isSignupFlow reset to false and removed from storage");
   };
+
+  // ── Force-validate current token (used by foreground listener & external callers) ──
+  const validateToken = useCallback(async () => {
+    try {
+      const current = await AsyncStorage.getItem("authToken");
+      if (!current) {
+        if (token) {
+          setToken(null);
+          router.replace("/(auth)/login");
+        }
+        return false;
+      }
+      if (isTokenExpired(current)) {
+        console.log("⏰ Token expired — forcing logout");
+        setToken(null);
+        await clearAuth();
+        router.replace("/(auth)/login");
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.error("validateToken error:", e);
+      return false;
+    }
+  }, [token]);
 
   const logout = async () => {
     try {
@@ -358,6 +458,10 @@ export function AuthProvider({ children }) {
         updateToken,
         clearAuth,
         setAuthData,
+        validateToken,
+        isTokenExpired,
+        isTokenExpiringSoon,
+        tokenExpiresInSeconds,
         // ✅ NEW FUNCTIONS
         deleteThing,
         getAllThingsFromApi,

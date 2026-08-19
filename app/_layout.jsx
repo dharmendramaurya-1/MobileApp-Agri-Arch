@@ -15,7 +15,7 @@ import { ThemeProvider, useTheme } from "../src/context/ThemContext";
 
 function RootNav() {
   const { theme } = useTheme();
-  const { isLoading, isAuthenticated, isSignupFlow } = useAuth();
+  const { isLoading, isAuthenticated, isSignupFlow, token, isTokenExpired: checkExpired } = useAuth();
   const segments = useSegments();
   const hasRedirected = useRef(false);
 
@@ -25,13 +25,18 @@ function RootNav() {
       return;
     }
 
-
-
-
     const inMainGroup = segments[0] === "(main)";
     const inAuthGroup = segments[0] === "(auth)";
     const isOnboarding = segments[0] === "onboarding";
     const isIndex = !segments[0] || segments[0] === "index";
+
+    // ── Check token expiry on every navigation ──
+    if (isAuthenticated && token && checkExpired(token)) {
+      console.log("⏰ Token expired during navigation → redirecting to login");
+      hasRedirected.current = true;
+      router.replace("/(auth)/login");
+      return;
+    }
 
     console.log("🔐 Navigation check:", {
       isAuthenticated,
@@ -103,7 +108,7 @@ function RootNav() {
     hasRedirected.current = false;
     console.log("⏭️ No redirect needed");
 
-  }, [isAuthenticated, isLoading, segments, isSignupFlow]);
+  }, [isAuthenticated, isLoading, segments, isSignupFlow, token]);
 
        useEffect(() => {
     const getAllAsyncStorageData = async () => {

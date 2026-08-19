@@ -42,7 +42,7 @@ const getSenMLName = (sensorKey) => SENSOR_NAME_MAP[sensorKey] || sensorKey;
 export const searchSenML = async (params) => {
   try {
     const authToken = await AsyncStorage.getItem("authToken");
-    const publisherId = await AsyncStorage.getItem("publisher_id");
+    const publisherId = params.publisherId || await AsyncStorage.getItem("publisher_id");
 
     if (!authToken) {
       throw new Error("No auth token found. Please login again.");
@@ -463,11 +463,13 @@ export const fetchSensorHistorical = async ({
   offset = 0,
   from = null,
   to = null,
+  publisherId: publisherIdOverride = null,
+  externalKey: externalKeyOverride = null,
 }) => {
   try {
     const authToken = await AsyncStorage.getItem("authToken");
-    const publisherId = await AsyncStorage.getItem("publisher_id");
-    const externalKey = await AsyncStorage.getItem("external_key");
+    const publisherId = publisherIdOverride || await AsyncStorage.getItem("publisher_id");
+    const externalKey = externalKeyOverride || await AsyncStorage.getItem("external_key");
 
     if (!authToken) throw new Error("No auth token found. Please login again.");
     if (!publisherId) throw new Error("No publisher ID found. Please identify device first.");
@@ -531,6 +533,8 @@ export const fetchAllSensorHistorical = async ({
   to = null,
   pageSize = 100,
   maxPages = 50,
+  publisherId = null,
+  externalKey = null,
 }) => {
   const all = [];
   let offset = 0;
@@ -544,6 +548,8 @@ export const fetchAllSensorHistorical = async ({
         to,
         limit: pageSize,
         offset,
+        publisherId: publisherId,
+        externalKey: externalKey,
       });
 
       if (!result.success) {

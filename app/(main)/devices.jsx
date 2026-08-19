@@ -30,7 +30,7 @@ import {
 const { height } = Dimensions.get("window");
 
 // ── Constants ──
-const STATUS_CHECK_TIMEOUT = 2 * 60 * 1000; // 2 minutes
+const STATUS_CHECK_TIMEOUT = 5 * 1000; // 5 seconds fallback
 
 // ── Registered device card ───────────────────────────────────────────────────
 function DeviceCard({
@@ -407,7 +407,7 @@ export default function Devices() {
     switchToDevice,
     deviceOnlineStatus,
     requestStatusForAllDevices,
-    requestDeviceStatus,
+    quickStatusCheck,
     selectDevice,
     selectedDeviceId,
     selectedDeviceName,
@@ -499,19 +499,12 @@ export default function Devices() {
           if (deviceToSelect) {
             await selectDevice(deviceToSelect.id, deviceToSelect.name);
             setActiveDeviceState(deviceToSelect);
-            setTimeout(() => {
-              requestDeviceStatus(deviceToSelect.external_key);
-            }, 1000);
           }
-        } else if (selectedThing) {
-          setTimeout(() => {
-            requestDeviceStatus(selectedThing.external_key);
-          }, 1000);
         }
 
         setTimeout(() => {
-          requestStatusForAllDevices();
-        }, 2000);
+          quickStatusCheck();
+        }, 1500);
 
       } else {
         setRegisteredDevices([]);
@@ -658,12 +651,6 @@ export default function Devices() {
       await selectDevice(device.id, device.name);
       setActiveDeviceState(device);
 
-      if (device.external_key) {
-        setTimeout(() => {
-          requestDeviceStatus(device.external_key);
-        }, 500);
-      }
-
       Alert.alert(
         "✅ Device Selected",
         `${device.name || "Device"} is now the GLOBAL device.\n\nAll controls and data will use this device.`,
@@ -734,9 +721,6 @@ export default function Devices() {
       try {
         await selectDevice(device.id, device.name);
         setActiveDeviceState(device);
-        setTimeout(() => {
-          requestDeviceStatus(device.externalKey);
-        }, 1000);
       } catch (error) {
         console.error("Auto-connect to new device failed:", error);
       }
@@ -759,8 +743,8 @@ export default function Devices() {
     await loadDevices();
 
     setTimeout(() => {
-      requestStatusForAllDevices();
-    }, 2000);
+      quickStatusCheck();
+    }, 1500);
   };
 
   // ── Get device connection status ──
@@ -853,21 +837,21 @@ export default function Devices() {
               </View>
             </View>
 
-            {selectedDeviceName && selectedExternalKey && (
+            {/* {selectedDeviceName && selectedExternalKey && (
               <View style={[styles.activeIndicator, { backgroundColor: `${primary}0D` }]}>
                 <Ionicons name="checkmark-circle" size={16} color={primary} />
                 <Text style={[styles.activeIndicatorText, { color: theme.colors.text }]}>
                   Global Device: {selectedDeviceName} ({selectedExternalKey})
                 </Text>
               </View>
-            )}
+            )} */}
 
-            <View style={[styles.infoBanner, { backgroundColor: `${theme.colors.textSecondary}0D` }]}>
+            {/* <View style={[styles.infoBanner, { backgroundColor: `${theme.colors.textSecondary}0D` }]}>
               <Ionicons name="information-circle" size={16} color={theme.colors.textSecondary} />
               <Text style={[styles.infoBannerText, { color: theme.colors.textSecondary }]}>
                 💡 Each device shows its own <Text style={{ fontWeight: "700", color: "#4CAF50" }}>Active</Text> status based on data reception.
               </Text>
-            </View>
+            </View> */}
 
             {registeredDevices.map((item) => {
               const isGloballySelected = selectedExternalKey === item.external_key;

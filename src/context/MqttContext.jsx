@@ -166,9 +166,9 @@ function parseActuatorToDevices(raw) {
   }
 }
 
-function buildActuatorPayload(status) {
+function buildActuatorPayload(status, externalKey) {
   const payload = [
-    { bn: "urn:dev:9003718EEB3F:", bt: Math.floor(Date.now() / 1000) }
+    { bn: `urn:dev:${externalKey}:`, bt: Math.floor(Date.now() / 1000) }
   ];
   
   const actuatorFields = [
@@ -586,6 +586,69 @@ export const MqttProvider = ({ children }) => {
     }
   };
 
+  // ✅ Quick status check: sends GET_STATUS to all devices, waits 3s for responses
+  // Devices that respond are marked online; others are marked offline
+  const quickStatusCheck = async () => {
+    console.log("⚡ Quick status check started (3s timeout)");
+    
+    const devices = availableDevices.length > 0 ? availableDevices : await loadAvailableDevices();
+    if (devices.length === 0) {
+      console.log("⚠️ No devices for quick status check");
+      return;
+    }
+    
+    // Mark all as checking first
+    for (const device of devices) {
+      setDeviceConnectionStatus(prev => ({ ...prev, [device.external_key]: 'checking' }));
+    }
+    
+    // Send GET_STATUS to all devices
+    for (const device of devices) {
+      try {
+        await requestDeviceStatus(device.external_key);
+      } catch (e) {
+        console.error(`❌ Quick check failed for ${device.external_key}`);
+      }
+    }
+    
+    // Wait 3 seconds for responses
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    // Mark devices that didn't respond as offline
+    for (const device of devices) {
+      const deviceKey = device.external_key;
+      const lastResponse = lastGetStatResponseTime.current[deviceKey] || 0;
+      const responded = lastResponse > (Date.now() - 5000); // responded within last 5s
+      
+      if (!responded) {
+        console.log(`⚠️ Device ${deviceKey} did not respond — marking OFFLINE`);
+        setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: false }));
+        setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: 'offline' }));
+        setDevicesData(prev => ({
+          ...prev,
+          [deviceKey]: {
+            ...prev[deviceKey],
+            isOnline: false,
+            hasReceivedData: false,
+          }
+        }));
+      } else {
+        console.log(`✅ Device ${deviceKey} responded — ONLINE`);
+      }
+    }
+    
+    // If selected device didn't respond, update connection state
+    const selKey = selectedExternalKeyRef.current;
+    if (selKey) {
+      const lastResponse = lastGetStatResponseTime.current[selKey] || 0;
+      if (lastResponse < (Date.now() - 5000)) {
+        setConnectionState('offline');
+      }
+    }
+    
+    console.log("⚡ Quick status check complete");
+  };
+
   const subscribeToAllDevices = async (client) => {
     if (!client) {
       console.log("⚠️ No client provided");
@@ -667,7 +730,7 @@ export const MqttProvider = ({ children }) => {
           setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: false }));
           setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: 'offline' }));
           
-          if (deviceKey === selectedExternalKey) {
+          if (deviceKey === selectedExternalKeyRef.current) {
             setConnectionState('offline');
           }
         }
@@ -717,8 +780,8 @@ export const MqttProvider = ({ children }) => {
         }
       }));
       
-      // ✅ Check if this is the selected device for UI updates
-      const currentSelectedKey = selectedExternalKey;
+      // ✅ Use ref to avoid stale closure — always get the latest selectedExternalKey
+      const currentSelectedKey = selectedExternalKeyRef.current;
       const isSelected = currentSelectedKey === deviceKey;
       
       console.log(`🔍 Data check - ${deviceKey} is selected: ${isSelected} (selectedExternalKey: ${currentSelectedKey || 'none'})`);
@@ -749,7 +812,7 @@ export const MqttProvider = ({ children }) => {
     } catch (error) {
       console.error(`❌ Error processing data from ${deviceKey}:`, error);
     }
-  }, [selectedExternalKey]);
+  }, []);
 
   // ── Handle Status Response ──
   const handleStatusResponse = useCallback((deviceKey, msgStr) => {
@@ -793,8 +856,8 @@ export const MqttProvider = ({ children }) => {
         setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: isOnline }));
         setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: isOnline ? 'online' : 'offline' }));
         
-        // ✅ Check if this is the selected device for UI updates
-        const currentSelectedKey = selectedExternalKey;
+        // ✅ Use ref to avoid stale closure — always get the latest selectedExternalKey
+        const currentSelectedKey = selectedExternalKeyRef.current;
         const isSelected = currentSelectedKey === deviceKey;
         
         console.log(`🔍 Status check - ${deviceKey} is selected: ${isSelected} (selectedExternalKey: ${currentSelectedKey || 'none'})`);
@@ -807,6 +870,9 @@ export const MqttProvider = ({ children }) => {
             setHasEverBeenOnline(true);
             hasEverBeenOnlineRef.current = true;
           }
+          setHasReceivedData(true);
+          hasReceivedDataRef.current = true;
+          setIsLiveData(true);
         }
         
         delete pendingRequestIds.current[deviceKey];
@@ -816,7 +882,7 @@ export const MqttProvider = ({ children }) => {
     } catch (error) {
       console.error(`❌ Error processing status for ${deviceKey}:`, error);
     }
-  }, [selectedExternalKey]);
+  }, []);
 
   // ── Message Handler ──
   const handleIncomingMessage = useCallback((topic, message) => {
@@ -905,6 +971,7 @@ export const MqttProvider = ({ children }) => {
       updatedSensorData.lastUpdated = now;
       updatedActuatorStatus.lastUpdated = now;
       
+      // ✅ Rebuild devices list only once when actuators changed
       if (hasActuatorUpdate) {
         updatedDevices = Object.entries(updatedActuatorStatus)
           .filter(([key]) => key in DEVICE_CONFIG && key !== 'lastUpdated')
@@ -920,42 +987,7 @@ export const MqttProvider = ({ children }) => {
               category: cfg.category,
             };
           });
-    }
-    
-    if (hasActuatorUpdate) {
-      updatedDevices = Object.entries(updatedActuatorStatus)
-        .filter(([key]) => key in DEVICE_CONFIG && key !== 'lastUpdated')
-        .map(([key, value]) => {
-          const config = DEVICE_CONFIG[key];
-          return {
-            id: key,
-            n: key,
-            vb: value || false,
-            displayName: config.displayName,
-            icon: config.icon,
-            description: config.description,
-            category: config.category,
-          };
-        });
-    }
-    
-    setDevicesData(prev => ({
-      ...prev,
-      [deviceKey]: {
-        ...currentData,
-        sensorData: updatedSensorData,
-        actuatorStatus: updatedActuatorStatus,
-        devices: updatedDevices,
-        deviceStatus: newDeviceStatus,
-        deviceStatusFlags: newDeviceStatusFlags,
-        lastUpdated: new Date(),
-        lastDataReceived: Date.now(),
-        hasReceivedData: true,
-        isLiveData: true,
-        isOnline: newDeviceStatusFlags?.online || false,
       }
-    }
-    ))
       
       return {
         ...prev,
@@ -970,6 +1002,7 @@ export const MqttProvider = ({ children }) => {
           lastDataReceived: Date.now(),
           hasReceivedData: true,
           isLiveData: true,
+          isOnline: newDeviceStatusFlags?.online || false,
         }
       };
     });
@@ -1140,19 +1173,22 @@ export const MqttProvider = ({ children }) => {
 
     console.log("🔧 initializeMqtt called");
     
-    await loadAvailableDevices();
+    // ✅ Use returned devices list instead of stale availableDevices state
+    const devices = await loadAvailableDevices();
     
     const selected = await loadSelectedDevice();
     console.log("📦 Selected device loaded:", selected);
     
-    if (!selected && availableDevices.length > 0) {
-      const firstDevice = availableDevices[0];
-      console.log("🔌 No selected device, auto-selecting first:", firstDevice.id);
-      await selectDevice(firstDevice.id, firstDevice.name);
+    // ✅ Use the returned devices array (not the stale state)
+    if (!selected && devices.length > 0) {
+      // No saved selection — auto-select the last added device
+      const lastDevice = devices[devices.length - 1];
+      console.log("🔌 No selected device, auto-selecting last added:", lastDevice.id);
+      await selectDevice(lastDevice.id, lastDevice.name);
     }
     
     if (selected && !selectedExternalKey) {
-      const device = availableDevices.find(d => d.id === selected.deviceId);
+      const device = devices.find(d => d.id === selected.deviceId);
       if (device && device.external_key) {
         setSelectedExternalKey(device.external_key);
         await AsyncStorage.setItem(STORAGE_KEYS.SELECTED_EXTERNAL_KEY, device.external_key);
@@ -1207,8 +1243,8 @@ export const MqttProvider = ({ children }) => {
         await subscribeToAllDevices(client);
         await new Promise(resolve => setTimeout(resolve, 1000));
         
-        console.log("📡 Requesting status from all devices...");
-        await requestStatusForAllDevices();
+        // ✅ Quick 3-second status check instead of waiting 2 minutes
+        await quickStatusCheck();
       });
 
       client.on("close", () => {
@@ -1235,8 +1271,8 @@ export const MqttProvider = ({ children }) => {
         await subscribeToAllDevices(client);
         await new Promise(resolve => setTimeout(resolve, 1000));
         
-        console.log("📡 Requesting status from all devices...");
-        await requestStatusForAllDevices();
+        // ✅ Quick 3-second status check instead of waiting 2 minutes
+        await quickStatusCheck();
         setIsReady(true);
         setIsInitializing(false);
       }
@@ -1465,23 +1501,15 @@ export const MqttProvider = ({ children }) => {
       return false;
     }
     
-    const payload = buildActuatorPayload(status);
+    const payload = buildActuatorPayload(status, deviceKey);
     const success = await publish(`/messages/${deviceKey}/actuator`, JSON.stringify(payload));
     
     if (success) {
       console.log(`✅ Actuator published to ${deviceKey}`);
-      setDevicesData(prev => ({
-        ...prev,
-        [deviceKey]: {
-          ...prev[deviceKey],
-          actuatorStatus: { ...status, lastUpdated: new Date() },
-        }
-      }));
-      
-      if (deviceKey === selectedExternalKey) {
-        setActuatorStatus({ ...status, lastUpdated: new Date() });
-      }
+      // ✅ Do NOT update actuator state here — wait for GET_STATUS response
     }
+    // ✅ After publishing actuator, request GET_STATUS to get confirmed state from device
+    setTimeout(() => { requestDeviceStatus(deviceKey); }, 1500);
     return success;
   };
 
@@ -1504,10 +1532,12 @@ export const MqttProvider = ({ children }) => {
         }
       }));
       
-      if (deviceKey === selectedExternalKey) {
+      if (deviceKey === selectedExternalKeyRef.current) {
         setCropSettings({ ...settings, lastUpdated: new Date() });
       }
     }
+    // ✅ After publishing settings, request GET_STATUS to get confirmed state
+    setTimeout(() => { requestDeviceStatus(deviceKey); }, 1500);
     return success;
   };
 
@@ -1530,10 +1560,12 @@ export const MqttProvider = ({ children }) => {
         }
       }));
       
-      if (deviceKey === selectedExternalKey) {
+      if (deviceKey === selectedExternalKeyRef.current) {
         setDeviceConfig({ ...config, lastUpdated: new Date() });
       }
     }
+    // ✅ After publishing config, request GET_STATUS to get confirmed state
+    setTimeout(() => { requestDeviceStatus(deviceKey); }, 1500);
     return success;
   };
 
@@ -1613,6 +1645,7 @@ export const MqttProvider = ({ children }) => {
     switchToDevice,
     requestDeviceStatus,
     requestStatusForAllDevices,
+    quickStatusCheck,
     publishActuatorStatus,
     publishSettings,
     publishConfig,
@@ -1688,8 +1721,8 @@ export const MqttProvider = ({ children }) => {
         return false;
       }
       
-      const currentData = devicesData[deviceKey];
-      const currentStatus = currentData?.actuatorStatus || {};
+      const currentData = devicesData[deviceKey] || {};
+      const currentStatus = currentData.actuatorStatus || {};
       
       const updatedStatus = {
         ...currentStatus,
