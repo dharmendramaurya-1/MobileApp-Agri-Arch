@@ -1,5 +1,5 @@
 // app/(main)/devices.jsx — Devices tab
-// Add Device wizard + registered device list (auto-connect)
+// Add Device wizard + registered device list with checkbox selection
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { useEffect, useRef, useState } from "react";
@@ -29,115 +29,36 @@ import {
 
 const { height } = Dimensions.get("window");
 
-// ── Constants ──
-const STATUS_CHECK_TIMEOUT = 5 * 1000; // 5 seconds fallback
-
 // ── Registered device card ───────────────────────────────────────────────────
 function DeviceCard({
   device,
-  isActive,
-  isGloballySelected,
+  isSelected,
   onSelect,
   onDelete,
   theme,
-  connectionStatus,
   isOnline,
-  isStatusChecked,
-  isSelectable,
+  canDelete = true,
 }) {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
 
-  // ── Determine status ──
-  const getStatus = () => {
-    // ✅ Each device has its own independent status
-    if (isStatusChecked) {
-      if (isOnline === true) return "online";
-      if (isOnline === false) return "offline";
-    }
-    
-    if (isGloballySelected && !isStatusChecked) {
-      return "checking";
-    }
-    
-    if (isActive || isGloballySelected) {
-      if (connectionStatus === "connecting") return "connecting";
-      if (connectionStatus === "error") return "error";
-      if (!isStatusChecked) return "checking";
-      return "offline";
-    }
-    return "disconnected";
-  };
+  // ── Determine status (direct — no checking state) ──
+  const isDeviceOnline = isOnline === true;
+  const isDeviceOffline = isOnline === false;
 
-  const status = getStatus();
-  const isDeviceOnline = status === "online";
-  const isDeviceOffline = status === "offline";
-  const isDeviceChecking = status === "checking" || status === "connecting";
-  const isDeviceDisconnected = status === "disconnected";
-
-  const statusConfig = {
-    online: {
-      color: "#4CAF50",
-      bg: "rgba(76,175,80,0.12)",
-      label: "Active",
-      message: "✅ Device is active and receiving data",
-    },
-    offline: {
-      color: "#F44336",
-      bg: "rgba(244,67,54,0.10)",
-      label: "Offline",
-      message: "❌ Device is offline - No data received",
-    },
-    checking: {
-      color: "#FF9800",
-      bg: "rgba(255,152,0,0.14)",
-      label: "Checking…",
-      message: "⏳ Checking device status... (up to 2 min)",
-    },
-    connecting: {
-      color: "#FF9800",
-      bg: "rgba(255,152,0,0.14)",
-      label: "Connecting…",
-      message: "⏳ Connecting to device...",
-    },
-    error: {
-      color: "#F44336",
-      bg: "rgba(244,67,54,0.10)",
-      label: "Error",
-      message: "❌ Connection error",
-    },
-    disconnected: {
-      color: theme.colors.textSecondary,
-      bg: `${theme.colors.textSecondary}16`,
-      label: "Inactive",
-      message: "🔌 Device is not active",
-    },
-  }[status];
+  const statusConfig = isDeviceOnline
+    ? { color: "#4CAF50", bg: "rgba(76,175,80,0.12)", label: "Online" }
+    : { color: "#F44336", bg: "rgba(244,67,54,0.10)", label: "Offline" };
 
   const handleSelect = () => {
-    if (!isSelectable) {
-      if (isDeviceOffline) {
-        Alert.alert(
-          "⚠️ Device Offline",
-          `${device.name || "Device"} is currently OFFLINE.\n\nPlease check the device connection and try again.`,
-          [{ text: "OK" }]
-        );
-      } else if (isDeviceChecking) {
-        Alert.alert(
-          "⏳ Checking Status",
-          `Status is still being checked for ${device.name || "Device"}.\n\nPlease wait a moment and try again.`,
-          [{ text: "OK" }]
-        );
-      } else {
-        Alert.alert(
-          "⚠️ Device Not Ready",
-          `${device.name || "Device"} is not ready to be selected.\n\nPlease check the device connection.`,
-          [{ text: "OK" }]
-        );
-      }
+    if (isDeviceOffline) {
+      Alert.alert(
+        "⚠️ Device Offline",
+        `${device.name || "Device"} is currently OFFLINE.\n\nPlease check the device connection.`,
+        [{ text: "OK" }]
+      );
       return;
     }
-    
     onSelect(device);
   };
 
@@ -158,41 +79,53 @@ function DeviceCard({
     : `${typeLabel} · ID ${device.id?.slice(0, 8) || "—"}`;
 
   const getCardBorderColor = () => {
-    if (isGloballySelected && isDeviceOnline) {
-      return "#4CAF50";
-    }
-    if (isActive) {
-      return theme.colors.primary;
-    }
-    if (isDeviceOffline && isStatusChecked) {
-      return "#F4433644";
-    }
-    if (isDeviceDisconnected) {
-      return theme.colors.border;
-    }
+    if (isSelected) return theme.colors.primary;
+    if (isDeviceOnline) return "#4CAF50";
+    if (isDeviceOffline) return "#F4433644";
     return theme.colors.border;
   };
 
-  const cardOpacity = (isDeviceOffline && isStatusChecked) || isDeviceDisconnected ? 0.7 : 1;
+  const cardOpacity = isDeviceOffline ? 0.7 : 1;
 
   return (
     <>
       <TouchableOpacity
         style={[
           styles.deviceCard,
-          isGloballySelected && isDeviceOnline && styles.deviceCardGloballySelected,
-          isActive && styles.deviceCardActive,
+          isSelected && styles.deviceCardSelected,
           {
             backgroundColor: theme.colors.surface,
             borderColor: getCardBorderColor(),
-            borderLeftColor: isGloballySelected && isDeviceOnline ? "#4CAF50" : (isActive ? theme.colors.primary : theme.colors.border),
+            borderLeftColor: isSelected
+              ? theme.colors.primary
+              : isDeviceOnline
+              ? "#4CAF50"
+              : theme.colors.border,
             opacity: cardOpacity,
           },
         ]}
         activeOpacity={0.85}
         onPress={handleSelect}
       >
-        <View style={styles.cardHeader}>
+        <View style={styles.cardBody}>
+          {/* Checkbox */}
+          <TouchableOpacity
+            style={[
+              styles.checkbox,
+              {
+                borderColor: isSelected ? theme.colors.primary : theme.colors.border,
+                backgroundColor: isSelected ? theme.colors.primary : "transparent",
+              },
+            ]}
+            onPress={handleSelect}
+            activeOpacity={0.7}
+          >
+            {isSelected && (
+              <Ionicons name="checkmark" size={16} color="#FFF" />
+            )}
+          </TouchableOpacity>
+
+          {/* Device Icon */}
           <View
             style={[
               styles.iconChip,
@@ -221,40 +154,6 @@ function DeviceCard({
               >
                 {device.name || "Unnamed Device"}
               </Text>
-              {isGloballySelected && isDeviceOnline && (
-                <View style={[styles.globalPill, { backgroundColor: "#4CAF50" }]}>
-                  <Ionicons name="globe-outline" size={10} color="#FFF" />
-                  <Text style={styles.globalPillText}>GLOBAL</Text>
-                </View>
-              )}
-              {isGloballySelected && !isDeviceOnline && isStatusChecked && (
-                <View style={[styles.globalPill, { backgroundColor: "#FF9800" }]}>
-                  <Ionicons name="globe-outline" size={10} color="#FFF" />
-                  <Text style={styles.globalPillText}>SELECTED</Text>
-                </View>
-              )}
-              {isActive && !isGloballySelected && (
-                <View
-                  style={[
-                    styles.activePill,
-                    { backgroundColor: isDeviceOnline ? "#4CAF50" : theme.colors.primary },
-                  ]}
-                >
-                  <Text style={styles.activePillText}>ACTIVE</Text>
-                </View>
-              )}
-              {isDeviceOffline && isStatusChecked && (
-                <View style={[styles.offlinePill, { backgroundColor: "#F44336" }]}>
-                  <Ionicons name="wifi-outline" size={10} color="#FFF" />
-                  <Text style={styles.offlinePillText}>OFFLINE</Text>
-                </View>
-              )}
-              {isDeviceDisconnected && (
-                <View style={[styles.offlinePill, { backgroundColor: "#757575" }]}>
-                  <Ionicons name="wifi-outline" size={10} color="#FFF" />
-                  <Text style={[styles.offlinePillText, { color: "#FFF" }]}>INACTIVE</Text>
-                </View>
-              )}
             </View>
             <Text
               style={[styles.metaLine, { color: theme.colors.textSecondary }]}
@@ -264,33 +163,22 @@ function DeviceCard({
             </Text>
           </View>
 
-          <View style={[styles.statusPill, { backgroundColor: statusConfig.bg }]}>
-            {status === "checking" || status === "connecting" ? (
-              <ActivityIndicator size={9} color={statusConfig.color} />
-            ) : (
-              <View style={[styles.statusDot, { backgroundColor: statusConfig.color }]} />
-            )}
-            <Text style={[styles.statusPillText, { color: statusConfig.color }]}>
-              {statusConfig.label}
-            </Text>
+          <View style={[styles.statusBadge, { backgroundColor: statusConfig.bg }]}>
+            <View style={[styles.statusDot, { backgroundColor: statusConfig.color }]} />
+            <Text style={[styles.statusBadgeText, { color: statusConfig.color }]}>{statusConfig.label}</Text>
           </View>
-        </View>
-
-        <View style={styles.statusMessageContainer}>
-          <Text style={[styles.statusMessage, { color: theme.colors.textSecondary }]}>
-            {statusConfig.message}
-          </Text>
         </View>
 
         <View style={styles.cardFooter}>
           <TouchableOpacity
-            style={[styles.deleteBtn, { borderColor: theme.colors.border }]}
-            onPress={() => setShowDeleteModal(true)}
+            style={[styles.deleteBtn, { borderColor: canDelete ? theme.colors.border : theme.colors.border + "30", opacity: canDelete ? 1 : 0.4 }]}
+            onPress={() => canDelete && setShowDeleteModal(true)}
             activeOpacity={0.7}
+            disabled={!canDelete}
             accessibilityRole="button"
             accessibilityLabel={`Delete ${device.name || "device"}`}
-          >
-            <Ionicons name="trash-outline" size={16} color="#F44336" />
+          >              <Ionicons name="trash-outline" size={14} color="#F44336" />
+            <Text style={[styles.deleteBtnText, { color: "#F44336" }]}>Delete</Text>
           </TouchableOpacity>
         </View>
       </TouchableOpacity>
@@ -401,48 +289,22 @@ export default function Devices() {
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
   const {
-    connectionState,
-    isLiveData,
-    forceReconnect,
-    switchToDevice,
     deviceOnlineStatus,
-    requestStatusForAllDevices,
     quickStatusCheck,
+    checkSingleDeviceStatus,
     selectDevice,
     selectedDeviceId,
-    selectedDeviceName,
     selectedExternalKey,
-    hasReceivedData,
   } = useMqtt();
 
   const { deleteThing } = useAuth();
 
   const [registeredDevices, setRegisteredDevices] = useState([]);
   const [loadingDevices, setLoadingDevices] = useState(true);
-  const [activeDevice, setActiveDeviceState] = useState(null);
+  const [selectedDevice, setSelectedDevice] = useState(null);
   const [showAddWizard, setShowAddWizard] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [statusCheckDone, setStatusCheckDone] = useState(false);
-  const [statusCheckedDevices, setStatusCheckedDevices] = useState({});
-  const [checkingTimeout, setCheckingTimeout] = useState(null);
-
-  // ── Helper to get device online status ──
-  const getDeviceOnlineStatus = (deviceId, externalKey) => {
-    if (externalKey && deviceOnlineStatus && deviceOnlineStatus[externalKey] !== undefined) {
-      return deviceOnlineStatus[externalKey];
-    }
-    if (deviceOnlineStatus && deviceOnlineStatus[deviceId] !== undefined) {
-      return deviceOnlineStatus[deviceId];
-    }
-    return null;
-  };
-
-  // ── Check if device is selectable ──
-  const isDeviceSelectable = (deviceId, externalKey) => {
-    const isChecked = statusCheckedDevices[deviceId] === true || statusCheckedDevices[externalKey] === true;
-    const isOnline = getDeviceOnlineStatus(deviceId, externalKey);
-    return isChecked && isOnline === true;
-  };
+  const isDeletingRef = useRef(false);
 
   // ── Load registered devices ──
   const loadDevices = async () => {
@@ -452,63 +314,34 @@ export default function Devices() {
       if (allThings && allThings.length > 0) {
         setRegisteredDevices(allThings);
 
-        let selectedExists = false;
-        let selectedThing = null;
-
+        // Restore selected device from context
         if (selectedExternalKey) {
-          selectedThing = allThings.find((t) => t.external_key === selectedExternalKey);
-          if (selectedThing) {
-            selectedExists = true;
-            setActiveDeviceState(selectedThing);
+          const thing = allThings.find((t) => t.external_key === selectedExternalKey);
+          if (thing) {
+            setSelectedDevice(thing);
           }
-        }
-
-        if (!selectedExists && selectedDeviceId) {
-          selectedThing = allThings.find((t) => t.id === selectedDeviceId);
-          if (selectedThing) {
-            selectedExists = true;
-            setActiveDeviceState(selectedThing);
+        } else if (selectedDeviceId) {
+          const thing = allThings.find((t) => t.id === selectedDeviceId);
+          if (thing) {
+            setSelectedDevice(thing);
           }
-        }
-
-        if (!selectedExists || !selectedExternalKey) {
+        } else {
           const active = await getActiveDevice();
-          let deviceToSelect = null;
-
           if (active && active.publisherId) {
-            const activeThing = allThings.find((t) => t.id === active.publisherId);
-            if (activeThing) {
-              deviceToSelect = activeThing;
+            const thing = allThings.find((t) => t.id === active.publisherId);
+            if (thing) {
+              setSelectedDevice(thing);
+              await selectDevice(thing.id, thing.name);
             }
-          }
-
-          if (!deviceToSelect) {
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            for (const thing of allThings) {
-              const isOnline = getDeviceOnlineStatus(thing.id, thing.external_key);
-              if (isOnline === true) {
-                deviceToSelect = thing;
-                break;
-              }
-            }
-            if (!deviceToSelect && allThings.length > 0) {
-              deviceToSelect = allThings[0];
-            }
-          }
-
-          if (deviceToSelect) {
-            await selectDevice(deviceToSelect.id, deviceToSelect.name);
-            setActiveDeviceState(deviceToSelect);
           }
         }
 
         setTimeout(() => {
           quickStatusCheck();
         }, 1500);
-
       } else {
         setRegisteredDevices([]);
-        setActiveDeviceState(null);
+        setSelectedDevice(null);
       }
     } catch (error) {
       console.error("Error loading devices:", error);
@@ -523,125 +356,43 @@ export default function Devices() {
     loadDevices();
   }, []);
 
-  // ── Status check timeout (2 minutes) ──
+  // ── Auto-switch: when selected device goes offline, pick next online device ──
   useEffect(() => {
-    if (!loadingDevices && registeredDevices.length > 0) {
-      if (checkingTimeout) {
-        clearTimeout(checkingTimeout);
-      }
+    if (!selectedDevice || !registeredDevices.length || !deviceOnlineStatus || isDeletingRef.current) return;
 
-      const timeout = setTimeout(() => {
-        const checked = { ...statusCheckedDevices };
-        let hasNewCheck = false;
+    const wasOnline = deviceOnlineStatus[selectedDevice.external_key] || deviceOnlineStatus[selectedDevice.id];
 
-        registeredDevices.forEach((device) => {
-          const deviceId = device.id;
-          const extKey = device.external_key;
-          if (!checked[deviceId] && !checked[extKey]) {
-            const isOnline = getDeviceOnlineStatus(deviceId, extKey);
-            if (isOnline !== null) {
-              checked[deviceId] = true;
-              checked[extKey] = true;
-              hasNewCheck = true;
-              console.log(`✅ Device ${extKey} marked as checked (status: ${isOnline})`);
-            }
-          }
-        });
+    if (wasOnline === false) {
+      // Selected device is now offline — find next online device
+      const nextOnline = registeredDevices.find((d) => {
+        if (d.id === selectedDevice.id) return false;
+        return deviceOnlineStatus[d.external_key] === true || deviceOnlineStatus[d.id] === true;
+      });
 
-        if (hasNewCheck) {
-          setStatusCheckedDevices(checked);
-          
-          const allChecked = registeredDevices.every((device) => 
-            checked[device.id] === true || checked[device.external_key] === true
-          );
-          
-          if (allChecked) {
-            setStatusCheckDone(true);
-            console.log("✅ All devices status checked");
-          }
-        }
-      }, STATUS_CHECK_TIMEOUT);
-
-      setCheckingTimeout(timeout);
-      return () => clearTimeout(timeout);
-    }
-  }, [loadingDevices, registeredDevices]);
-
-  // ── Auto-select online device ──
-  const autoSelectOnlineDevice = async () => {
-    if (selectedExternalKey || selectedDeviceId) return;
-
-    for (const device of registeredDevices) {
-      const isOnline = getDeviceOnlineStatus(device.id, device.external_key);
-      if (isOnline === true) {
-        console.log(`🤖 Auto-selecting online device: ${device.name}`);
-        await selectDevice(device.id, device.name);
-        setActiveDeviceState(device);
-        return;
+      if (nextOnline) {
+        console.log(`🔄 Selected device went offline, switching to ${nextOnline.name || nextOnline.external_key}`);
+        selectDevice(nextOnline.id, nextOnline.name)
+          .then(() => setSelectedDevice(nextOnline))
+          .catch((err) => console.error("Auto-switch failed:", err));
+      } else {
+        console.log("⚠️ No online devices available, clearing selection");
+        setSelectedDevice(null);
       }
     }
-  };
+  }, [deviceOnlineStatus]);
 
-  // ── Mark device as checked when status is received ──
-  useEffect(() => {
-    if (deviceOnlineStatus) {
-      const checked = { ...statusCheckedDevices };
-      let hasNewCheck = false;
-
-      for (const key of Object.keys(deviceOnlineStatus)) {
-        const device = registeredDevices.find(d => d.external_key === key || d.id === key);
-        if (device) {
-          if (!checked[device.id]) {
-            checked[device.id] = true;
-            hasNewCheck = true;
-          }
-          if (!checked[device.external_key]) {
-            checked[device.external_key] = true;
-            hasNewCheck = true;
-          }
-          console.log(`✅ Device ${device.external_key} marked as checked via status response`);
-        }
-      }
-
-      if (hasNewCheck) {
-        setStatusCheckedDevices(checked);
-        
-        const allChecked = registeredDevices.length > 0 && registeredDevices.every((device) => 
-          checked[device.id] === true || checked[device.external_key] === true
-        );
-        
-        if (allChecked) {
-          if (checkingTimeout) {
-            clearTimeout(checkingTimeout);
-            setCheckingTimeout(null);
-          }
-          setStatusCheckDone(true);
-          console.log("✅ All devices status checked via responses");
-
-          if (!selectedExternalKey && !selectedDeviceId) {
-            autoSelectOnlineDevice();
-          }
-        }
-      }
-    }
-  }, [deviceOnlineStatus, registeredDevices.length]);
-
-  // ── Select/Activate a device ──
+  // ── Handle device selection (checkbox) ──
   const handleSelectDevice = async (device) => {
-    if (selectedExternalKey === device.external_key) {
+    if (selectedDevice?.id === device.id) {
       return;
     }
 
-    console.log(`🔌 Selecting device for global control: ${device.id} (${device.name})`);
-    console.log(`   External key: ${device.external_key}`);
+    const isOnline = deviceOnlineStatus?.[device.external_key] || deviceOnlineStatus?.[device.id];
 
-    const isOnline = getDeviceOnlineStatus(device.id, device.external_key);
-    const isChecked = statusCheckedDevices[device.id] === true || statusCheckedDevices[device.external_key] === true;
-
-    if (!isChecked || isOnline !== true) {
+    if (isOnline !== true) {
       Alert.alert(
-        "⚠️ Device Not Available",
-        `${device.name || "Device"} is not in an active state.\n\nPlease check the device connection and try again.`,
+        "⚠️ Device Offline",
+        `${device.name || "Device"} is currently OFFLINE.\n\nPlease check the device connection.`,
         [{ text: "OK" }]
       );
       return;
@@ -649,13 +400,7 @@ export default function Devices() {
 
     try {
       await selectDevice(device.id, device.name);
-      setActiveDeviceState(device);
-
-      Alert.alert(
-        "✅ Device Selected",
-        `${device.name || "Device"} is now the GLOBAL device.\n\nAll controls and data will use this device.`,
-        [{ text: "OK" }]
-      );
+      setSelectedDevice(device);
     } catch (error) {
       console.error("Error selecting device:", error);
       Alert.alert("Error", `Failed to select ${device.name}. Please try again.`);
@@ -665,39 +410,39 @@ export default function Devices() {
   // ── Delete a registered device ──
   const handleDeleteDevice = async (device) => {
     try {
-      console.log(`🗑️ Attempting to delete device: ${device.id}`);
-
+      isDeletingRef.current = true;
       const result = await deleteThing(device.id);
 
       if (result && result.success) {
+        // Remove from local state directly — do NOT call loadDevices() or quickStatusCheck()
+        // to avoid breaking MQTT connections for other devices
+        const remaining = registeredDevices.filter((d) => d.id !== device.id);
+        setRegisteredDevices(remaining);
+
+        // If deleted device was selected, switch to next online device without reconnecting MQTT
+        if (selectedDevice?.id === device.id) {
+          const nextOnline = remaining.find((d) => {
+            const isDvOnline = deviceOnlineStatus?.[d.external_key] || deviceOnlineStatus?.[d.id];
+            return isDvOnline === true;
+          });
+
+          if (nextOnline) {
+            // Just update local state — selectDevice only updates context state, no MQTT reconnect
+            await selectDevice(nextOnline.id, nextOnline.name);
+            setSelectedDevice(nextOnline);
+          } else {
+            setSelectedDevice(null);
+          }
+        }
+
+        isDeletingRef.current = false;
         Alert.alert(
           "✅ Device Deleted",
           `${device.name || "Device"} has been deleted successfully.`,
-          [
-            {
-              text: "OK",
-              onPress: () => {
-                loadDevices();
-                if (selectedExternalKey === device.external_key || selectedDeviceId === device.id) {
-                  const remaining = registeredDevices.filter(d => d.id !== device.id);
-                  if (remaining.length > 0) {
-                    for (const d of remaining) {
-                      const isOnline = getDeviceOnlineStatus(d.id, d.external_key);
-                      if (isOnline === true) {
-                        selectDevice(d.id, d.name);
-                        setActiveDeviceState(d);
-                        return;
-                      }
-                    }
-                    selectDevice(remaining[0].id, remaining[0].name);
-                    setActiveDeviceState(remaining[0]);
-                  }
-                }
-              },
-            },
-          ]
+          [{ text: "OK" }]
         );
       } else {
+        isDeletingRef.current = false;
         Alert.alert(
           "❌ Deletion Failed",
           `Failed to delete ${device.name || "device"}. ${result?.error || "Please try again."}`
@@ -705,6 +450,7 @@ export default function Devices() {
       }
     } catch (error) {
       console.error("Error deleting device:", error);
+      isDeletingRef.current = false;
       Alert.alert(
         "❌ Error",
         `An error occurred while deleting ${device.name || "device"}. Please try again.`
@@ -717,42 +463,31 @@ export default function Devices() {
     setShowAddWizard(false);
     await loadDevices();
 
+    // Only auto-select the new device if it's online
     if (device?.id && device?.externalKey) {
-      try {
-        await selectDevice(device.id, device.name);
-        setActiveDeviceState(device);
-      } catch (error) {
-        console.error("Auto-connect to new device failed:", error);
+      // Check ONLY this new device — subscribe + get_stat + wait 2s
+      const isOnline = await checkSingleDeviceStatus(device.externalKey);
+
+      if (isOnline === true) {
+        try {
+          await selectDevice(device.id, device.name);
+          setSelectedDevice(device);
+        } catch (error) {
+          console.error("Auto-connect to new device failed:", error);
+        }
       }
+      // If offline, keep previous selection unchanged
     }
-    setStatusCheckDone(false);
-    setStatusCheckedDevices({});
   };
 
   // ── Refresh ──
   const onRefresh = async () => {
     setRefreshing(true);
-    setStatusCheckDone(false);
-    setStatusCheckedDevices({});
-
-    if (checkingTimeout) {
-      clearTimeout(checkingTimeout);
-      setCheckingTimeout(null);
-    }
-
     await loadDevices();
 
     setTimeout(() => {
       quickStatusCheck();
     }, 1500);
-  };
-
-  // ── Get device connection status ──
-  const getDeviceConnectionStatus = (deviceId, externalKey) => {
-    if (selectedExternalKey === externalKey || selectedDeviceId === deviceId) {
-      return connectionState || "offline";
-    }
-    return "disconnected";
   };
 
   const openAddWizard = () => setShowAddWizard(true);
@@ -827,64 +562,43 @@ export default function Devices() {
         ) : (
           <>
             <View style={styles.sectionHeader}>
-              <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
-                My Devices
-              </Text>
-              <View style={[styles.countBadge, { backgroundColor: `${primary}1A` }]}>
-                <Text style={[styles.countBadgeText, { color: primary }]}>
-                  {registeredDevices.length}
+              <View style={styles.sectionHeaderLeft}>
+                <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+                  My Devices
                 </Text>
+                <View style={[styles.countBadge, { backgroundColor: `${primary}1A` }]}>
+                  <Text style={[styles.countBadgeText, { color: primary }]}>
+                    {registeredDevices.length}
+                  </Text>
+                </View>
               </View>
+              {selectedDevice && (
+                <View style={[styles.selectionInfo, { backgroundColor: `${primary}12` }]}>
+                  <Ionicons name="checkmark-circle" size={14} color={primary} />
+                  <Text style={[styles.selectionInfoText, { color: primary }]}>Selected</Text>
+                </View>
+              )}
             </View>
 
-            {/* {selectedDeviceName && selectedExternalKey && (
-              <View style={[styles.activeIndicator, { backgroundColor: `${primary}0D` }]}>
-                <Ionicons name="checkmark-circle" size={16} color={primary} />
-                <Text style={[styles.activeIndicatorText, { color: theme.colors.text }]}>
-                  Global Device: {selectedDeviceName} ({selectedExternalKey})
-                </Text>
-              </View>
-            )} */}
-
-            {/* <View style={[styles.infoBanner, { backgroundColor: `${theme.colors.textSecondary}0D` }]}>
-              <Ionicons name="information-circle" size={16} color={theme.colors.textSecondary} />
-              <Text style={[styles.infoBannerText, { color: theme.colors.textSecondary }]}>
-                💡 Each device shows its own <Text style={{ fontWeight: "700", color: "#4CAF50" }}>Active</Text> status based on data reception.
-              </Text>
-            </View> */}
-
             {registeredDevices.map((item) => {
-              const isGloballySelected = selectedExternalKey === item.external_key;
-              const isActive = activeDevice?.id === item.id;
-              const isOnline = getDeviceOnlineStatus(item.id, item.external_key);
-              const isChecked = statusCheckedDevices[item.id] === true || statusCheckedDevices[item.external_key] === true;
-              const isSelectable = isDeviceSelectable(item.id, item.external_key);
+              const isSelected = selectedDevice?.id === item.id;
+              const isOnline = deviceOnlineStatus?.[item.external_key] || deviceOnlineStatus?.[item.id];
 
               return (
                 <DeviceCard
                   key={item.id}
                   device={item}
-                  isActive={isActive}
-                  isGloballySelected={isGloballySelected}
+                  isSelected={isSelected}
                   onSelect={handleSelectDevice}
                   onDelete={handleDeleteDevice}
                   theme={theme}
-                  connectionStatus={getDeviceConnectionStatus(item.id, item.external_key)}
                   isOnline={isOnline}
-                  isStatusChecked={isChecked}
-                  isSelectable={isSelectable}
+                  canDelete={registeredDevices.length > 1 || !isSelected}
                 />
               );
             })}
 
-            {!statusCheckDone && (
-              <View style={[styles.infoBanner, { backgroundColor: `${theme.colors.textSecondary}0D` }]}>
-                <ActivityIndicator size="small" color={theme.colors.primary} />
-                <Text style={[styles.infoBannerText, { color: theme.colors.textSecondary }]}>
-                  Checking device status... This may take up to 2 minutes.
-                </Text>
-              </View>
-            )}
+
           </>
         )}
       </ScrollView>
@@ -965,12 +679,18 @@ const styles = StyleSheet.create({
   },
   emptyButtonText: { color: "#FFF", fontSize: 16, fontWeight: "700" },
 
+  // Section Header
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     marginTop: 8,
     marginBottom: 12,
+  },
+  sectionHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   sectionTitle: {
     fontSize: 18,
@@ -986,124 +706,110 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   countBadgeText: { fontSize: 13, fontWeight: "700" },
-
-  activeIndicator: {
+  selectionInfo: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    padding: 10,
-    borderRadius: 10,
-    marginBottom: 12,
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
   },
-  activeIndicatorText: {
-    fontSize: 13,
-    fontWeight: "600",
-  },
+  selectionInfoText: { fontSize: 12, fontWeight: "600" },
 
+  // Device Card
   deviceCard: {
-    borderRadius: 18,
+    borderRadius: 16,
     padding: 14,
-    paddingLeft: 15,
-    marginBottom: 12,
+    paddingLeft: 14,
+    marginBottom: 10,
     borderWidth: 1,
+    borderLeftWidth: 4,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  deviceCardSelected: {
+    shadowColor: "#2196F3",
+    shadowOpacity: 0.12,
     shadowRadius: 10,
-    elevation: 3,
+    elevation: 4,
   },
-  deviceCardActive: {
-    borderLeftWidth: 4,
-    paddingLeft: 12,
-  },
-  deviceCardGloballySelected: {
-    borderLeftWidth: 4,
-    paddingLeft: 12,
-    borderLeftColor: "#4CAF50",
-    shadowColor: "#4CAF50",
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 6,
-  },
-  cardHeader: {
+  cardBody: {
     flexDirection: "row",
     alignItems: "center",
   },
+
+  // Checkbox
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+  },
+
+  // Icon
   iconChip: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     borderWidth: 1,
     justifyContent: "center",
     alignItems: "center",
-    marginRight: 12,
+    marginRight: 10,
   },
-  cardInfo: { flex: 1, marginRight: 8 },
-  nameRow: { flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" },
-  deviceName: { fontSize: 16, fontWeight: "700", flexShrink: 1 },
-  activePill: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  activePillText: { color: "#FFF", fontSize: 9, fontWeight: "800", letterSpacing: 0.5 },
-  globalPill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  globalPillText: { color: "#FFF", fontSize: 8, fontWeight: "800", letterSpacing: 0.3 },
-  offlinePill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  offlinePillText: { color: "#FFF", fontSize: 8, fontWeight: "800", letterSpacing: 0.3 },
-  metaLine: {
-    fontSize: 11.5,
-    marginTop: 3,
-    fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
-  },
-  statusPill: {
+
+  // Card Info
+  cardInfo: { flex: 1 },
+  nameRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 14,
   },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
-  statusPillText: { fontSize: 11, fontWeight: "700" },
+  deviceName: { fontSize: 15, fontWeight: "700", flexShrink: 1 },
+  metaLine: {
+    fontSize: 11,
+    marginTop: 2,
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
+  },
 
-  statusMessageContainer: {
-    marginTop: 8,
+  // Status Badge
+  statusBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 9,
     paddingVertical: 4,
+    borderRadius: 12,
+    marginLeft: 6,
   },
-  statusMessage: {
-    fontSize: 13,
-    fontWeight: "500",
-  },
+  statusDot: { width: 7, height: 7, borderRadius: 4 },
+  statusBadgeText: { fontSize: 10, fontWeight: "700" },
 
+  // Card Footer
   cardFooter: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
-    marginTop: 8,
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(0,0,0,0.05)",
   },
   deleteBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    borderWidth: 1,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
   },
+  deleteBtnText: { fontSize: 11, fontWeight: "600" },
 
   infoBanner: {
     flexDirection: "row",

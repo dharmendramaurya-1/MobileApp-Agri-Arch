@@ -158,15 +158,6 @@ export default function Dashboard() {
 
   // ✅ Log for debugging
   useEffect(() => {
-    console.log("📊 Dashboard - Selected Device ID:", selectedDeviceId);
-    console.log("📊 Dashboard - Selected External Key:", selectedExternalKey);
-    console.log("📊 Dashboard - Device Name:", selectedDeviceName);
-    console.log("📊 Dashboard - Sensor Data:", sensorData);
-    console.log("📊 Dashboard - Actuator Status:", actuatorStatus);
-    console.log("📊 Dashboard - Is Online:", isDeviceOnlineFromContext);
-    console.log("📊 Dashboard - Connection State:", connectionState);
-    console.log("📊 Dashboard - isLiveData:", isLiveData);
-    console.log("📊 Dashboard - hasReceivedData:", hasReceivedData);
   }, [selectedDeviceId, selectedExternalKey, selectedDeviceName, sensorData, actuatorStatus, isDeviceOnlineFromContext, connectionState, isLiveData, hasReceivedData]);
 
   // ✅ System Mode Context

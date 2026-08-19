@@ -57,10 +57,10 @@ export default function SensorDetailScreen({
   const liveValue = sensorData[config.dataKey];
 
   // ✅ Get the selected device's publisher ID (thing ID) and external key
-  const getDevicePublisherAndKey = useCallback(() => {
-    const selectedDevId = getSelectedDeviceId();
-    const selectedExtKey = getSelectedExternalKey();
+  const selectedDevId = getSelectedDeviceId();
+  const selectedExtKey = getSelectedExternalKey();
 
+  const getDevicePublisherAndKey = useCallback(() => {
     // If we have a selected device, find its thing ID from availableDevices
     if (selectedDevId && availableDevices) {
       const device = availableDevices.find(d => d.id === selectedDevId);
@@ -77,7 +77,7 @@ export default function SensorDetailScreen({
       publisherId: selectedDevId,
       externalKey: selectedExtKey,
     };
-  }, [getSelectedDeviceId, getSelectedExternalKey, availableDevices]);
+  }, [selectedDevId, selectedExtKey, availableDevices]);
 
   // ✅ Get the sensor name for the API - use apiName from config
   const getSensorName = () => {
@@ -142,20 +142,29 @@ export default function SensorDetailScreen({
 
   // Compute the from/to window for the selected time range
   const getTimeWindow = useCallback(() => {
-    const days = RANGE_DAYS[timeRange] || 7;
-    const to = Date.now();
-    const from = to - days * 24 * 60 * 60 * 1000;
-    return { from, to };
-  }, [timeRange]);
+  const days = RANGE_DAYS[timeRange] || 7;
+
+  const toMs = Date.now();
+  const fromMs = toMs - days * 24 * 60 * 60 * 1000;
+
+  // Mainflux expects nanoseconds
+  const from = fromMs * 1_000_000;
+  const to = toMs * 1_000_000;
+
+  return { from, to };
+}, [timeRange]);
 
   // Fetch one page of the historical table
-  console.log("sensor keys", getSensorName())
   const fetchTablePage = useCallback(
     async (page) => {
       setIsTableLoading(true);
       try {
         const { from, to } = getTimeWindow();
         const { publisherId, externalKey } = getDevicePublisherAndKey();
+        
+        console.log(`📡 fetchTablePage: page=${page}, sensor=${getSensorName()}, publisher=${publisherId}, extKey=${externalKey}`);
+        console.log(`   Time range: ${new Date(from).toLocaleString()} → ${new Date(to).toLocaleString()}`);
+        
         const result = await fetchSensorHistorical({
           sensorKey: getSensorName(),
           from,
@@ -166,6 +175,7 @@ export default function SensorDetailScreen({
           externalKey,
         });
 
+        console.log(`📊 Result: ${result.data.length} rows, total=${result.total}, page=${page}, sensor=${getSensorName()}, success=${result.success}`);
         if (result.success) {
           setTableData(result.data);
           setTableTotal(result.total);
@@ -215,12 +225,12 @@ export default function SensorDetailScreen({
     }
   }, [getTimeWindow, getDevicePublisherAndKey]);
 
-  // Fetch data when the sensor or time range changes
+  // Fetch data when the sensor, time range, or selected device changes
   useEffect(() => {
     fetchTablePage(1);
     fetchGraphData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.dataKey, timeRange]);
+  }, [config.dataKey, timeRange, selectedDevId, selectedExtKey]);
 
   // Format data for display
   const formatValue = (value) => {

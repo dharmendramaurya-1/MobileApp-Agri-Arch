@@ -59,8 +59,6 @@ const getProfileId = async () => {
       },
     });
 
-    console.log("📡 Profiles response:", response.status);
-
     if (
       response.data &&
       response.data.profiles &&

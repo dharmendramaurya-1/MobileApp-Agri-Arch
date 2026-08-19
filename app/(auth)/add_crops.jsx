@@ -24,6 +24,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import SliderControl from "../../components/SettingsSlider";
 import { useAuth } from "../../src/context/AuthContext"; // ✅ Import useAuth
 import { useMqtt } from "../../src/context/MqttContext";
+import { useSystemMode } from "../../src/context/SystemModeContext";
 import { useTheme } from "../../src/context/ThemContext";
 import {
   getAllCrops,
@@ -138,6 +139,7 @@ export default function AddCrops() {
     deviceStatusFlags,
   } = useMqtt();
   const { resetSignupFlow } = useAuth(); // ✅ Get resetSignupFlow from AuthContext
+  const { isAutoMode, isManualMode } = useSystemMode();
 
   // Wizard step: 'crop' -> 'variety' -> 'stage' -> 'details'
   const [step, setStep] = useState("crop");
@@ -839,22 +841,34 @@ export default function AddCrops() {
           </View>
         </View>
 
+        {/* Auto Mode Banner */}
+        {isAutoMode && (
+          <View style={[styles.autoModeBanner, { backgroundColor: "rgba(255,152,0,0.08)", borderColor: "rgba(255,152,0,0.2)" }]}>
+            <Ionicons name="lock-closed-outline" size={18} color="#FF9800" />
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.autoModeBannerTitle, { color: "#E65100" }]}>Auto Mode Active</Text>
+              <Text style={[styles.autoModeBannerText, { color: "#F57C00" }]}>Settings are managed automatically. Switch to Manual mode to customize.</Text>
+            </View>
+          </View>
+        )}
+
         {/* Customize + Preview */}
         <View style={styles.actionContainer}>
           <TouchableOpacity
-            style={[styles.actionButton, { shadowColor: "#E65100" }]}
-            onPress={() => setShowCustomizeModal(true)}
+            style={[styles.actionButton, { shadowColor: "#E65100", opacity: isAutoMode ? 0.5 : 1 }]}
+            onPress={() => !isAutoMode && setShowCustomizeModal(true)}
             activeOpacity={0.85}
+            disabled={isAutoMode}
             accessibilityRole="button"
           >
             <LinearGradient
-              colors={["#FFB300", "#F57C00"]}
+              colors={isAutoMode ? ["#BDBDBD", "#9E9E9E"] : ["#FFB300", "#F57C00"]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
               style={styles.actionGradient}
             >
-              <Ionicons name="settings-outline" size={18} color="#fff" />
-              <Text style={styles.actionButtonText}>Customize</Text>
+              <Ionicons name={isAutoMode ? "lock-closed-outline" : "settings-outline"} size={18} color="#fff" />
+              <Text style={styles.actionButtonText}>{isAutoMode ? "Locked" : "Customize"}</Text>
             </LinearGradient>
           </TouchableOpacity>
 
@@ -880,16 +894,17 @@ export default function AddCrops() {
         <TouchableOpacity
           style={[
             styles.publishBtn,
-            isConnected ? { shadowColor: primaryDark } : null,
+            (isConnected && isManualMode) ? { shadowColor: primaryDark } : null,
+            isAutoMode && { opacity: 0.5 },
           ]}
           onPress={handlePublish}
-          disabled={!isConnected || isSubmitting}
+          disabled={!isConnected || isSubmitting || isAutoMode}
           activeOpacity={0.85}
           accessibilityRole="button"
         >
           <LinearGradient
             colors={
-              isConnected
+              isConnected && isManualMode
                 ? [primary, primaryDark]
                 : ["#9E9E9E", "#757575"]
             }
@@ -901,9 +916,9 @@ export default function AddCrops() {
               <ActivityIndicator color="#fff" />
             ) : (
               <>
-                <Ionicons name="cloud-upload-outline" size={20} color="#fff" />
+                <Ionicons name={isAutoMode ? "lock-closed-outline" : "cloud-upload-outline"} size={20} color="#fff" />
                 <Text style={styles.publishButtonText}>
-                  {isConnected ? "Publish Settings" : "Device Not Connected"}
+                  {isAutoMode ? "Switch to Manual to Publish" : isConnected ? "Publish Settings" : "Device Not Connected"}
                 </Text>
               </>
             )}
@@ -920,38 +935,90 @@ export default function AddCrops() {
     if (!cropDetails) return null;
     const senmlData = convertToSenML(cropDetails, customSettings);
 
+    const SENSOR_GROUPS = [
+      { title: "Temperature", icon: "thermometer-outline", color: "#F44336", items: ["temp_low", "temp_high"] },
+      { title: "Humidity", icon: "water-outline", color: "#2196F3", items: ["humidity_low", "humidity_high"] },
+      { title: "Water Temperature", icon: "waves-outline", color: "#00BCD4", items: ["water_temp_low", "water_temp_high"] },
+      { title: "Water Level", icon: "speedometer-outline", color: "#009688", items: ["water_level_low", "water_level_high"] },
+      { title: "pH", icon: "flask-outline", color: "#9C27B0", items: ["ph_low", "ph_high"] },
+      { title: "CO₂", icon: "cloud-outline", color: "#607D8B", items: ["co2_low", "co2_high"] },
+      { title: "Light", icon: "sunny-outline", color: "#FF9800", items: ["lux_low", "lux_high"] },
+      { title: "Dimming", icon: "contrast-outline", color: "#795548", items: ["dimming"] },
+    ];
+
+    const senmlMap = {};
+    senmlData.forEach((item) => { if (item.n) senmlMap[item.n] = item; });
+
     return (
       <Modal visible={showSenMLPreview} animationType="slide" transparent onRequestClose={() => setShowSenMLPreview(false)}>
         <View style={styles.modalContainer}>
-          <View style={[styles.modalContent, { maxHeight: "80%", backgroundColor: theme.colors.surface }]}>
+          <View style={[styles.modalContent, { maxHeight: "85%", backgroundColor: theme.colors.surface }]}>
+            {/* Header */}
             <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: theme.colors.text }]}>SenML Preview</Text>
-              <TouchableOpacity onPress={() => setShowSenMLPreview(false)}>
-                <Ionicons name="close" size={24} color={theme.colors.text} />
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <View style={[styles.previewHeaderIcon, { backgroundColor: "rgba(33,150,243,0.12)" }]}>
+                  <Ionicons name="code-working-outline" size={20} color="#2196F3" />
+                </View>
+                <View>
+                  <Text style={[styles.modalTitle, { color: theme.colors.text, fontSize: 18 }]}>SenML Preview</Text>
+                  <Text style={[styles.previewSubtitle, { color: theme.colors.textSecondary }]}>Sensor data format</Text>
+                </View>
+              </View>
+              <TouchableOpacity
+                onPress={() => setShowSenMLPreview(false)}
+                style={[styles.previewCloseBtn, { backgroundColor: theme.colors.inputBackground || theme.colors.background }]}
+              >
+                <Ionicons name="close" size={20} color={theme.colors.text} />
               </TouchableOpacity>
             </View>
 
-            <ScrollView showsVerticalScrollIndicator={false}>
-              <View style={styles.senmlContainer}>
-                {senmlData.map((item, index) => (
-                  <View key={index} style={[styles.senmlItem, { borderBottomColor: theme.colors.border }]}>
-                    <Text style={[styles.senmlName, { color: theme.colors.textSecondary }]}>
-                      {item.bn ? "Base Name" : item.n}
-                    </Text>
-                    <View style={styles.senmlValueContainer}>
-                      {item.bn && <Text style={[styles.senmlValue, { color: theme.colors.text }]}>{item.bn}</Text>}
-                      {item.bt !== undefined && (
-                        <Text style={[styles.senmlValue, { color: theme.colors.text }]}>
-                          {new Date(item.bt * 1000).toLocaleString()}
-                        </Text>
-                      )}
-                      {item.v !== undefined && !item.bn && (
-                        <Text style={[styles.senmlValue, { color: theme.colors.text }]}>{item.v}</Text>
-                      )}
-                    </View>
-                  </View>
-                ))}
+            {/* Crop Info Chip */}
+            <View style={[styles.previewCropChip, { backgroundColor: `${theme.colors.primary}10`, borderColor: `${theme.colors.primary}30` }]}>
+              <Ionicons name="leaf-outline" size={14} color={theme.colors.primary} />
+              <Text style={[styles.previewCropChipText, { color: theme.colors.primary }]}>
+                {cropDetails.crop_name} · {cropDetails.crop_variety_name || "General"} · {cropDetails.stage_id || "N/A"}
+              </Text>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
+              {/* Base Name + Timestamp Card */}
+              <View style={[styles.previewInfoCard, { backgroundColor: theme.colors.inputBackground || theme.colors.background, borderColor: theme.colors.border }]}>
+                <View style={styles.previewInfoRow}>
+                  <Ionicons name="finger-print-outline" size={16} color={theme.colors.textSecondary} />
+                  <Text style={[styles.previewInfoLabel, { color: theme.colors.textSecondary }]}>Base Name</Text>
+                  <Text style={[styles.previewInfoValue, { color: theme.colors.text }]} numberOfLines={1}>{senmlData[0]?.bn || "—"}</Text>
+                </View>
+                <View style={[styles.previewInfoDivider, { backgroundColor: theme.colors.border }]} />
+                <View style={styles.previewInfoRow}>
+                  <Ionicons name="time-outline" size={16} color={theme.colors.textSecondary} />
+                  <Text style={[styles.previewInfoLabel, { color: theme.colors.textSecondary }]}>Timestamp</Text>
+                  <Text style={[styles.previewInfoValue, { color: theme.colors.text }]} numberOfLines={1}>
+                    {senmlData[0]?.bt ? new Date(senmlData[0].bt * 1000).toLocaleString() : "—"}
+                  </Text>
+                </View>
               </View>
+
+              {/* Sensor Groups */}
+              {SENSOR_GROUPS.map((group) => (
+                <View key={group.title} style={[styles.previewGroupCard, { backgroundColor: theme.colors.inputBackground || theme.colors.background, borderColor: theme.colors.border }]}>
+                  <View style={[styles.previewGroupHeader, { borderLeftColor: group.color }]}>
+                    <View style={[styles.previewGroupIconWrap, { backgroundColor: `${group.color}18` }]}>
+                      <Ionicons name={group.icon} size={16} color={group.color} />
+                    </View>
+                    <Text style={[styles.previewGroupTitle, { color: theme.colors.text }]}>{group.title}</Text>
+                  </View>
+                  {group.items.map((name) => {
+                    const item = senmlMap[name];
+                    if (!item) return null;
+                    return (
+                      <View key={name} style={[styles.previewSensorRow, { borderTopColor: theme.colors.border }]}>
+                        <Text style={[styles.previewSensorName, { color: theme.colors.textSecondary }]}>{name}</Text>
+                        <Text style={[styles.previewSensorValue, { color: theme.colors.text }]}>{item.v}</Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              ))}
             </ScrollView>
           </View>
         </View>
@@ -1566,16 +1633,90 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   applyButtonText: { color: "#fff", fontWeight: "700", fontSize: 14 },
-  senmlContainer: { borderRadius: 10, padding: 12 },
-  senmlItem: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 6,
-    borderBottomWidth: 1,
+  previewHeaderIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
   },
-  senmlName: { fontSize: 13, fontWeight: "500" },
-  senmlValueContainer: { flexDirection: "row", alignItems: "center" },
-  senmlValue: { fontSize: 13, fontWeight: "600" },
+  previewSubtitle: { fontSize: 11.5, marginTop: 1, opacity: 0.7 },
+  previewCloseBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  previewCropChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 14,
+  },
+  previewCropChipText: { fontSize: 12, fontWeight: "600", flex: 1 },
+  previewInfoCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 12,
+    marginBottom: 12,
+  },
+  previewInfoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 6,
+  },
+  previewInfoLabel: { fontSize: 12, fontWeight: "500", width: 80 },
+  previewInfoValue: { fontSize: 12, fontWeight: "600", flex: 1, textAlign: "right" },
+  previewInfoDivider: { height: 1, marginVertical: 2 },
+  previewGroupCard: {
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 10,
+    overflow: "hidden",
+  },
+  previewGroupHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderLeftWidth: 3,
+  },
+  previewGroupIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  previewGroupTitle: { fontSize: 13, fontWeight: "700" },
+  previewSensorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderTopWidth: 1,
+  },
+  previewSensorName: { fontSize: 12.5, fontWeight: "500", flex: 1 },
+  previewSensorValue: { fontSize: 13, fontWeight: "700" },
+  autoModeBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 14,
+  },
+  autoModeBannerTitle: { fontSize: 13, fontWeight: "700", marginBottom: 2 },
+  autoModeBannerText: { fontSize: 11.5, lineHeight: 16, opacity: 0.85 },
   emptyContainer: { alignItems: "center", justifyContent: "center", paddingVertical: 40, gap: 12 },
   emptyText: { fontSize: 16, fontWeight: "500" },
   errorIconWrap: {

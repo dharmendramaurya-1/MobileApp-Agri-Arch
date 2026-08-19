@@ -1,5 +1,4 @@
 // app/_layout.tsx
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Stack, router, useSegments } from "expo-router";
 import { useEffect, useRef } from "react";
 import { ActivityIndicator, Text, View } from "react-native";
@@ -37,18 +36,6 @@ function RootNav() {
       router.replace("/(auth)/login");
       return;
     }
-
-    console.log("🔐 Navigation check:", {
-      isAuthenticated,
-      isLoading,
-      isSignupFlow,
-      inMainGroup,
-      inAuthGroup,
-      isOnboarding,
-      isIndex,
-      segments,
-      hasRedirected: hasRedirected.current,
-    });
 
     if (isSignupFlow) {
       console.log("⏳ Signup flow active - allowing auth screens");
@@ -110,27 +97,27 @@ function RootNav() {
 
   }, [isAuthenticated, isLoading, segments, isSignupFlow, token]);
 
-       useEffect(() => {
-    const getAllAsyncStorageData = async () => {
-      try {
-        const keys = await AsyncStorage.getAllKeys();
+  //      useEffect(() => {
+  //   const getAllAsyncStorageData = async () => {
+  //     try {
+  //       const keys = await AsyncStorage.getAllKeys();
 
-        console.log("AsyncStorage Keys:", keys);
+  //       console.log("AsyncStorage Keys:", keys);
 
-        const data = await AsyncStorage.multiGet(keys);
+  //       const data = await AsyncStorage.multiGet(keys);
 
-        console.log("AsyncStorage Data:");
+  //       console.log("AsyncStorage Data:");
 
-        data.forEach(([key, value]) => {
-          console.log(`${key}:`, value);
-        });
-      } catch (error) {
-        console.error("Error reading AsyncStorage:", error);
-      }
-    };
+  //       data.forEach(([key, value]) => {
+  //         console.log(`${key}:`, value);
+  //       });
+  //     } catch (error) {
+  //       console.error("Error reading AsyncStorage:", error);
+  //     }
+  //   };
 
-    getAllAsyncStorageData();
-  }, []);
+  //   getAllAsyncStorageData();
+  // }, []);
 
   if (isLoading) {
     return (

@@ -245,7 +245,7 @@ export default function ConfigScreen() {
         auto_mode: config.auto_mode,
       };
 
-      const success = await publishConfig(configToSend);
+      const success = await publishConfig(externalKey, configToSend);
 
       if (success) {
         const summary =

@@ -147,8 +147,6 @@ export const searchSenML = async (params) => {
  * Get data for a specific time range with sensor name mapping
  */
 export const getSensorDataByTimeRange = async (from, to, limit = 500, sensorKey = null) => {
-  console.log(`📊 Fetching sensor data from ${new Date(from).toLocaleString()} to ${new Date(to).toLocaleString()}`);
-  
   // Map sensor key to its actual SenML record name if provided
   let nameFilter = null;
   if (sensorKey) {
@@ -504,6 +502,17 @@ export const fetchSensorHistorical = async ({
       unit: msg.unit || "",
       sensorName: msg.name ? msg.name.split(":").pop() : null,
     }));
+
+    // ✅ Log API response for debugging total mismatch
+    console.log(`📡 API Response for ${fullName}:`);
+    console.log(`   messages count: ${messages.length}`);
+    console.log(`   API total: ${data.total}`);
+    console.log(`   API limit: ${data.limit}, offset: ${data.offset}`);
+    console.log(`   Request params: limit=${limit}, offset=${offset}`);
+    if (messages.length > 0) {
+      console.log(`   First msg time: ${messages[0].time ? new Date(messages[0].time).toLocaleString() : 'N/A'}`);
+      console.log(`   Last msg time: ${messages[messages.length-1].time ? new Date(messages[messages.length-1].time).toLocaleString() : 'N/A'}`);
+    }
 
     return {
       success: true,

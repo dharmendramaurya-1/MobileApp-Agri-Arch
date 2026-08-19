@@ -84,8 +84,6 @@ export const user_profile = async () => {
       },
     });
 
-    console.log("📦 Profiles response:", JSON.stringify(response.data, null, 2));
-
     if (response.data?.profiles && response.data.profiles.length > 0) {
       const username = response.data.profiles[0]?.metadata?.username || "User";
       console.log("👤 Username:", username);

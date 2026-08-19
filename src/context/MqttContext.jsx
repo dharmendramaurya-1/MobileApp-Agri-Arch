@@ -211,12 +211,17 @@ function buildSettingsPayload(settings, externalKey) {
   ];
 }
 
-function buildConfigPayload(deviceId, config) {
+function buildConfigPayload(deviceId, config, previousConfig = {}) {
+  // If any field is missing, use previous value, then sensible defaults
+  const reportInterval = config.report_interval ?? previousConfig.report_interval ?? 120;
+  const samplingInterval = config.sampling_interval ?? previousConfig.sampling_interval ?? 30;
+  const autoMode = config.auto_mode ?? previousConfig.auto_mode ?? false;
+
   return [
     { bn: `urn:dev:${deviceId}:cfg/`, bt: Math.floor(Date.now() / 1000) },
-    { n: "RPT_INT", v: config.report_interval },
-    { n: "SAMP_INT", v: config.sampling_interval },
-    { n: "AutoMode", vb: config.auto_mode },
+    { n: "RPT_INT", v: reportInterval },
+    { n: "SAMP_INT", v: samplingInterval },
+    { n: "AutoMode", vb: autoMode },
   ];
 }
 
@@ -225,10 +230,12 @@ const generateRequestId = () => {
 };
 
 const buildGetStatusPayload = (requestId) => {
-  return JSON.stringify({
-    cmd: "GET_STATUS",
-    request_id: requestId
-  });
+  return JSON.stringify([
+    {
+      cmd: "GET_STATUS",
+      request_id: requestId
+    }
+  ]);
 };
 
 export const MqttProvider = ({ children }) => {
@@ -597,11 +604,6 @@ export const MqttProvider = ({ children }) => {
       return;
     }
     
-    // Mark all as checking first
-    for (const device of devices) {
-      setDeviceConnectionStatus(prev => ({ ...prev, [device.external_key]: 'checking' }));
-    }
-    
     // Send GET_STATUS to all devices
     for (const device of devices) {
       try {
@@ -649,6 +651,58 @@ export const MqttProvider = ({ children }) => {
     console.log("⚡ Quick status check complete");
   };
 
+  // ✅ Check a SINGLE new device: subscribe to its topics, send GET_STATUS, wait 2s
+  const checkSingleDeviceStatus = async (externalKey) => {
+    if (!externalKey) return null;
+    console.log(`🔍 Checking single device status: ${externalKey}`);
+
+    // Subscribe to the new device's topics
+    let client = mqttClient;
+    if (!client || !client.connected) {
+      try {
+        client = await getMqttClient();
+      } catch (e) {
+        console.error("❌ Could not get MQTT client for single check:", e);
+        return null;
+      }
+    }
+
+    if (!client || !client.connected) {
+      console.log("⚠️ MQTT not connected, cannot check device status");
+      return null;
+    }
+
+    // Subscribe to /status and /data topics for the new device
+    await subscribeToTopic(client, `/messages/${externalKey}/data`);
+    await subscribeToTopic(client, `/messages/${externalKey}/status`);
+    console.log(`📡 Subscribed to topics for new device: ${externalKey}`);
+
+    // Send GET_STATUS
+    const sent = await requestDeviceStatus(externalKey);
+    if (!sent) {
+      console.log(`⚠️ Failed to send GET_STATUS to ${externalKey}`);
+      return null;
+    }
+
+    // Wait 2 seconds for response
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
+    // Check if device responded
+    const lastResponse = lastGetStatResponseTime.current[externalKey] || 0;
+    const responded = lastResponse > (Date.now() - 4000);
+
+    if (responded) {
+      console.log(`✅ New device ${externalKey} responded — ONLINE`);
+      // DeviceOnlineStatus is already set by handleStatusResponse/handleDataMessage
+      return true;
+    } else {
+      console.log(`⚠️ New device ${externalKey} did not respond — OFFLINE`);
+      setDeviceOnlineStatus((prev) => ({ ...prev, [externalKey]: false }));
+      setDeviceConnectionStatus((prev) => ({ ...prev, [externalKey]: 'offline' }));
+      return false;
+    }
+  };
+
   const subscribeToAllDevices = async (client) => {
     if (!client) {
       console.log("⚠️ No client provided");
@@ -674,7 +728,7 @@ export const MqttProvider = ({ children }) => {
     for (const device of devices) {
       const externalKey = device.external_key;
       await subscribeToTopic(client, `/messages/${externalKey}/data`);
-      await subscribeToTopic(client, `/messages/${externalKey}/get_stat`);
+      await subscribeToTopic(client, `/messages/${externalKey}/status`);
       console.log(`✅ Subscribed to topics for: ${externalKey}`);
     }
   };
@@ -742,7 +796,6 @@ export const MqttProvider = ({ children }) => {
   const handleDataMessage = useCallback((deviceKey, msgStr) => {
     try {
       const parsed = parseSenMLToObject(msgStr);
-      console.log(`📊 Data from ${deviceKey}:`, parsed);
       
       lastDataReceivedTimePerDevice.current[deviceKey] = Date.now();
       updateDeviceData(deviceKey, parsed);
@@ -832,7 +885,6 @@ export const MqttProvider = ({ children }) => {
       
       if (!isJsonResponse) {
         parsed = parseSenMLToObject(msgStr);
-        console.log(`📊 Status response from ${deviceKey}:`, parsed);
         
         const requestId = parsed._requestId || parsed.ReqID;
         const expectedId = pendingRequestIds.current[deviceKey];
@@ -897,7 +949,7 @@ export const MqttProvider = ({ children }) => {
     const deviceKey = topicParts[2];
     const topicType = topicParts[3] || '';
     
-    if (topicType === 'get_stat') {
+    if (topicType === 'status') {
       handleStatusResponse(deviceKey, msgStr);
       return;
     }
@@ -1399,7 +1451,7 @@ export const MqttProvider = ({ children }) => {
         for (const device of devices) {
           const topics = [
             `/messages/${device.external_key}/data`,
-            `/messages/${device.external_key}/get_stat`,
+            `/messages/${device.external_key}/status`,
           ];
           for (const topic of topics) {
             mqttClient.unsubscribe(topic, (err) => {
@@ -1547,7 +1599,8 @@ export const MqttProvider = ({ children }) => {
       return false;
     }
     
-    const payload = buildConfigPayload(deviceKey, config);
+    const previousConfig = devicesData[deviceKey]?.deviceConfig || {};
+    const payload = buildConfigPayload(deviceKey, config, previousConfig);
     const success = await publish(`/messages/${deviceKey}/cfg`, JSON.stringify(payload));
     
     if (success) {
@@ -1564,8 +1617,6 @@ export const MqttProvider = ({ children }) => {
         setDeviceConfig({ ...config, lastUpdated: new Date() });
       }
     }
-    // ✅ After publishing config, request GET_STATUS to get confirmed state
-    setTimeout(() => { requestDeviceStatus(deviceKey); }, 1500);
     return success;
   };
 
@@ -1646,6 +1697,7 @@ export const MqttProvider = ({ children }) => {
     requestDeviceStatus,
     requestStatusForAllDevices,
     quickStatusCheck,
+    checkSingleDeviceStatus,
     publishActuatorStatus,
     publishSettings,
     publishConfig,
