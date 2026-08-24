@@ -1,7 +1,7 @@
 // app/(main)/profile.tsx
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useEffect, useRef, useState } from "react"; // ✅ Added useEffect import
+import { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { useAuth } from "../../src/context/AuthContext";
+import { useMqtt } from "../../src/context/MqttContext";
 import { useTheme } from "../../src/context/ThemContext";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 
@@ -62,7 +63,9 @@ function MenuItem({ icon, label, onPress, color }: MenuItemProps) {
 export default function ProfileScreen() {
   const { theme, isDark, toggleTheme } = useTheme();
   const { logout } = useAuth();
+  const { publishReboot, selectedExternalKey, isConnected, getSelectedDeviceOnlineStatus, getSelectedDeviceName } = useMqtt();
   const { onScroll, headerHeight } = useScroll();
+  const [rebootPending, setRebootPending] = useState(false);
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
 
@@ -125,6 +128,48 @@ export default function ProfileScreen() {
         onPress: () => logout(),
       },
     ]);
+  };
+
+  const handleReboot = () => {
+    if (rebootPending) {
+      // Second click — execute reboot
+      setRebootPending(false);
+      doReboot();
+    } else {
+      // First click — show warning
+      setRebootPending(true);
+      Alert.alert(
+        "⚠️ Reboot Device",
+        "Are you sure you want to reboot?\n\nThe device will restart and lose connection temporarily.",
+        [
+          { text: "Cancel", style: "cancel", onPress: () => setRebootPending(false) },
+          {
+            text: "Yes, Reboot",
+            style: "destructive",
+            onPress: () => doReboot(),
+          },
+        ]
+      );
+      // Auto-reset pending state after 5 seconds
+      setTimeout(() => setRebootPending(false), 5000);
+    }
+  };
+
+  const doReboot = async () => {
+    if (!selectedExternalKey) {
+      Alert.alert("Error", "No device selected");
+      return;
+    }
+    try {
+      const success = await publishReboot(selectedExternalKey);
+      if (success) {
+        Alert.alert("✅ Reboot Sent", "Reboot command has been sent to the device. It will restart shortly.");
+      } else {
+        Alert.alert("❌ Failed", "Could not send reboot command.");
+      }
+    } catch (err) {
+      Alert.alert("Error", "Failed to send reboot command.");
+    }
   };
 
   const menuItems = [
@@ -222,6 +267,74 @@ export default function ProfileScreen() {
           />
         ))}
       </View>
+
+      {/* Device Control Section */}
+      {selectedExternalKey && (
+        <View
+          style={[styles.menuCard, { backgroundColor: theme.colors.surface }]}
+        >
+          <View style={[styles.deviceHeader, { borderBottomColor: theme.colors.border }]}>
+            <Ionicons name="hardware-chip-outline" size={18} color={theme.colors.primary} />
+            <Text style={[styles.deviceHeaderText, { color: theme.colors.textSecondary }]}>Device Control</Text>
+          </View>
+
+          {/* Device Info */}
+          <View style={styles.deviceInfoRow}>
+            <View style={styles.deviceInfoItem}>
+              <Text style={[styles.deviceInfoLabel, { color: theme.colors.textSecondary }]}>Device</Text>
+              <Text style={[styles.deviceInfoValue, { color: theme.colors.text }]} numberOfLines={1}>
+                {getSelectedDeviceName() || "No Device"}
+              </Text>
+            </View>
+            <View style={styles.deviceInfoItem}>
+              <Text style={[styles.deviceInfoLabel, { color: theme.colors.textSecondary }]}>Status</Text>
+              <View style={styles.deviceStatusRow}>
+                <View style={[styles.statusDot, { backgroundColor: getSelectedDeviceOnlineStatus() ? '#4CAF50' : '#F44336' }]} />
+                <Text style={[styles.deviceInfoValue, { color: getSelectedDeviceOnlineStatus() ? '#4CAF50' : '#F44336' }]}>
+                  {getSelectedDeviceOnlineStatus() ? 'Online' : 'Offline'}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Reboot Button */}
+          <TouchableOpacity
+            style={[styles.rebootButton, {
+              backgroundColor: rebootPending ? '#F44336' : '#FF980010',
+              borderColor: rebootPending ? '#F44336' : '#FF980040',
+            }]}
+            onPress={handleReboot}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name="refresh"
+              size={20}
+              color={rebootPending ? '#FFF' : '#FF9800'}
+            />
+            <View style={styles.rebootTextWrap}>
+              <Text style={[styles.rebootLabel, {
+                color: rebootPending ? '#FFF' : '#FF9800',
+                fontWeight: '700',
+              }]}>
+                {rebootPending ? 'Tap Again to Confirm' : 'Reboot Device'}
+              </Text>
+              <Text style={[styles.rebootHint, {
+                color: rebootPending ? 'rgba(255,255,255,0.8)' : '#9E9E9E',
+              }]}>
+                {rebootPending
+                  ? '⚠️ Device will restart immediately'
+                  : 'Device will restart and reconnect'
+                }
+              </Text>
+            </View>
+            <Ionicons
+              name={rebootPending ? 'alert-circle' : 'chevron-forward'}
+              size={18}
+              color={rebootPending ? '#FFF' : '#9E9E9E'}
+            />
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Theme Toggle */}
       <View
@@ -383,6 +496,41 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 2,
   },
+
+  // Device Control / Reboot
+  deviceHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    padding: 16,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+  },
+  deviceHeaderText: { fontSize: 12, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.5 },
+  deviceInfoRow: {
+    flexDirection: "row",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 20,
+  },
+  deviceInfoItem: { flex: 1 },
+  deviceInfoLabel: { fontSize: 10, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.3, marginBottom: 2 },
+  deviceInfoValue: { fontSize: 13, fontWeight: "600" },
+  deviceStatusRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  statusDot: { width: 7, height: 7, borderRadius: 4 },
+  rebootButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    margin: 12,
+    marginTop: 4,
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    gap: 12,
+  },
+  rebootTextWrap: { flex: 1 },
+  rebootLabel: { fontSize: 14, fontWeight: "600" },
+  rebootHint: { fontSize: 11, marginTop: 2 },
 
   // Logout
   logoutBtn: {

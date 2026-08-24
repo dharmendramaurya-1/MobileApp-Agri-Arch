@@ -27,7 +27,6 @@ export const StatusDisplay = () => {
     { key: 'waterPump', label: 'Water Pump' },
     { key: 'nutrientPump', label: 'Nutrient Pump' },
     { key: 'acStatus', label: 'AC Status' },
-    { key: 'rebootAck', label: 'Reboot ACK' },
     { key: 'buzzer', label: 'Buzzer' },
     { key: 'mode', label: 'Mode' },
     { key: 'dimmingLevel', label: 'Dimming Level' },

@@ -18,7 +18,7 @@ import {
   reconnectMqtt as reconnectMqttClient,
   updateMqttPassword
 } from "../services/mqttClient";
-import { getDefaultDeviceStatus } from "../utils/deviceStatusParser";
+import { getDefaultDeviceStatus, parseDeviceStatus } from "../utils/deviceStatusParser";
 import { parseSenMLToObject } from "../utils/senmlParser";
 import { useAuth } from "./AuthContext";
 
@@ -37,8 +37,9 @@ const DEFAULT_SENSOR_DATA = {
   water_ILvalve: null,
   water_OLvalve: null,
   nutrient_pump: null,
-  reboot_ack: null,
+  ac_stat: null,
   soilMoisture: null,
+  cropId: null,
   lastUpdated: null,
 };
 
@@ -47,11 +48,17 @@ const DEFAULT_ACTUATOR_STATUS = {
   water_ILvalve: null,
   water_OLvalve: null,
   nutrient_pump: null,
-  reboot_ack: null,
+  ac_stat: null,
+  // Timing fields (milliseconds)
+  water_pump_on_time: null,   // WPONT
+  water_pump_interval: null,  // WPINT
+  nutrient_pump_duration: null, // NP_DI
+  nutrient_pump_on_time: null,  // NP_OT
   lastUpdated: null,
 };
 
 const DEFAULT_CROP_SETTINGS = {
+  CropId: null,
   cropName: null,
   variety: null,
   tempLow: null,
@@ -111,10 +118,10 @@ const DEVICE_CONFIG = {
     description: "Nutrient solution pump",
     category: "pump",
   },
-  reboot_ack: {
-    displayName: "Reboot Acknowledged",
-    icon: "refresh",
-    description: "System reboot acknowledgment",
+  ac_stat: {
+    displayName: "AC Status",
+    icon: "thermometer",
+    description: "AC control status",
     category: "system",
   },
 };
@@ -137,15 +144,35 @@ const STORAGE_KEYS = {
 // ── Constants ──
 const GET_STAT_ACTIVE_DURATION = 10 * 60 * 1000;
 const DATA_CHECK_INTERVAL = 30 * 1000;
+const OFFLINE_GRACE_PERIOD = 45 * 1000; // 45s grace before marking offline (prevents flicker)
 
 // ── Helper Functions ──
 function parseActuatorToDevices(raw) {
   try {
     const records = JSON.parse(raw);
     const result = [];
+    const actuatorNameMap = {
+      WatPmp: "water_pump",
+      Wat_ILV: "water_ILvalve",
+      Wat_OLV: "water_OLvalve",
+      NUT_PMP: "nutrient_pump",
+      AC_Stat: "ac_stat",
+    };
+    const timingNameMap = {
+      WPONT: "water_pump_on_time",
+      WPINT: "water_pump_interval",
+      NP_DI: "nutrient_pump_duration",
+      NP_OT: "nutrient_pump_on_time",
+    };
     for (const r of records) {
-      if (!r.n || r.vb === undefined) continue;
-      const deviceName = r.n;
+      if (!r.n) continue;
+      // Handle timing fields
+      if (r.n in timingNameMap && r.v !== undefined) {
+        result.push({ timingKey: timingNameMap[r.n], value: r.v });
+        continue;
+      }
+      if (r.vb === undefined) continue;
+      const deviceName = actuatorNameMap[r.n] || r.n;
       if (deviceName in DEVICE_CONFIG) {
         const config = DEVICE_CONFIG[deviceName];
         result.push({
@@ -166,31 +193,26 @@ function parseActuatorToDevices(raw) {
   }
 }
 
-function buildActuatorPayload(status, externalKey) {
+function buildActuatorPayload(status, externalKey, previousStatus = {}) {
+  const p = (key, def) => status[key] ?? previousStatus[key] ?? def;
   const payload = [
-    { bn: `urn:dev:${externalKey}:`, bt: Math.floor(Date.now() / 1000) }
+    { n: "WatPmp", vb: p('water_pump', false) },
+    { n: "WPONT", v: p('water_pump_on_time', 10000) },
+    { n: "WPINT", v: p('water_pump_interval', 60000) },
+    { n: "Wat_ILV", vb: p('water_ILvalve', false) },
+    { n: "Wat_OLV", vb: p('water_OLvalve', false) },
+    { n: "NUT_PMP", vb: p('nutrient_pump', false) },
+    { n: "NP_DI", v: p('nutrient_pump_duration', 120000) },
+    { n: "NP_OT", v: p('nutrient_pump_on_time', 5000) },
+    { n: "AC_Stat", vb: p('ac_stat', false) },
   ];
-  
-  const actuatorFields = [
-    { n: "WatPmp", vb: status.water_pump },
-    { n: "Wat_ILV", vb: status.water_ILvalve },
-    { n: "Wat_OLV", vb: status.water_OLvalve },
-    { n: "NUT_PMP", vb: status.nutrient_pump },
-    { n: "BootAck", vb: status.reboot_ack }
-  ];
-  
-  for (const field of actuatorFields) {
-    if (field.vb !== undefined && field.vb !== null) {
-      payload.push(field);
-    }
-  }
-  
   return payload;
 }
 
 function buildSettingsPayload(settings, externalKey) {
   return [
     { bn: `urn:dev:${externalKey}:`, bt: Math.floor(Date.now() / 1000) },
+    { n: "CropId", v: settings.CropId ?? 0 },
     { n: "AMBTL", v: settings.tempLow },
     { n: "AMTHI", v: settings.tempHigh },
     { n: "HUMLO", v: settings.humidityLow },
@@ -212,16 +234,17 @@ function buildSettingsPayload(settings, externalKey) {
 }
 
 function buildConfigPayload(deviceId, config, previousConfig = {}) {
-  // If any field is missing, use previous value, then sensible defaults
   const reportInterval = config.report_interval ?? previousConfig.report_interval ?? 120;
   const samplingInterval = config.sampling_interval ?? previousConfig.sampling_interval ?? 30;
   const autoMode = config.auto_mode ?? previousConfig.auto_mode ?? false;
+  // ✅ Always default BootAck to false — only publishReboot should set this to true
+  const bootAck = config.boot_ack ?? false;
 
   return [
-    { bn: `urn:dev:${deviceId}:cfg/`, bt: Math.floor(Date.now() / 1000) },
     { n: "RPT_INT", v: reportInterval },
     { n: "SAMP_INT", v: samplingInterval },
     { n: "AutoMode", vb: autoMode },
+    { n: "BootAck", vb: bootAck },
   ];
 }
 
@@ -296,6 +319,7 @@ export const MqttProvider = ({ children }) => {
   const dataCheckIntervalRef = useRef(null);
   const lastGetStatResponseTime = useRef({});
   const lastDataReceivedTimePerDevice = useRef({});
+  const lastOnlineTimePerDevice = useRef({}); // Tracks last time device was confirmed online
   
   const { isAuthenticated, token, isLoading: authLoading, isSignupFlow } = useAuth();
 
@@ -329,7 +353,7 @@ export const MqttProvider = ({ children }) => {
 
   const isDeviceOnlineFromDevStat = (deviceStatus) => {
     if (deviceStatus === null || deviceStatus === undefined) return false;
-    return !!(deviceStatus & 0x00020000);
+    return !!(deviceStatus & 0x00010000); // Bit 16 = online (new firmware layout)
   };
 
   // ── Check if external key matches selected device ──
@@ -623,17 +647,23 @@ export const MqttProvider = ({ children }) => {
       const responded = lastResponse > (Date.now() - 5000); // responded within last 5s
       
       if (!responded) {
-        console.log(`⚠️ Device ${deviceKey} did not respond — marking OFFLINE`);
-        setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: false }));
-        setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: 'offline' }));
-        setDevicesData(prev => ({
-          ...prev,
-          [deviceKey]: {
-            ...prev[deviceKey],
-            isOnline: false,
-            hasReceivedData: false,
-          }
-        }));
+        // ✅ Don't aggressively mark offline — use grace period instead
+        const lastOnline = lastOnlineTimePerDevice.current[deviceKey] || 0;
+        const timeSinceOnline = Date.now() - lastOnline;
+        if (timeSinceOnline > OFFLINE_GRACE_PERIOD || lastOnline === 0) {
+          console.log(`⚠️ Device ${deviceKey} did not respond — marking OFFLINE`);
+          setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: false }));
+          setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: 'offline' }));
+          setDevicesData(prev => ({
+            ...prev,
+            [deviceKey]: {
+              ...prev[deviceKey],
+              isOnline: false,
+            }
+          }));
+        } else {
+          console.log(`⏳ Device ${deviceKey} no response but within grace period`);
+        }
       } else {
         console.log(`✅ Device ${deviceKey} responded — ONLINE`);
       }
@@ -780,6 +810,15 @@ export const MqttProvider = ({ children }) => {
         const timeoutMs = (reportInterval || 1800) * 2 * 1000;
         
         if (timeSinceLastData > timeoutMs && lastDataTime > 0) {
+          // ✅ Grace period: only mark offline after OFFLINE_GRACE_PERIOD of no data
+          const lastOnline = lastOnlineTimePerDevice.current[deviceKey] || 0;
+          const timeSinceOnline = Date.now() - lastOnline;
+          
+          if (timeSinceOnline < OFFLINE_GRACE_PERIOD && lastOnline > 0) {
+            console.log(`⏳ Device ${deviceKey} - No data for ${Math.round(timeSinceLastData/1000)}s, but within grace period (${Math.round((OFFLINE_GRACE_PERIOD - timeSinceOnline)/1000)}s left)`);
+            continue;
+          }
+          
           console.log(`⚠️ Device ${deviceKey} - No data for ${Math.round(timeSinceLastData/1000)}s, OFFLINE`);
           setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: false }));
           setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: 'offline' }));
@@ -797,17 +836,49 @@ export const MqttProvider = ({ children }) => {
     try {
       const parsed = parseSenMLToObject(msgStr);
       
+      // ✅ Console the ENTIRE parsed data from data topic
+      console.log(`\n════════════════════════════════════════════`);
+      console.log(`📥 DATA TOPIC MESSAGE from: ${deviceKey}`);
+      console.log(`📥 Raw:`, msgStr);
+      console.log(`📥 Parsed:`, JSON.stringify(parsed, null, 2));
+      
+      // Show actuator values specifically
+      const actuatorKeys = ['water_pump', 'water_ILvalve', 'water_OLvalve', 'nutrient_pump', 'ac_stat'];
+      const actuatorValues = Object.entries(parsed)
+        .filter(([k]) => actuatorKeys.includes(k))
+        .map(([k, v]) => `${k}=${v}`);
+      if (actuatorValues.length > 0) {
+        console.log(`📥 🔧 Actuator values: ${actuatorValues.join(', ')}`);
+      }
+      
+      // Show sensor values specifically
+      const sensorKeys = ['ambientTemperature', 'ambientHumidity', 'waterTemperature', 'co2Level', 'ecValue', 'phValue', 'waterLevel', 'lightLevel', 'soilMoisture'];
+      const sensorValues = Object.entries(parsed)
+        .filter(([k]) => sensorKeys.includes(k))
+        .map(([k, v]) => `${k}=${v}`);
+      if (sensorValues.length > 0) {
+        console.log(`📥 🌡️ Sensor values: ${sensorValues.join(', ')}`);
+      }
+      console.log(`════════════════════════════════════════════\n`);
+      
       lastDataReceivedTimePerDevice.current[deviceKey] = Date.now();
+      lastOnlineTimePerDevice.current[deviceKey] = Date.now(); // ✅ Track online time for grace period
       updateDeviceData(deviceKey, parsed);
       
+      // ── Determine online status from 32-bit deviceStatus ──
       let isOnline = false;
       if (parsed.deviceStatus !== undefined && parsed.deviceStatus !== null) {
-        isOnline = isDeviceOnlineFromDevStat(parsed.deviceStatus);
+        // Parse the 32-bit status — Bit 17 = online flag
+        const flags = parseDeviceStatus(parsed.deviceStatus);
+        isOnline = flags.online;
+        console.log(`🟢 [${deviceKey}] Online from 32-bit status: ${isOnline} (Bit 17, raw: ${flags.rawStatus})`);
       }
-      if (parsed.deviceStatusFlags && parsed.deviceStatusFlags.online !== undefined) {
+      // Fallback: check deviceStatusFlags if sent separately
+      if (!isOnline && parsed.deviceStatusFlags && parsed.deviceStatusFlags.online !== undefined) {
         isOnline = parsed.deviceStatusFlags.online;
       }
       
+      // Fallback: assume online if we got any data
       if (!isOnline && Object.keys(parsed).length > 0) {
         const hasSensorData = parsed.ambientTemperature !== undefined || 
                              parsed.ambientHumidity !== undefined ||
@@ -818,10 +889,7 @@ export const MqttProvider = ({ children }) => {
         }
       }
       
-      // ✅ Update online status for ALL devices (independent of selection)
-      setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: isOnline }));
-      setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: isOnline ? 'online' : 'offline' }));
-      
+      // ✅ Update online status + device data in ONE batch (avoids duplicate re-renders)
       setDevicesData(prev => ({
         ...prev,
         [deviceKey]: {
@@ -832,15 +900,14 @@ export const MqttProvider = ({ children }) => {
           isOnline: isOnline,
         }
       }));
+      setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: isOnline }));
+      setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: isOnline ? 'online' : 'offline' }));
       
       // ✅ Use ref to avoid stale closure — always get the latest selectedExternalKey
       const currentSelectedKey = selectedExternalKeyRef.current;
       const isSelected = currentSelectedKey === deviceKey;
       
-      console.log(`🔍 Data check - ${deviceKey} is selected: ${isSelected} (selectedExternalKey: ${currentSelectedKey || 'none'})`);
-      
       if (isSelected) {
-        console.log(`📊 Updating selected device data: ${deviceKey}`);
         updateLegacyState(parsed);
         setConnectionState(isOnline ? 'online' : 'offline');
         if (isOnline) {
@@ -902,6 +969,7 @@ export const MqttProvider = ({ children }) => {
         }
         
         lastGetStatResponseTime.current[deviceKey] = Date.now();
+        if (isOnline) lastOnlineTimePerDevice.current[deviceKey] = Date.now(); // ✅ Track online time
         updateDeviceData(deviceKey, parsed);
         
         // ✅ Update online status for ALL devices (independent of selection)
@@ -996,25 +1064,74 @@ export const MqttProvider = ({ children }) => {
       for (const [key, value] of Object.entries(parsed)) {
         if (key.startsWith('_')) continue;
         
+        // ── Sensor values ──
         if (['ambientTemperature', 'ambientHumidity', 'waterTemperature', 
              'co2Level', 'ecValue', 'phValue', 'waterLevel', 'lightLevel', 
-             'soilMoisture'].includes(key)) {
+             'soilMoisture', 'cropId'].includes(key)) {
           updatedSensorData[key] = value;
         }
         
+        // ── 32-bit deviceStatus — parse the bitmask to extract actuator states ──
         if (key === 'deviceStatus') {
           newDeviceStatus = value;
           updatedSensorData.deviceStatus = value;
+          
+          // Parse the 32-bit status bitmask
+          const flags = parseDeviceStatus(value);
+          newDeviceStatusFlags = flags;
+          
+          // Extract actuator states FROM the bitmask
+          // Bit 12: water_pump, Bit 10: inlet_valve, Bit 11: outlet_valve
+          // Bit 13: nutrient_pump, Bit 14: ac_status, Bit 15: reboot_ok
+          const bitmaskActuators = {
+            water_pump: flags.waterPump,
+            water_ILvalve: flags.inletValve,
+            water_OLvalve: flags.outletValve,
+            nutrient_pump: flags.nutrientPump,
+            ac_stat: flags.acStatus,
+            // ✅ Do NOT include reboot_ack here — it's a firmware status flag, not a user-controlled actuator
+            // Including it causes BootAck: true to leak into outbound publishes
+          };
+          
+          console.log(`🔧 [${deviceKey}] Parsed 32-bit status:`, flags.rawStatus);
+          console.log(`🔧 [${deviceKey}] Water Pump: ${flags.waterPump ? 'ON' : 'OFF'} (Bit 12)`);
+          console.log(`🔧 [${deviceKey}] Inlet Valve: ${flags.inletValve ? 'OPEN' : 'CLOSED'} (Bit 10)`);
+          console.log(`🔧 [${deviceKey}] Outlet Valve: ${flags.outletValve ? 'OPEN' : 'CLOSED'} (Bit 11)`);
+          console.log(`🔧 [${deviceKey}] Nutrient Pump: ${flags.nutrientPump ? 'ON' : 'OFF'} (Bit 13)`);
+          console.log(`🔧 [${deviceKey}] AC Status: ${flags.acStatus ? 'ON' : 'OFF'} (Bit 14)`);
+          console.log(`🔧 [${deviceKey}] Mode: ${flags.mode ? 'AUTO' : 'MANUAL'} (Bit 15)`);
+          console.log(`🔧 [${deviceKey}] Online: ${flags.online ? 'YES' : 'NO'} (Bit 16)`);
+          console.log(`🔧 [${deviceKey}] Sensor Fault: ${flags.sensorFault} (Bits 17-23)`);
+          console.log(`🔧 [${deviceKey}] Buzzer: ${flags.buzzer ? 'ON' : 'OFF'} (Bit 24)`);
+          console.log(`🔧 [${deviceKey}] Dimming: ${flags.dimmingLevel}/127 (Bits 25-31)`);
+          
+          // Update actuator status from bitmask
+          for (const [actKey, actValue] of Object.entries(bitmaskActuators)) {
+            if (updatedActuatorStatus[actKey] !== actValue) {
+              updatedActuatorStatus[actKey] = actValue;
+              updatedSensorData[actKey] = actValue;
+              hasActuatorUpdate = true;
+            }
+          }
         }
         
+        // ── deviceStatusFlags from MQTT (if sent separately) ──
         if (key === 'deviceStatusFlags') {
           newDeviceStatusFlags = value;
         }
         
+        // ── Direct actuator values (if device sends them as separate keys) ──
         if (['water_pump', 'water_ILvalve', 'water_OLvalve', 
-             'nutrient_pump', 'reboot_ack'].includes(key)) {
+             'nutrient_pump', 'ac_stat'].includes(key)) {
+          console.log(`🔧 [${deviceKey}] Direct actuator ${key}: ${value}`);
           updatedActuatorStatus[key] = value;
           updatedSensorData[key] = value;
+          hasActuatorUpdate = true;
+        }
+        
+        // ── Timing fields (WPONT, WPINT, NP_DI, NP_OT) ──
+        if (['water_pump_on_time', 'water_pump_interval', 'nutrient_pump_duration', 'nutrient_pump_on_time'].includes(key)) {
+          updatedActuatorStatus[key] = value;
           hasActuatorUpdate = true;
         }
       }
@@ -1025,6 +1142,7 @@ export const MqttProvider = ({ children }) => {
       
       // ✅ Rebuild devices list only once when actuators changed
       if (hasActuatorUpdate) {
+        console.log(`✅ [${deviceKey}] All actuator values:`, JSON.stringify(updatedActuatorStatus, null, 2));
         updatedDevices = Object.entries(updatedActuatorStatus)
           .filter(([key]) => key in DEVICE_CONFIG && key !== 'lastUpdated')
           .map(([key, value]) => {
@@ -1072,26 +1190,48 @@ export const MqttProvider = ({ children }) => {
       for (const [key, value] of Object.entries(parsed)) {
         if (key.startsWith('_')) continue;
         
+        // ── Sensor values ──
         if (['ambientTemperature', 'ambientHumidity', 'waterTemperature', 
              'co2Level', 'ecValue', 'phValue', 'waterLevel', 'lightLevel', 
-             'soilMoisture'].includes(key)) {
+             'soilMoisture', 'cropId'].includes(key)) {
           updatedSensorData[key] = value;
           hasSensorUpdate = true;
         }
         
+        // ── 32-bit deviceStatus — parse bitmask for actuator states ──
         if (key === 'deviceStatus') {
           newDeviceStatusLocal = value;
           updatedSensorData.deviceStatus = value;
           hasSensorUpdate = true;
+          
+          // Parse the 32-bit bitmask
+          const flags = parseDeviceStatus(value);
+          newDeviceStatusFlagsLocal = flags;
+          
+          // Extract actuator states from bitmask and update sensorData
+          updatedSensorData.water_pump = flags.waterPump;
+          updatedSensorData.water_ILvalve = flags.inletValve;
+          updatedSensorData.water_OLvalve = flags.outletValve;
+          updatedSensorData.nutrient_pump = flags.nutrientPump;
+          updatedSensorData.ac_stat = flags.acStatus;
+          // ✅ Do NOT store reboot_ack in sensorData — it's a firmware status flag
+          hasActuatorUpdate = true;
         }
         
         if (key === 'deviceStatusFlags') {
           newDeviceStatusFlagsLocal = value;
         }
         
+        // ── Direct actuator values (if device sends them separately) ──
         if (['water_pump', 'water_ILvalve', 'water_OLvalve', 
-             'nutrient_pump', 'reboot_ack'].includes(key)) {
+             'nutrient_pump', 'ac_stat'].includes(key)) {
           updatedSensorData[key] = value;
+          hasActuatorUpdate = true;
+          hasSensorUpdate = true;
+        }
+        
+        // ── Timing fields ──
+        if (['water_pump_on_time', 'water_pump_interval', 'nutrient_pump_duration', 'nutrient_pump_on_time'].includes(key)) {
           hasActuatorUpdate = true;
           hasSensorUpdate = true;
         }
@@ -1111,12 +1251,20 @@ export const MqttProvider = ({ children }) => {
       
       // ✅ Update actuatorStatus inside its own updater
       if (hasActuatorUpdate) {
+        console.log(`📥 Global actuatorStatus updating...`);
         setActuatorStatus(prevAct => {
           const updatedActuator = { ...prevAct };
-          for (const [key, value] of Object.entries(parsed)) {
-            if (['water_pump', 'water_ILvalve', 'water_OLvalve', 
-                 'nutrient_pump', 'reboot_ack'].includes(key)) {
-              updatedActuator[key] = value;
+          const actuatorKeys = ['water_pump', 'water_ILvalve', 'water_OLvalve', 
+               'nutrient_pump', 'ac_stat'];
+          for (const key of actuatorKeys) {
+            if (updatedSensorData[key] !== undefined) {
+              updatedActuator[key] = updatedSensorData[key];
+            }
+          }
+          const timingKeys = ['water_pump_on_time', 'water_pump_interval', 'nutrient_pump_duration', 'nutrient_pump_on_time'];
+          for (const key of timingKeys) {
+            if (updatedSensorData[key] !== undefined) {
+              updatedActuator[key] = updatedSensorData[key];
             }
           }
           updatedActuator.lastUpdated = new Date();
@@ -1268,7 +1416,8 @@ export const MqttProvider = ({ children }) => {
     }
 
     console.log("✅ external_key found, proceeding with MQTT connection");
-    setConnectionState('connecting');
+    // ✅ Don't force 'connecting' if we already have data — prevents dashboard flicker
+    setConnectionState(prev => hasReceivedDataRef.current ? prev : 'connecting');
     setIsInitializing(true);
     
     try {
@@ -1287,15 +1436,17 @@ export const MqttProvider = ({ children }) => {
         if (!isMountedRef.current) return;
         console.log("✅ MQTT Connected");
         setIsConnected(true);
-        setConnectionState('waiting');
         hasInitializedRef.current = true;
         setMqttClient(client);
+        
+        // ✅ Don't reset to 'waiting' if we already have data — prevents dashboard flicker on reconnect
+        setConnectionState(prev => (prev === 'online' || prev === 'data') ? prev : 'connecting');
         
         await new Promise(resolve => setTimeout(resolve, 1500));
         await subscribeToAllDevices(client);
         await new Promise(resolve => setTimeout(resolve, 1000));
         
-        // ✅ Quick 3-second status check instead of waiting 2 minutes
+        // ✅ Quick 3-second status check
         await quickStatusCheck();
       });
 
@@ -1303,7 +1454,11 @@ export const MqttProvider = ({ children }) => {
         if (isMountedRef.current) {
           console.log("🔌 MQTT Disconnected");
           setIsConnected(false);
-          setConnectionState('disconnected');
+          // ✅ Don't reset connectionState if we already have data — prevents flicker on brief disconnects
+          setConnectionState(prev => {
+            if (prev === 'online' || prev === 'data') return 'online'; // Keep showing data
+            return 'disconnected';
+          });
           hasInitializedRef.current = false;
         }
       });
@@ -1315,9 +1470,9 @@ export const MqttProvider = ({ children }) => {
       if (client.connected) {
         console.log("✅ Client already connected");
         setIsConnected(true);
-        setConnectionState('waiting');
         hasInitializedRef.current = true;
         setMqttClient(client);
+        setConnectionState(prev => (prev === 'online' || prev === 'data') ? prev : 'connecting');
         
         await new Promise(resolve => setTimeout(resolve, 1500));
         await subscribeToAllDevices(client);
@@ -1356,11 +1511,17 @@ export const MqttProvider = ({ children }) => {
             sensorData: dev.sensorData ? {
               ...dev.sensorData,
               lastUpdated: dev.sensorData.lastUpdated ? new Date(dev.sensorData.lastUpdated) : null,
+              reboot_ack: null, // ✅ Clear stale reboot_ack from cache
             } : { ...DEFAULT_SENSOR_DATA },
             actuatorStatus: dev.actuatorStatus ? {
               ...dev.actuatorStatus,
               lastUpdated: dev.actuatorStatus.lastUpdated ? new Date(dev.actuatorStatus.lastUpdated) : null,
+              reboot_ack: null, // ✅ Clear stale reboot_ack from cache
             } : { ...DEFAULT_ACTUATOR_STATUS },
+            deviceConfig: dev.deviceConfig ? {
+              ...dev.deviceConfig,
+              boot_ack: false, // ✅ Clear stale boot_ack from cache
+            } : dev.deviceConfig,
             lastUpdated: dev.lastUpdated ? new Date(dev.lastUpdated) : null,
           };
         }
@@ -1398,6 +1559,16 @@ export const MqttProvider = ({ children }) => {
         const restored = { ...cached.deviceConfig };
         if (restored.lastUpdated) restored.lastUpdated = new Date(restored.lastUpdated);
         setDeviceConfig(restored);
+      }
+
+      // ✅ Restore global data flags so dashboard doesn't show '--' during reconnect
+      if (cached.devicesData && Object.keys(cached.devicesData).length > 0) {
+        const hasAnyData = Object.values(cached.devicesData).some(d => d.hasReceivedData);
+        if (hasAnyData) {
+          setHasReceivedData(true);
+          hasReceivedDataRef.current = true;
+          setIsLiveData(true);
+        }
       }
 
       console.log("🗂️ Restored last MQTT snapshot from AsyncStorage");
@@ -1468,11 +1639,10 @@ export const MqttProvider = ({ children }) => {
     }
     setIsConnected(false);
     setMqttClient(null);
-    setHasReceivedData(false);
-    hasReceivedDataRef.current = false;
-    setIsLiveData(false);
+    // ✅ Don't reset hasReceivedData/isLiveData during cleanup — keeps last known data visible during reconnect
     setDeviceStatus(null);
-    setConnectionState('idle');
+    // ✅ Don't set to 'idle' if we already had data — prevents dashboard from showing '--' during reconnect
+    setConnectionState(prev => (prev === 'online' || hasReceivedDataRef.current) ? 'connecting' : 'idle');
     
     isUsingGetStat.current = true;
     getStatStartTime.current = null;
@@ -1553,15 +1723,18 @@ export const MqttProvider = ({ children }) => {
       return false;
     }
     
-    const payload = buildActuatorPayload(status, deviceKey);
+    const previousStatus = devicesData[deviceKey]?.actuatorStatus || {};
+    const payload = buildActuatorPayload(status, deviceKey, previousStatus);
+    console.log(`📤 Publishing actuator to /messages/${deviceKey}/actuator`);
+    console.log(`📤 Payload:`, JSON.stringify(payload, null, 2));
     const success = await publish(`/messages/${deviceKey}/actuator`, JSON.stringify(payload));
     
     if (success) {
-      console.log(`✅ Actuator published to ${deviceKey}`);
-      // ✅ Do NOT update actuator state here — wait for GET_STATUS response
+      console.log(`✅ Actuator published successfully`);
+      console.log(`⏳ Waiting for data topic response...`);
+    } else {
+      console.log(`❌ Actuator publish FAILED`);
     }
-    // ✅ After publishing actuator, request GET_STATUS to get confirmed state from device
-    setTimeout(() => { requestDeviceStatus(deviceKey); }, 1500);
     return success;
   };
 
@@ -1572,6 +1745,11 @@ export const MqttProvider = ({ children }) => {
     }
     
     const payload = buildSettingsPayload(settings, deviceKey);
+    console.log(`\n════════════════════════════════════════════`);
+    console.log(`📤 PUBLISH SETTINGS to /messages/${deviceKey}/settings`);
+    console.log(`📤 Settings input:`, JSON.stringify(settings, null, 2));
+    console.log(`📤 Raw payload:`, JSON.stringify(payload, null, 2));
+    console.log(`════════════════════════════════════════════\n`);
     const success = await publish(`/messages/${deviceKey}/settings`, JSON.stringify(payload));
     
     if (success) {
@@ -1599,23 +1777,48 @@ export const MqttProvider = ({ children }) => {
       return false;
     }
     
+    // Always merge with current config so ALL fields are preserved
     const previousConfig = devicesData[deviceKey]?.deviceConfig || {};
-    const payload = buildConfigPayload(deviceKey, config, previousConfig);
+    const mergedConfig = { ...previousConfig, ...config };
+    const payload = buildConfigPayload(deviceKey, mergedConfig, previousConfig);
     const success = await publish(`/messages/${deviceKey}/cfg`, JSON.stringify(payload));
     
     if (success) {
       console.log(`✅ Config published to ${deviceKey}`);
+      console.log(`📤 Full cfg payload:`, JSON.stringify(payload, null, 2));
       setDevicesData(prev => ({
         ...prev,
         [deviceKey]: {
           ...prev[deviceKey],
-          deviceConfig: { ...config, lastUpdated: new Date() },
+          deviceConfig: { ...mergedConfig, lastUpdated: new Date() },
         }
       }));
       
       if (deviceKey === selectedExternalKeyRef.current) {
-        setDeviceConfig({ ...config, lastUpdated: new Date() });
+        setDeviceConfig({ ...mergedConfig, lastUpdated: new Date() });
       }
+    }
+    return success;
+  };
+
+  const publishReboot = async (deviceKey) => {
+    if (!deviceKey) {
+      console.log("⚠️ No device key for reboot");
+      return false;
+    }
+    // Send FULL config payload with BootAck=true — device needs all fields
+    const previousConfig = devicesData[deviceKey]?.deviceConfig || {};
+    const payload = buildConfigPayload(deviceKey, { boot_ack: true }, previousConfig);
+    const success = await publish(`/messages/${deviceKey}/cfg`, JSON.stringify(payload));
+    if (success) {
+      console.log(`✅ Reboot command sent to ${deviceKey}`);
+      setDevicesData(prev => ({
+        ...prev,
+        [deviceKey]: {
+          ...prev[deviceKey],
+          deviceConfig: { ...previousConfig, boot_ack: true, lastUpdated: new Date() },
+        }
+      }));
     }
     return success;
   };
@@ -1660,6 +1863,9 @@ export const MqttProvider = ({ children }) => {
     try {
       const savedKey = await AsyncStorage.getItem(STORAGE_KEYS.EXTERNAL_KEY);
       const savedDeviceId = await AsyncStorage.getItem(STORAGE_KEYS.ACTIVE_DEVICE_ID);
+      const savedSelectedDeviceId = await AsyncStorage.getItem(STORAGE_KEYS.SELECTED_DEVICE_ID);
+      const savedSelectedDeviceName = await AsyncStorage.getItem(STORAGE_KEYS.SELECTED_DEVICE_NAME);
+      const savedSelectedExtKey = await AsyncStorage.getItem(STORAGE_KEYS.SELECTED_EXTERNAL_KEY);
       
       if (savedKey) {
         console.log("📦 Loaded saved external_key:", savedKey);
@@ -1669,6 +1875,17 @@ export const MqttProvider = ({ children }) => {
       if (savedDeviceId) {
         console.log("📦 Loaded saved activeDeviceId:", savedDeviceId);
         setActiveDeviceId(savedDeviceId);
+      }
+
+      // ✅ Restore selected device info so header shows the name immediately
+      if (savedSelectedDeviceId) {
+        setSelectedDeviceId(savedSelectedDeviceId);
+      }
+      if (savedSelectedDeviceName) {
+        setSelectedDeviceName(savedSelectedDeviceName);
+      }
+      if (savedSelectedExtKey) {
+        setSelectedExternalKey(savedSelectedExtKey);
       }
       
       return { savedKey, savedDeviceId };
@@ -1701,6 +1918,7 @@ export const MqttProvider = ({ children }) => {
     publishActuatorStatus,
     publishSettings,
     publishConfig,
+    publishReboot,
     
     selectedDeviceId,
     selectedDeviceName,
@@ -1758,18 +1976,18 @@ export const MqttProvider = ({ children }) => {
       console.log("getStatStartTime:", getStatStartTime.current);
       console.log("=== END DEBUG ===");
     },
-    toggleDeviceStatus: async (deviceKey, deviceName, status) => {
+    toggleDeviceStatus: async (deviceKey, deviceName, status, timingOverrides = {}) => {
       const actuatorMap = {
-        water_pump: "water_pump",
-        water_ILvalve: "water_ILvalve",
-        water_OLvalve: "water_OLvalve",
-        nutrient_pump: "nutrient_pump",
-        reboot_ack: "reboot_ack",
-      };
-      
-      const actuatorKey = actuatorMap[deviceName];
-      if (!actuatorKey) {
-        console.log(`⚠️ Unknown device: ${deviceName}`);
+      water_pump: "water_pump",
+      water_ILvalve: "water_ILvalve",
+      water_OLvalve: "water_OLvalve",
+      nutrient_pump: "nutrient_pump",
+      ac_stat: "ac_stat",
+    };
+    
+    const actuatorKey = actuatorMap[deviceName];
+    if (!actuatorKey) {
+      console.log(`⚠️ Unknown device: ${deviceName}`);
         return false;
       }
       
@@ -1779,6 +1997,7 @@ export const MqttProvider = ({ children }) => {
       const updatedStatus = {
         ...currentStatus,
         [actuatorKey]: status,
+        ...timingOverrides,
       };
       
       return await publishActuatorStatus(deviceKey, updatedStatus);

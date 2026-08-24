@@ -37,6 +37,8 @@ function RootNav() {
       return;
     }
 
+
+
     if (isSignupFlow) {
       console.log("⏳ Signup flow active - allowing auth screens");
 

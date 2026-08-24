@@ -15,6 +15,7 @@ const NUMERIC_FIELD_MAP = {
   ph: "phValue",
   level: "waterLevel",
   lux: "lightLevel",
+  CropId: "cropId",
   temp: "ambientTemperature",
   humidity: "ambientHumidity",
   water_temp: "waterTemperature",
@@ -33,12 +34,10 @@ const BOOLEAN_FIELD_MAP = {
   Wat_ILV: "water_ILvalve",
   Wat_OLV: "water_OLvalve",
   NutPmp: "nutrient_pump",
-  BootAck: "reboot_ack",
   water_pump: "water_pump",
   water_ILvalve: "water_ILvalve",
   water_OLvalve: "water_OLvalve",
   nutrient_pump: "nutrient_pump",
-  reboot_ack: "reboot_ack",
 };
 
 // String fields (like Request ID)
@@ -163,13 +162,18 @@ const extractPartialData = (str) => {
     result.deviceStatusFlags = parseDeviceStatus(parseInt(devStatMatch[1]));
   }
   
+  // Try to extract CropId
+  const cropIdMatch = str.match(/"CropId"[^}]*"v":\s*(\d+)/);
+  if (cropIdMatch) {
+    result.cropId = parseInt(cropIdMatch[1]);
+  }
+  
   // Try to extract boolean values
   const boolFields = {
     WatPmp: "water_pump",
     Wat_ILV: "water_ILvalve",
     Wat_OLV: "water_OLvalve",
     NutPmp: "nutrient_pump",
-    BootAck: "reboot_ack"
   };
   
   for (const [senmlKey, resultKey] of Object.entries(boolFields)) {

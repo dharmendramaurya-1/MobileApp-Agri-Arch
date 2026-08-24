@@ -6,12 +6,14 @@ import { getDrawerStatusFromState } from "@react-navigation/drawer";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useNavigation } from "expo-router";
 import { Drawer } from "expo-router/drawer";
-import { useEffect, useRef, useState } from "react";
-import { BackHandler, Modal ,
+import { Component, useEffect, useRef, useState } from "react";
+import {
   Alert,
   Animated,
+  BackHandler,
   Dimensions,
   Linking,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -31,24 +33,67 @@ import { useMqtt } from "../../src/context/MqttContext";
 import { ScrollProvider, useScroll } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
 import { user_profile } from "../../src/services/profile/profile";
+import { getParameterById } from "../../src/services/add_crops/add_crops";
 
 const { width, height } = Dimensions.get("window");
+
+class ErrorBoundary extends Component {
+  state = { hasError: false };
+  static getDerivedStateFromError() { return { hasError: true }; }
+  componentDidCatch(error) { console.warn('⚠️ Render error caught:', error.message); }
+  render() { return this.state.hasError ? null : this.props.children; }
+}
 
 function CustomHeader({ navigation, theme }) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [user_name, setUsername] = useState("");
   const [showAlerts, setShowAlerts] = useState(false);
   
+  const [cropInfo, setCropInfo] = useState(null);
+
   // ✅ Get selected device data
   const { 
     getSelectedDeviceName,
     selectedDeviceId,
     deviceOnlineStatus,
     getSelectedDeviceOnlineStatus,
+    externalKey,
+    sensorData,
   } = useMqtt();
 
   const selectedDeviceName = getSelectedDeviceName();
-  const isDeviceOnline = getSelectedDeviceOnlineStatus();
+  const isDeviceOnlineRaw = getSelectedDeviceOnlineStatus();
+  // ✅ Show online only when we have real sensor data — prevents flicker
+  const hasSensorData = sensorData && (
+    sensorData.ambientTemperature !== null ||
+    sensorData.ambientHumidity !== null ||
+    sensorData.lastUpdated !== null
+  );
+  const isDeviceOnline = isDeviceOnlineRaw && hasSensorData;
+
+  // ✅ Fetch crop data when CropId changes
+  const cropId = sensorData?.cropId;
+  useEffect(() => {
+    if (cropId === null || cropId === undefined || cropId === 0) {
+      setCropInfo(null);
+      return;
+    }
+    let cancelled = false;
+    const fetchCrop = async () => {
+      try {
+        const result = await getParameterById(cropId);
+        if (!cancelled && result.success && result.data) {
+          setCropInfo(result.data);
+        } else if (!cancelled) {
+          setCropInfo(null);
+        }
+      } catch (e) {
+        if (!cancelled) setCropInfo(null);
+      }
+    };
+    fetchCrop();
+    return () => { cancelled = true; };
+  }, [cropId]);
 
   // ── Hero collapse (shutter) driven by the current screen's scroll ──────
   const { scrollY, setHeaderHeight, heroHeight, setHeroHeight } = useScroll();
@@ -123,7 +168,7 @@ function CustomHeader({ navigation, theme }) {
   };
 
   // ✅ Get device ID (external key) for display
-  const deviceId = selectedDeviceId || 'No Device Selected';
+  const deviceId = externalKey || 'No Device Selected';
 
   return (
     <View
@@ -168,77 +213,83 @@ function CustomHeader({ navigation, theme }) {
             <Ionicons name="logo-whatsapp" size={22} color="#25D366" />
           </TouchableOpacity>
         </View>
-      </View>
-
-      {/* ── Hero section — slides up behind the top bar on scroll ─────────── */}
-      <Animated.View
-        style={[
-          styles.heroSection,
-          {
-            transform: [{ translateY: heroTranslateY }],
-            opacity: heroOpacity,
-          },
-        ]}
-        onLayout={(e) => {
-          const h = e.nativeEvent.layout.height;
-          if (h > 0 && !heroMeasuredRef.current) {
-            heroMeasuredRef.current = true;
-            setHeroHeight(h);
-          }
-        }}
-      >
-        <View style={[styles.heroImage, { backgroundColor: "#2E7D32" }]} />
-        <View style={styles.heroContent}>
-          <View style={styles.weatherTimeRow}>
-            <View style={styles.weatherInfo}>
-              <Text style={styles.weatherIcon}>🌱</Text>
-              <View>
-                <Text style={styles.weatherTemp}>
-                  {selectedDeviceName || 'No Device'}
-                </Text>
-                <Text style={styles.weatherCondition}>
-                  {isDeviceOnline ? '✅ Active' : '⏳ Waiting...'}
-                </Text>
+      </View>        {/* ── Hero section — slides up behind the top bar on scroll ─────────── */}
+        <Animated.View
+          style={[
+            styles.heroSection,
+            {
+              transform: [{ translateY: heroTranslateY }],
+              opacity: heroOpacity,
+            },
+          ]}
+          onLayout={(e) => {
+            const h = e.nativeEvent.layout.height;
+            if (h > 0 && !heroMeasuredRef.current) {
+              heroMeasuredRef.current = true;
+              setHeroHeight(h);
+            }
+          }}
+        >
+          <View style={[styles.heroImage, { backgroundColor: "#2E7D32" }]} />
+          <View style={styles.heroContent}>
+            {/* ── Device Name + Active Badge + Time ── */}
+            <View style={styles.weatherTimeRow}>
+              <View style={styles.weatherInfo}>
+                <Text style={styles.weatherIcon}>🌱</Text>
+                <View>
+                  <View style={styles.deviceNameRow}>
+                    <Text style={styles.weatherTemp} numberOfLines={1}>
+                      {selectedDeviceName || 'No Device'}
+                    </Text>
+                    {isDeviceOnline && (
+                      <View style={styles.activeBadge}>
+                        <Text style={styles.activeBadgeText}>Active</Text>
+                      </View>
+                    )}
+                  </View>
+                  <Text style={styles.macIdText}>
+                    MAC: {deviceId === 'No Device Selected' ? '—' : '•••••' + deviceId.slice(-5)}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.timeInfo}>
+                <Text style={styles.timeText}>{formatTime()}</Text>
+                <Text style={styles.dateText}>{formatDate()}</Text>
               </View>
             </View>
-            <View style={styles.timeInfo}>
-              <Text style={styles.timeText}>{formatTime()}</Text>
-              <Text style={styles.dateText}>{formatDate()}</Text>
-            </View>
-          </View>
 
-          <View style={styles.greetingContainer}>
-            <Text style={styles.greetingText}>
-              Good Morning, {user_name}! 👋
-            </Text>
-            <Text style={styles.greetingSubtext}>
-              {isDeviceOnline ? 'Device is connected and ready' : 'Waiting for device connection...'}
-            </Text>
-          </View>
+            {/* ── Crop Info Row (horizontal) ── */}
+            <View style={styles.cropInfoRowCard}>
+              <View style={styles.cropInfoItem}>
+                <Ionicons name="leaf-outline" size={14} color="#FFF" />
+                <View>
+                  <Text style={styles.cropInfoLabel}>Crop</Text>
+                  <Text style={styles.cropInfoValue}>{cropInfo?.crop_name || 'N/A'}</Text>
+                </View>
+              </View>
+              <View style={styles.cropInfoSep} />
+              <View style={styles.cropInfoItem}>
+                <Ionicons name="bar-chart-outline" size={14} color="#FFF" />
+                <View>
+                  <Text style={styles.cropInfoLabel}>Stage</Text>
+                  <Text style={styles.cropInfoValue}>{cropInfo?.stage_id || 'N/A'}</Text>
+                </View>
+              </View>
+              <View style={styles.cropInfoSep} />
+              <View style={styles.cropInfoItem}>
+                <Ionicons name="radio-outline" size={14} color="#FFF" />
+                <View>
+                  <Text style={styles.cropInfoLabel}>Status</Text>
+                  <Text style={[styles.cropInfoValue, { color: '#FFF' }]}>
+                    {isDeviceOnline ? 'Online' : 'Offline'}
+                  </Text>
+                </View>
+              </View>
+            </View>
 
-          {/* ── Device Info Card ── */}
-          <View style={styles.deviceInfoCard}>
-            <View style={styles.deviceInfoRow}>
-              <Ionicons name="hardware-chip-outline" size={16} color="#FFF" style={styles.deviceInfoIcon} />
-              <Text style={styles.deviceInfoLabel}>Device ID:</Text>
-              <Text style={styles.deviceInfoValue} numberOfLines={1}>
-                {deviceId === 'No Device Selected' ? '—' : deviceId}
-              </Text>
-            </View>
-            <View style={styles.deviceInfoDivider} />
-            <View style={styles.deviceInfoRow}>
-              <Ionicons name="radio-outline" size={16} color="#FFF" style={styles.deviceInfoIcon} />
-              <Text style={styles.deviceInfoLabel}>Status:</Text>
-              <Text style={[
-                styles.deviceInfoValue,
-                { color: isDeviceOnline ? '#4CAF50' : '#FF9800' }
-              ]}>
-                {isDeviceOnline ? '🟢 Online' : '🟡 Offline'}
-              </Text>
-            </View>
+
           </View>
-        </View>
-      </Animated.View>
+        </Animated.View>
 
       {/* ✅ Alert Modal */}
       <Modal
@@ -369,7 +420,7 @@ function CustomDrawerContent({ navigation }) {
                 </Text>
               </View>
               <Text style={[styles.drawerDeviceStatusText, { color: theme.colors.textSecondary }]}>
-                {isOnline ? '🟢 Active' : '🔴 Offline'} · ID: {selectedDeviceId || 'N/A'}
+                {isOnline ? '🟢 Active' : '🔴 Offline'}
               </Text>
             </View>
           )}
@@ -533,10 +584,12 @@ function MainDrawer({ theme }) {
           headerShown: true,
           headerTransparent: true,
           header: ({ navigation }) => (
-            <CustomHeader
-              navigation={navigation}
-              theme={theme}
-            />
+            <ErrorBoundary>
+              <CustomHeader
+                navigation={navigation}
+                theme={theme}
+              />
+            </ErrorBoundary>
           ),
         }}
         drawerContent={(props) => <CustomDrawerContent {...props} />}
@@ -636,10 +689,33 @@ const styles = StyleSheet.create({
   weatherIcon: { fontSize: 28 },
   weatherTemp: { fontSize: 18, fontWeight: "700", color: "#FFF" },
   weatherCondition: { fontSize: 11, color: "rgba(255,255,255,0.9)" },
+  deviceNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  activeBadge: {
+    backgroundColor: "rgba(76,175,80,0.9)",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  activeBadgeText: {
+    color: "#FFF",
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.3,
+  },
+  macIdText: {
+    fontSize: 11,
+    color: "rgba(255,255,255,0.7)",
+    marginTop: 2,
+    fontWeight: "500",
+  },
   timeInfo: { alignItems: "flex-end" },
   timeText: { fontSize: 20, fontWeight: "700", color: "#FFF" },
   dateText: { fontSize: 11, color: "rgba(255,255,255,0.9)", marginTop: 2 },
-  greetingContainer: { alignItems: "center", marginBottom: 8 },
+  greetingContainer: { alignItems: "center", marginBottom: 4, marginTop: 10 },
   greetingText: {
     fontSize: 15,
     fontWeight: "600",
@@ -648,39 +724,41 @@ const styles = StyleSheet.create({
   },
   greetingSubtext: { fontSize: 11, color: "rgba(255,255,255,0.9)" },
   
-  // ── Device Info Card (NEW) ──
-  deviceInfoCard: {
+  // ── Crop Info Row (horizontal) ──
+  cropInfoRowCard: {
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: "rgba(255,255,255,0.12)",
     borderRadius: 10,
-    padding: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 6,
     marginTop: 4,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.08)",
   },
-  deviceInfoRow: {
+  cropInfoItem: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 2,
+    gap: 6,
   },
-  deviceInfoIcon: {
-    marginRight: 6,
+  cropInfoSep: {
+    width: 1,
+    height: "80%",
+    backgroundColor: "rgba(255,255,255,0.15)",
   },
-  deviceInfoLabel: {
-    fontSize: 11,
-    color: "rgba(255,255,255,0.7)",
+  cropInfoLabel: {
+    fontSize: 9,
+    color: "rgba(255,255,255,0.6)",
     fontWeight: "500",
-    width: 70,
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
   },
-  deviceInfoValue: {
+  cropInfoValue: {
     fontSize: 11,
     color: "#FFF",
-    fontWeight: "600",
-    flex: 1,
-  },
-  deviceInfoDivider: {
-    height: 1,
-    backgroundColor: "rgba(255,255,255,0.08)",
-    marginVertical: 4,
+    fontWeight: "700",
+    marginTop: 1,
   },
 
   // ── Drawer styles ──

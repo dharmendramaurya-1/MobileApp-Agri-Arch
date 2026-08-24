@@ -64,14 +64,11 @@ export interface DeviceStatusFlags {
   waterPump: boolean | null;
   nutrientPump: boolean | null;
   acStatus: boolean | null;
-  rebootAck: boolean | null;
   mode: boolean | null; // true = AUTO, false = MANUAL
-  online: boolean | null; // Bit 17 — true = ONLINE, false = OFFLINE
+  online: boolean | null; // Bit 16 — true = ONLINE, false = OFFLINE
+  sensorFault: number | null; // Bits 17-23 — 7-bit fault code (0-127)
   buzzer: boolean | null;
-  spareBit1: boolean | null;
-  sensorFault: number | null;
   dimmingLevel: number | null;
-  spareBit2: boolean | null;
   rawStatus: string | null;
 }
 
@@ -95,7 +92,6 @@ export interface DeviceSensorData {
   water_ILvalve: boolean | null;
   water_OLvalve: boolean | null;
   nutrient_pump: boolean | null;
-  reboot_ack: boolean | null;
   lastUpdated: Date | string | null;
   /** Device URN suffix, e.g. "9003718EEB3F" */
   _deviceId?: string;

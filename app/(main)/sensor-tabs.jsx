@@ -60,8 +60,6 @@ export default function SensorTabs() {
     : SENSORS[0].key;
   const [activeKey, setActiveKey] = useState(initialKey);
 
-  const activeConfig = SENSORS.find((s) => s.key === activeKey) || SENSORS[0];
-
   // Slide the tab bar up exactly with the hero, pinning below the top row.
   const tabTranslateY = scrollY.interpolate({
     inputRange: [0, heroHeight],
@@ -99,8 +97,8 @@ export default function SensorTabs() {
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       {/* Reuse the existing sensor detail screen — one per tab */}
       <SensorDetailScreen
-        key={activeConfig.dataKey}
-        config={activeConfig}
+        key={activeKey}
+        sensorKey={activeKey}
         showHeader={false}
         contentPaddingTop={headerHeight + TAB_BAR_HEIGHT}
       />

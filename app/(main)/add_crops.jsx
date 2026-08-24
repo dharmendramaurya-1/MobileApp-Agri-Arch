@@ -46,23 +46,28 @@ let cropsCache = null;
 function convertToSenML(cropData, customSettings) {
   const baseTime = Math.floor(Date.now() / 1000);
 
+  // Safely extract values — handle undefined/null cropData or customSettings
+  const safe = (obj, key, fallback) => (obj && obj[key] !== undefined && obj[key] !== null ? obj[key] : fallback);
+  const crop = cropData || {};
+  const settings = customSettings || {};
+
   return [
     { bn: "urn:dev:hydro-001:", bt: baseTime },
-    { n: "temp_low", v: customSettings.tempLow ?? cropData.temperature_min },
-    { n: "temp_high", v: customSettings.tempHigh ?? cropData.temperature_max },
-    { n: "humidity_low", v: customSettings.humidityLow ?? cropData.humidity_min },
-    { n: "humidity_high", v: customSettings.humidityHigh ?? cropData.humidity_max },
-    { n: "water_temp_low", v: customSettings.waterTempLow ?? cropData.nutrient_temp_min },
-    { n: "water_temp_high", v: customSettings.waterTempHigh ?? cropData.nutrient_temp_max },
-    { n: "water_level_low", v: customSettings.waterLevelLow ?? 25 },
-    { n: "water_level_high", v: customSettings.waterLevelHigh ?? 90 },
-    { n: "ph_low", v: customSettings.phLow ?? cropData.ph_min },
-    { n: "ph_high", v: customSettings.phHigh ?? cropData.ph_max },
-    { n: "co2_low", v: customSettings.co2Low ?? cropData.co2_min },
-    { n: "co2_high", v: customSettings.co2High ?? cropData.co2_max },
-    { n: "lux_low", v: customSettings.luxLow ?? Math.round((cropData.ppfd_min || 0) * 60) },
-    { n: "lux_high", v: customSettings.luxHigh ?? Math.round((cropData.ppfd_max || 0) * 60) },
-    { n: "dimming", v: customSettings.dimming ?? 75 },
+    { n: "temp_low", v: safe(settings, 'tempLow', safe(crop, 'temperature_min', 0)) },
+    { n: "temp_high", v: safe(settings, 'tempHigh', safe(crop, 'temperature_max', 0)) },
+    { n: "humidity_low", v: safe(settings, 'humidityLow', safe(crop, 'humidity_min', 0)) },
+    { n: "humidity_high", v: safe(settings, 'humidityHigh', safe(crop, 'humidity_max', 0)) },
+    { n: "water_temp_low", v: safe(settings, 'waterTempLow', safe(crop, 'nutrient_temp_min', 20)) },
+    { n: "water_temp_high", v: safe(settings, 'waterTempHigh', safe(crop, 'nutrient_temp_max', 28)) },
+    { n: "water_level_low", v: safe(settings, 'waterLevelLow', 25) },
+    { n: "water_level_high", v: safe(settings, 'waterLevelHigh', 90) },
+    { n: "ph_low", v: safe(settings, 'phLow', safe(crop, 'ph_min', 0)) },
+    { n: "ph_high", v: safe(settings, 'phHigh', safe(crop, 'ph_max', 0)) },
+    { n: "co2_low", v: safe(settings, 'co2Low', safe(crop, 'co2_min', 400)) },
+    { n: "co2_high", v: safe(settings, 'co2High', safe(crop, 'co2_max', 1500)) },
+    { n: "lux_low", v: safe(settings, 'luxLow', Math.round(safe(crop, 'ppfd_min', 0) * 60)) },
+    { n: "lux_high", v: safe(settings, 'luxHigh', Math.round(safe(crop, 'ppfd_max', 0) * 60)) },
+    { n: "dimming", v: safe(settings, 'dimming', 75) },
   ];
 }
 
@@ -335,7 +340,7 @@ function SenMLPreviewModal({ visible, onClose, cropDetails, customSettings, them
     },
     {
       title: "Water Temperature",
-      icon: "waves-outline",
+      icon: "water-outline",
       color: "#00BCD4",
       items: ["water_temp_low", "water_temp_high"],
     },
@@ -466,7 +471,6 @@ export default function AddCrops() {
     externalKey,
     forceReconnect,
     publishSettings,
-    publishSenML,
     connectionState,
     isLiveData,
     deviceStatusFlags,
@@ -827,40 +831,31 @@ export default function AddCrops() {
     }
 
     setIsSubmitting(true);
-
     try {
       const cropSettings = {
-        cropName: cropDetails.crop_name || selectedCropName,
-        variety: cropDetails.crop_variety_name || selectedVariety || "General",
-        stage: cropDetails.stage_id || selectedStageItem?.stage_id,
-        tempLow: customSettings.tempLow,
-        tempHigh: customSettings.tempHigh,
-        humidityLow: customSettings.humidityLow,
-        humidityHigh: customSettings.humidityHigh,
-        waterTempLow: customSettings.waterTempLow,
-        waterTempHigh: customSettings.waterTempHigh,
-        waterLevelLow: customSettings.waterLevelLow,
-        waterLevelHigh: customSettings.waterLevelHigh,
-        phLow: customSettings.phLow,
-        phHigh: customSettings.phHigh,
-        co2Low: customSettings.co2Low,
-        co2High: customSettings.co2High,
-        luxLow: customSettings.luxLow,
-        luxHigh: customSettings.luxHigh,
-        dimming: customSettings.dimming,
-        durationDays: `${cropDetails.stage_duration_min || 0}-${cropDetails.stage_duration_max || 0} DAS`,
-        photoperiod: `${cropDetails.photo_period_min || 0}-${cropDetails.photo_period_max || 0} hrs/day`,
-        expectedYield: cropDetails.yield_per_plant || "-",
-        lastUpdated: new Date(),
+        CropId: cropDetails.parameter_id || 0,
+        tempLow: customSettings.tempLow ?? cropDetails.temperature_min,
+        tempHigh: customSettings.tempHigh ?? cropDetails.temperature_max,
+        humidityLow: customSettings.humidityLow ?? cropDetails.humidity_min,
+        humidityHigh: customSettings.humidityHigh ?? cropDetails.humidity_max,
+        waterTempLow: customSettings.waterTempLow ?? cropDetails.nutrient_temp_min,
+        waterTempHigh: customSettings.waterTempHigh ?? cropDetails.nutrient_temp_max,
+        waterLevelLow: customSettings.waterLevelLow ?? 25,
+        waterLevelHigh: customSettings.waterLevelHigh ?? 90,
+        phLow: customSettings.phLow ?? cropDetails.ph_min,
+        phHigh: customSettings.phHigh ?? cropDetails.ph_max,
+        co2Low: customSettings.co2Low ?? cropDetails.co2_min,
+        co2High: customSettings.co2High ?? cropDetails.co2_max,
+        luxLow: customSettings.luxLow ?? Math.round((cropDetails.ppfd_min || 0) * 60),
+        luxHigh: customSettings.luxHigh ?? Math.round((cropDetails.ppfd_max || 0) * 60),
+        dimming: customSettings.dimming ?? 75,
       };
 
       let success = false;
 
       if (typeof publishSettings === "function") {
-        success = await publishSettings(cropSettings);
-      } else if (typeof publishSenML === "function") {
-        const senmlData = convertToSenML(cropDetails, customSettings);
-        success = await publishSenML(senmlData, "settings");
+        // publishSettings expects (deviceKey, settings)
+        success = await publishSettings(externalKey, cropSettings);
       }
 
       if (success) {
@@ -1181,7 +1176,7 @@ export default function AddCrops() {
             isAutoMode && { opacity: 0.5 },
           ]}
           onPress={handlePublish}
-          disabled={!isConnected || isSubmitting || isAutoMode}
+          // disabled={!isConnected || isSubmitting || isAutoMode}
           activeOpacity={0.85}
           accessibilityRole="button"
         >

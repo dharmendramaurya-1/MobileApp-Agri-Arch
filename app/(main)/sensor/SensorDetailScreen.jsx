@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import LineChart from "../../../components/LineChart";
+import { SENSORS, getSensorByKey } from "../../../src/config/sensorConfigs";
 import { useMqtt } from "../../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../../src/context/ScrollContext";
 import { useTheme } from "../../../src/context/ThemContext";
@@ -31,13 +32,17 @@ const RANGE_DAYS = { "1d": 1, "7d": 7, "30d": 30 };
 const RANGE_LABELS = { "1d": "Last 24 hours", "7d": "Last 7 days", "30d": "Last 30 days" };
 
 export default function SensorDetailScreen({
-  config,
+  sensorKey,
+  config: configProp,
   showHeader = true,
   contentPaddingTop,
 }) {
   const { theme } = useTheme();
   const { getSelectedDeviceSensorData, getSelectedDeviceId, getSelectedExternalKey, availableDevices } = useMqtt();
   const sensorData = getSelectedDeviceSensorData();
+
+  // ✅ Dynamic config lookup — prefer sensorKey, fallback to config prop, then first sensor
+  const config = (sensorKey ? getSensorByKey(sensorKey) : null) || configProp || SENSORS[0];
   const { onScroll, headerHeight } = useScroll();
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
@@ -147,11 +152,8 @@ export default function SensorDetailScreen({
   const toMs = Date.now();
   const fromMs = toMs - days * 24 * 60 * 60 * 1000;
 
-  // Mainflux expects nanoseconds
-  const from = fromMs * 1_000_000;
-  const to = toMs * 1_000_000;
-
-  return { from, to };
+  // Return milliseconds — fetchSensorHistorical handles ns conversion
+  return { from: fromMs, to: toMs };
 }, [timeRange]);
 
   // Fetch one page of the historical table
@@ -335,13 +337,13 @@ export default function SensorDetailScreen({
           </Text>
         </View>
 
-        {config.min !== undefined && config.max !== undefined && (
+        {/* {config.min !== undefined && config.max !== undefined && (
           <View style={styles.rangeContainer}>
             <Text style={[styles.rangeText, { color: theme.colors.textSecondary }]}>
               Optimal Range: {config.min} - {config.max} {config.unit}
             </Text>
           </View>
-        )}
+        )} */}
       </View>
 
       {/* Historical Data Section - From HTTP */}
@@ -653,16 +655,16 @@ const styles = StyleSheet.create({
 
   /* ── Live value card ───────────────────────────────────────────── */
   valueCard: {
-    marginHorizontal: 16,
-    padding: 20,
-    borderRadius: 16,
-    marginBottom: 16,
+    marginHorizontal: 0,
+    padding: 10,
+    // borderRadius: 16,
+    marginBottom: 4,
   },
   valueRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 12,
+    marginBottom: 0,
   },
   valueLabel: { fontSize: 14, fontWeight: "500" },
   statusBadge: {

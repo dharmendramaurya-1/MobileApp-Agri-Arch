@@ -1,22 +1,24 @@
 // app/(main)/system-control.jsx — System Control tab
-// Shows actuator toggles (pumps, valves) with real device data.
-// Toggle is disabled while waiting for GET_STATUS response.
+// Device toggles with inline expandable timing inputs + single Submit button.
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
+  Animated,
   Dimensions,
   Platform,
   ScrollView,
   StyleSheet,
   Switch,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import { useAlerts } from "../../src/context/AlertContext";
 import { useMqtt } from "../../src/context/MqttContext";
+import { router } from "expo-router";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useSystemMode } from "../../src/context/SystemModeContext";
 import { useTheme } from "../../src/context/ThemContext";
@@ -24,7 +26,19 @@ import { getDisplayStatus } from "../../src/utils/deviceStatusParser";
 
 const { height } = Dimensions.get("window");
 
-// ── Actuator configuration ────────────────────────────────────────────────────
+// ── Timing field definitions, grouped by parent device ──
+const TIMING_FIELDS = {
+  water_pump: [
+    { key: "water_pump_on_time", label: "ON Time", shortLabel: "WPONT", unit: "ms", min: 1000, max: 60000, step: 1000, defaultVal: 10000 },
+    { key: "water_pump_interval", label: "Interval", shortLabel: "WPINT", unit: "ms", min: 10000, max: 300000, step: 10000, defaultVal: 60000 },
+  ],
+  nutrient_pump: [
+    { key: "nutrient_pump_duration", label: "Duration", shortLabel: "NP_DI", unit: "ms", min: 10000, max: 600000, step: 10000, defaultVal: 120000 },
+    { key: "nutrient_pump_on_time", label: "ON Time", shortLabel: "NP_OT", unit: "ms", min: 1000, max: 30000, step: 1000, defaultVal: 5000 },
+  ],
+};
+
+// ── Device configuration ──
 const DEVICE_CONFIG = {
   water_pump: {
     displayName: "Water Pump",
@@ -32,6 +46,7 @@ const DEVICE_CONFIG = {
     description: "Main water circulation pump",
     category: "pump",
     actuatorKey: "water_pump",
+    color: "#2196F3",
   },
   water_ILvalve: {
     displayName: "Inlet Valve",
@@ -39,6 +54,7 @@ const DEVICE_CONFIG = {
     description: "Water inlet control valve",
     category: "valve",
     actuatorKey: "water_ILvalve",
+    color: "#00BCD4",
   },
   water_OLvalve: {
     displayName: "Outlet Valve",
@@ -46,6 +62,7 @@ const DEVICE_CONFIG = {
     description: "Water outlet control valve",
     category: "valve",
     actuatorKey: "water_OLvalve",
+    color: "#FF9800",
   },
   nutrient_pump: {
     displayName: "Nutrient Pump",
@@ -53,26 +70,175 @@ const DEVICE_CONFIG = {
     description: "Nutrient solution pump",
     category: "pump",
     actuatorKey: "nutrient_pump",
+    color: "#4CAF50",
   },
-  reboot_ack: {
-    displayName: "Reboot",
-    icon: "refresh",
-    description: "Reboot acknowledgment",
+  ac_stat: {
+    displayName: "AC Status",
+    icon: "thermometer",
+    description: "AC control status",
     category: "system",
-    actuatorKey: "reboot_ack",
+    actuatorKey: "ac_stat",
+    color: "#9C27B0",
   },
 };
 
-const DEVICE_ORDER = [
-  "water_pump",
-  "water_ILvalve",
-  "water_OLvalve",
-  "nutrient_pump",
-  "reboot_ack",
-];
-
+const DEVICE_ORDER = ["water_pump", "water_ILvalve", "water_OLvalve", "nutrient_pump", "ac_stat"];
 const CATEGORY_TITLES = { pump: "Pumps", valve: "Valves", system: "System" };
+const CATEGORY_ICONS = { pump: "water", valve: "git-network", system: "hardware-chip" };
 
+// ── Format milliseconds ──
+function fmtMs(ms) {
+  if (ms === null || ms === undefined) return "--";
+  if (ms < 1000) return `${ms}ms`;
+  const sec = ms / 1000;
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const rem = sec % 60;
+  return rem === 0 ? `${min}m` : `${min}m ${rem}s`;
+}
+
+// ── Expandable Actuator Card with inline timing inputs ──
+function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggleTime, onToggle, timingValues, onTimingChange, theme, cardBg, borderC }) {
+  // Pump cards start expanded by default
+  const [expanded, setExpanded] = useState(() => {
+    const timingFields = TIMING_FIELDS[device.id] || [];
+    return timingFields.length > 0;
+  });
+  const expandAnim = useRef(new Animated.Value(1)).current;
+  const rotateAnim = useRef(new Animated.Value(1)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const accentColor = device.color || "#4CAF50";
+  const timingFields = TIMING_FIELDS[device.id] || [];
+  const hasTiming = timingFields.length > 0;
+
+  // Pulse on status change
+  const prevIsOn = useRef(isOn);
+  useEffect(() => {
+    if (prevIsOn.current !== isOn) {
+      prevIsOn.current = isOn;
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.04, duration: 120, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
+      ]).start();
+    }
+  }, [isOn, pulseAnim]);
+
+  const toggleExpand = () => {
+    if (!hasTiming) return;
+    const toExpanded = !expanded;
+    setExpanded(toExpanded);
+    Animated.parallel([
+      Animated.spring(expandAnim, { toValue: toExpanded ? 1 : 0, useNativeDriver: false, friction: 8 }),
+      Animated.timing(rotateAnim, { toValue: toExpanded ? 1 : 0, duration: 200, useNativeDriver: true }),
+    ]).start();
+  };
+
+  const chevronRotation = rotateAnim.interpolate({ inputRange: [0, 1], outputRange: ["-90deg", "0deg"] });
+  const statusColor = isOn ? accentColor : "#757575";
+
+  return (
+    <Animated.View style={[styles.card, {
+      backgroundColor: cardBg,
+      borderColor: isOn ? `${accentColor}40` : borderC,
+      borderWidth: isOn ? 1.5 : 1,
+      transform: [{ scale: pulseAnim }],
+    }]}>
+      {/* ── Main Row ── */}
+      <TouchableOpacity
+        style={styles.cardMain}
+        onPress={toggleExpand}
+        activeOpacity={hasTiming ? 0.7 : 1}
+        disabled={locked}
+      >
+        <View style={[styles.iconCircle, { backgroundColor: `${statusColor}12` }]}>
+          <Ionicons name={isOn ? device.icon : `${device.icon}-outline`} size={22} color={statusColor} />
+        </View>
+        <View style={styles.cardInfo}>
+          <Text style={[styles.cardName, { color: theme.colors.text }]}>{device.displayName}</Text>
+          <Text style={[styles.cardDesc, { color: theme.colors.textSecondary }]}>{device.description}</Text>
+          <View style={styles.cardMeta}>
+            <View style={[styles.statusChip, { backgroundColor: `${statusColor}14` }]}>
+              <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+              <Text style={[styles.statusText, { color: statusColor }]}>
+                {isToggling ? "Sending..." : isOn ? "ON" : "OFF"}
+              </Text>
+            </View>
+            {toggleTime && (
+              <Text style={[styles.timeText, { color: theme.colors.textSecondary }]}>{toggleTime}</Text>
+            )}
+          </View>
+        </View>
+        <View style={styles.cardRight}>
+          <Switch
+            value={isOn}
+            onValueChange={() => onToggle(device)}
+            trackColor={{ false: "#E0E0E0", true: `${accentColor}60` }}
+            thumbColor={isToggling ? "#BDBDBD" : isOn ? accentColor : "#FAFAFA"}
+            disabled={locked || isToggling}
+          />
+          {hasTiming && (
+            <Animated.View style={{ transform: [{ rotate: chevronRotation }], marginLeft: 6 }}>
+              <Ionicons name="chevron-down" size={16} color={accentColor} />
+            </Animated.View>
+          )}
+        </View>
+      </TouchableOpacity>
+
+      {/* ── Expandable Timing Section ── */}
+      {hasTiming && (
+        <Animated.View style={{
+          maxHeight: expandAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 130] }),
+          opacity: expandAnim,
+          overflow: "hidden",
+        }}>
+          <View style={[styles.timingDivider, { backgroundColor: `${accentColor}15` }]} />
+          <View style={styles.timingSectionInner}>
+            <View style={styles.timingSectionHeader}>
+              <Ionicons name="time-outline" size={13} color={accentColor} />
+              <Text style={[styles.timingSectionLabel, { color: accentColor }]}>Timing Settings</Text>
+              <Text style={[styles.timingSectionUnit, { color: theme.colors.textSecondary }]}>ms</Text>
+            </View>
+            <View style={styles.timingRowInline}>
+              {timingFields.map((field) => {
+                const currentValue = timingValues[field.key] ?? actuatorStatus?.[field.key] ?? field.defaultVal;
+                const displayVal = currentValue !== null && currentValue !== undefined ? String(currentValue) : String(field.defaultVal);
+                const preview = fmtMs(currentValue ?? field.defaultVal);
+
+                return (
+                  <View key={field.key} style={[styles.timingInputCard, { borderColor: `${accentColor}20`, backgroundColor: `${accentColor}08` }]}>
+                    <View style={styles.timingCardLabelRow}>
+                      <View style={[styles.timingDot, { backgroundColor: accentColor }]} />
+                      <Text style={[styles.timingInputLabel, { color: theme.colors.text }]} numberOfLines={1}>{field.label}</Text>
+                  
+                      <Text style={[styles.timingInputPreview, { color: accentColor }]}>{preview}</Text>
+                    </View>
+                    {/* <Text style={[styles.timingInputSub, { color: theme.colors.textSecondary }]}>{field.shortLabel}</Text> */}
+                    <TextInput
+                      style={[styles.timingInput, { color: theme.colors.text, borderColor: `${accentColor}30`, backgroundColor: '#FFF' }]}
+                      value={displayVal}
+                      onChangeText={(text) => {
+                        const parsed = parseInt(text, 10);
+                        if (!isNaN(parsed)) onTimingChange(field.key, parsed);
+                        else if (text === "") onTimingChange(field.key, field.defaultVal);
+                      }}
+                      keyboardType="number-pad"
+                      editable={!locked}
+                      selectTextOnFocus
+                      placeholder={String(field.defaultVal)}
+                      placeholderTextColor="#BDBDBD"
+                    />
+                    </View>
+                );
+              })}
+            </View>
+          </View>
+        </Animated.View>
+      )}
+    </Animated.View>
+  );
+}
+
+// ── Main Component ──
 export default function SystemControl() {
   const { theme } = useTheme();
   const { onScroll, headerHeight } = useScroll();
@@ -87,7 +253,7 @@ export default function SystemControl() {
     deviceStatusFlags,
     isConnected,
     isLiveData,
-    toggleDeviceStatus: mqttToggleDeviceStatus,
+    publishActuatorStatus,
     hasReceivedData,
     connectionState,
   } = useMqtt();
@@ -95,30 +261,47 @@ export default function SystemControl() {
   const actuatorStatus = getSelectedDeviceActuatorStatus();
   const isOnline = getSelectedDeviceOnlineStatus();
   const selectedDeviceName = getSelectedDeviceName();
-
-  const {
-    isManualMode,
-    toggleMode,
-  } = useSystemMode();
-
+  const { isManualMode, toggleMode } = useSystemMode();
   const { addAlert } = useAlerts();
 
   const [updating, setUpdating] = useState(null);
   const [toggleTimes, setToggleTimes] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // ── Build device list from actuator data ──
+  // ── Timing values — initialized from actuatorStatus, synced on update ──
+  const [timingValues, setTimingValues] = useState(() => {
+    const init = {};
+    for (const [deviceId, fields] of Object.entries(TIMING_FIELDS)) {
+      for (const f of fields) {
+        init[f.key] = actuatorStatus?.[f.key] ?? f.defaultVal;
+      }
+    }
+    return init;
+  });
+
+  // Sync timing values when actuatorStatus updates (from device data)
+  useEffect(() => {
+    setTimingValues((prev) => {
+      const updated = { ...prev };
+      let changed = false;
+      for (const [deviceId, fields] of Object.entries(TIMING_FIELDS)) {
+        for (const f of fields) {
+          const deviceVal = actuatorStatus?.[f.key];
+          if (deviceVal !== null && deviceVal !== undefined && deviceVal !== prev[f.key]) {
+            updated[f.key] = deviceVal;
+            changed = true;
+          }
+        }
+      }
+      return changed ? updated : prev;
+    });
+  }, [actuatorStatus]);
+
+  // Build device list
   const devices = DEVICE_ORDER.filter((k) => k in DEVICE_CONFIG).map((k) => {
     const cfg = DEVICE_CONFIG[k];
-    const vb = actuatorStatus[cfg.actuatorKey];
-    return {
-      id: k,
-      displayName: cfg.displayName,
-      icon: cfg.icon,
-      description: cfg.description,
-      category: cfg.category,
-      actuatorKey: cfg.actuatorKey,
-      vb,
-    };
+    const vb = actuatorStatus[cfg.actuatorKey] ?? false;
+    return { id: k, ...cfg, vb };
   });
 
   const grouped = devices.reduce((acc, d) => {
@@ -127,86 +310,80 @@ export default function SystemControl() {
     return acc;
   }, {});
 
-  // ── Connection state ──
-  const isNotConnected = connectionState === "idle" || connectionState === "disconnected" || connectionState === "error";
-  const isLive = isOnline && isLiveData && isConnected && hasReceivedData;
-  const deviceLocked = !isManualMode || !isLive || isNotConnected;
+  // Clear updating when actuatorStatus changes
+  const prevActuatorRef = useRef(actuatorStatus);
+  useEffect(() => {
+    if (updating && prevActuatorRef.current !== actuatorStatus) {
+      setUpdating(null);
+    }
+    prevActuatorRef.current = actuatorStatus;
+  }, [actuatorStatus, updating]);
 
-  // ── Mode info ──
+  // Connection state
+  const isNotConnected = connectionState === "idle" || connectionState === "disconnected" || connectionState === "error";
+  const isLive = isOnline && isConnected && hasReceivedData;
+  const deviceLocked = !isManualMode || !isOnline || !isConnected || isNotConnected;
+
   const displayStatus = getDisplayStatus(deviceStatusFlags);
   const rawMode = displayStatus?.mode;
   const modeLabel = rawMode === "AUTO" ? "AUTO" : rawMode === "MANUAL" ? "MANUAL" : null;
 
-  // ── Toggle handler ──
-  const handleToggle = async (device) => {
-    if (updating) return;
-    if (device.vb === null) return;
-    if (deviceLocked) return;
+  // ── Timing change handler ──
+  const handleTimingChange = useCallback((timingKey, value) => {
+    setTimingValues((prev) => ({ ...prev, [timingKey]: value }));
+  }, []);
 
-    if (device.id === "reboot_ack") {
-      Alert.alert("Reboot", "Reboot the system?", [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Reboot",
-          style: "destructive",
-          onPress: () => doToggle(device),
-        },
-      ]);
-      return;
-    }
-
-    doToggle(device);
-  };
-
-  const doToggle = async (device) => {
+  // ── Submit all: sends all toggles + timing values at once ──
+  const handleSubmitAll = useCallback(async () => {
+    if (isSubmitting || deviceLocked) return;
     if (!selectedExternalKey) {
       Alert.alert("Error", "No device selected");
       return;
     }
 
-    setUpdating(device.id);
-    const newVal = !device.vb;
-    const time = new Date().toLocaleTimeString();
+    // Validate timing values
+    for (const [deviceId, fields] of Object.entries(TIMING_FIELDS)) {
+      for (const f of fields) {
+        const val = timingValues[f.key];
+        if (val !== null && val !== undefined) {
+          if (val < f.min || val > f.max) {
+            Alert.alert("Invalid Value", `${f.label} must be between ${f.min} and ${f.max} ${f.unit}`);
+            return;
+          }
+        }
+      }
+    }
 
+    setIsSubmitting(true);
     try {
-      const success = await mqttToggleDeviceStatus(selectedExternalKey, device.id, newVal);
-      if (!success) {
-        Alert.alert("Error", `Failed to toggle ${device.displayName}`);
+      // Build full status: current toggles + timing values
+      const fullStatus = {};
+      for (const device of devices) {
+        fullStatus[device.actuatorKey] = device.vb;
+      }
+      for (const [deviceId, fields] of Object.entries(TIMING_FIELDS)) {
+        for (const f of fields) {
+          fullStatus[f.key] = timingValues[f.key] ?? f.defaultVal;
+        }
+      }
+
+      const success = await publishActuatorStatus(selectedExternalKey, fullStatus);
+      if (success) {
+        const time = new Date().toLocaleTimeString();
+        setToggleTimes((prev) => ({ ...prev, all: time }));
+        addAlert("device", "⚙️ Settings Updated", `All device settings submitted at ${time}`, "success");
       } else {
-        setToggleTimes((prev) => ({ ...prev, [device.id]: time }));
-        addAlert(
-          "device",
-          newVal ? `${device.displayName} ON` : `${device.displayName} OFF`,
-          `${device.displayName} toggled at ${time}`,
-          newVal ? "success" : "info"
-        );
+        Alert.alert("Error", "Failed to submit settings");
       }
     } catch (err) {
-      Alert.alert("Error", `Failed to toggle ${device.displayName}`);
+      Alert.alert("Error", "Failed to submit settings");
+      console.error("Submit all error:", err);
     } finally {
-      setTimeout(() => setUpdating(null), 500);
+      setIsSubmitting(false);
     }
-  };
+  }, [isSubmitting, deviceLocked, selectedExternalKey, timingValues, devices, publishActuatorStatus, addAlert]);
 
   // ── Mode toggle ──
-  const handleModeToggle = () => {
-    if (isNotConnected) {
-      Alert.alert("Not Connected", "Please check your connection.");
-      return;
-    }
-    if (!hasReceivedData) {
-      Alert.alert("Waiting", "Please wait for device data.");
-      return;
-    }
-    if (!modeLabel) {
-      Alert.alert("Unknown", "Device mode not detected.");
-      return;
-    }
-    toggleMode();
-  };
-
-  // ── Theme colors ──
-  const primary = theme.colors.primary;
   const cardBg = theme.colors.card || theme.colors.surface || "#FFFFFF";
   const borderC = theme.colors.border || "#E0E0E0";
 
@@ -217,10 +394,7 @@ export default function SystemControl() {
         style={styles.container}
         contentContainerStyle={[
           styles.scrollContent,
-          {
-            paddingBottom: Platform.OS === "ios" ? height * 0.04 : height * 0.04,
-            paddingTop: headerHeight,
-          },
+          { paddingBottom: 100, paddingTop: headerHeight },
         ]}
         showsVerticalScrollIndicator={false}
         onScroll={onScroll}
@@ -229,489 +403,237 @@ export default function SystemControl() {
         {/* ── Header ── */}
         <View style={styles.header}>
           <View style={styles.headerLeft}>
-            <Text style={[styles.title, { color: theme.colors.text }]}>
-              System Control
-            </Text>
+            <Text style={[styles.title, { color: theme.colors.text }]}>System Control</Text>
             <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
               {selectedDeviceName || "No Device"}
               {modeLabel ? ` · ${modeLabel}` : ""}
             </Text>
           </View>
-          <View
-            style={[
-              styles.modePill,
-              {
-                backgroundColor: isNotConnected
-                  ? "#F44336"
-                  : isLive
-                  ? modeLabel === "MANUAL"
-                    ? "#4CAF50"
-                    : "#FF9800"
-                  : "#9E9E9E",
-              },
-            ]}
+          <TouchableOpacity
+            style={[styles.modePill, {
+              backgroundColor: isNotConnected ? "#F44336" : isLive ? (modeLabel === "MANUAL" ? "#4CAF50" : "#FF9800") : "#9E9E9E",
+            }]}
+            onPress={() => router.push("/(main)/settings")}
+            activeOpacity={0.7}
           >
-            <Ionicons
-              name={
-                isNotConnected
-                  ? "wifi-outline"
-                  : modeLabel === "MANUAL"
-                  ? "hand-left-outline"
-                  : "sync-outline"
-              }
-              size={12}
-              color="#FFF"
-            />
+            <Ionicons name={isNotConnected ? "wifi-outline" : modeLabel === "MANUAL" ? "hand-left-outline" : "sync-outline"} size={12} color="#FFF" />
             <Text style={styles.modePillText}>
-              {isNotConnected
-                ? "OFFLINE"
-                : modeLabel
-                ? modeLabel
-                : "NO DATA"}
+              {isNotConnected ? "OFFLINE" : modeLabel ? modeLabel : "NO DATA"}
             </Text>
-          </View>
+            <Ionicons name="chevron-forward" size={10} color="#FFF" opacity={0.7} />
+          </TouchableOpacity>
         </View>
 
         {/* ── Connection Banner ── */}
         {isNotConnected && (
           <View style={[styles.banner, { backgroundColor: "#F4433612" }]}>
             <Ionicons name="wifi-outline" size={15} color="#F44336" />
-            <Text style={[styles.bannerText, { color: "#F44336" }]}>
-              Not connected. Check your connection.
-            </Text>
+            <Text style={[styles.bannerText, { color: "#F44336" }]}>Not connected. Check your connection.</Text>
           </View>
-        )}
-
-        {/* ── Mode Button ── */}
-        <TouchableOpacity
-          style={[
-            styles.modeButton,
-            {
-              backgroundColor: isNotConnected
-                ? "#F44336"
-                : isLive
-                ? modeLabel === "MANUAL"
-                  ? "#4CAF50"
-                  : "#FF9800"
-                : "#9E9E9E",
-            },
-          ]}
-          onPress={handleModeToggle}
-          activeOpacity={0.8}
-          disabled={isNotConnected || !hasReceivedData || !modeLabel}
-        >
-          <View style={styles.modeBtnRow}>
-            <Ionicons
-              name={modeLabel === "MANUAL" ? "hand-left-outline" : "sync-outline"}
-              size={20}
-              color="#FFF"
-            />
-            <Text style={styles.modeBtnTitle}>
-              {modeLabel ? `${modeLabel} MODE` : "NO DATA"}
-            </Text>
-          </View>
-          {modeLabel && isLive && (
-            <View style={styles.modeTag}>
-              <View style={[styles.modeDot, { backgroundColor: "#FFF" }]} />
-              <Text style={styles.modeTagText}>
-                {modeLabel === "MANUAL" ? "Control Enabled" : "Auto Control"}
-              </Text>
-            </View>
-          )}
-          {isLive && <Ionicons name="chevron-forward" size={18} color="#FFF" opacity={0.7} />}
-        </TouchableOpacity>
-
-        {/* ── Mode Info ── */}
-        {modeLabel && isLive && (
-          <View
-            style={[
-              styles.infoRow,
-              {
-                backgroundColor:
-                  modeLabel === "MANUAL" ? "rgba(76,175,80,0.06)" : "rgba(255,152,0,0.06)",
-                borderColor:
-                  modeLabel === "MANUAL" ? "rgba(76,175,80,0.15)" : "rgba(255,152,0,0.15)",
-              },
-            ]}
-          >
-            <Ionicons
-              name="information-circle"
-              size={15}
-              color={modeLabel === "MANUAL" ? "#4CAF50" : "#FF9800"}
-            />
-            <Text
-              style={[
-                styles.infoText,
-                { color: modeLabel === "MANUAL" ? "#2E7D32" : "#E65100" },
-              ]}
-            >
-              {modeLabel === "MANUAL"
-                ? "Manual mode active. Control each device individually."
-                : "Auto mode active. System controls devices automatically."}
-            </Text>
-          </View>
-        )}
-
-        {/* ── Switch CTA ── */}
-        {modeLabel && isLive && (
-          <TouchableOpacity
-            style={[
-              styles.switchBtn,
-              {
-                backgroundColor: modeLabel === "MANUAL" ? "#FFF3E0" : "#E8F5E9",
-                borderColor: modeLabel === "MANUAL" ? "#FFB74D" : "#81C784",
-              },
-            ]}
-            onPress={handleModeToggle}
-            activeOpacity={0.7}
-          >
-            <Ionicons
-              name={modeLabel === "MANUAL" ? "sync-outline" : "hand-left-outline"}
-              size={17}
-              color={modeLabel === "MANUAL" ? "#FF9800" : "#4CAF50"}
-            />
-            <Text
-              style={[
-                styles.switchBtnText,
-                { color: modeLabel === "MANUAL" ? "#E65100" : "#2E7D32" },
-              ]}
-            >
-              {modeLabel === "MANUAL" ? "Switch to AUTO" : "Switch to MANUAL"}
-            </Text>
-            <Ionicons
-              name="chevron-forward"
-              size={15}
-              color={modeLabel === "MANUAL" ? "#FF9800" : "#4CAF50"}
-            />
-          </TouchableOpacity>
-        )}
-
-        {/* ── Auto Mode Warning ── */}
-        {modeLabel === "AUTO" && isLive && (
-          <View style={[styles.banner, { backgroundColor: "#FFF3E0" }]}>
-            <Ionicons name="lock-closed-outline" size={15} color="#FF9800" />
-            <Text style={[styles.bannerText, { color: "#E65100" }]}>
-              Control disabled in AUTO mode. Switch to MANUAL to control devices.
-            </Text>
-          </View>
-        )}
-
-        {/* ── Device Key ── */}
-        <View style={[styles.keyRow, { backgroundColor: `${theme.colors.textSecondary}0D` }]}>
-          <Text style={[styles.keyText, { color: theme.colors.textSecondary }]}>
-            Device: {selectedExternalKey || "—"}{" "}
-            {isNotConnected ? "🔴" : isLive ? "🟢" : "⚪"}
-          </Text>
-        </View>
-
-        {/* ── Actuator Groups ── */}
+        )}        {/* ── Actuator Groups ── */}
         {Object.entries(grouped).map(([category, items]) => (
           <View key={category} style={styles.section}>
-            <Text style={[styles.sectionTitle, { color: theme.colors.textSecondary }]}>
-              {CATEGORY_TITLES[category] || category}
-            </Text>
-
-            {items.map((device) => {
-              const isToggling = updating === device.id;
-              const hasData = device.vb !== null;
-              const isOn = device.vb === true;
-              const locked = deviceLocked || !hasData || isToggling;
-
-              const statusColor = !hasData
-                ? "#9E9E9E"
-                : isOn
-                ? "#4CAF50"
-                : "#757575";
-
-              return (
-                <View
-                  key={device.id}
-                  style={[
-                    styles.card,
-                    {
-                      backgroundColor: cardBg,
-                      borderColor: hasData && isOn ? "#4CAF5040" : borderC,
-                      borderWidth: hasData && isOn ? 1.5 : 1,
-                    },
-                  ]}
-                >
-                  <View style={styles.cardLeft}>
-                    <View
-                      style={[
-                        styles.iconCircle,
-                        { backgroundColor: `${statusColor}18` },
-                      ]}
-                    >
-                      <Ionicons
-                        name={isOn && hasData ? device.icon : `${device.icon}-outline`}
-                        size={24}
-                        color={statusColor}
-                      />
-                    </View>
-                    <View style={styles.cardInfo}>
-                      <Text style={[styles.cardName, { color: theme.colors.text }]}>
-                        {device.displayName}
-                      </Text>
-                      <Text style={[styles.cardDesc, { color: theme.colors.textSecondary }]}>
-                        {device.description}
-                      </Text>
-                      <View
-                        style={[
-                          styles.statusChip,
-                          { backgroundColor: `${statusColor}14` },
-                        ]}
-                      >
-                        <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
-                        <Text style={[styles.statusText, { color: statusColor }]}>
-                          {!hasData
-                            ? "No data"
-                            : isOn
-                            ? device.id === "reboot_ack"
-                              ? "ACK"
-                              : "ON"
-                            : device.id === "reboot_ack"
-                            ? "OFF"
-                            : "OFF"}
-                        </Text>
-                      </View>
-                      {toggleTimes[device.id] && (
-                        <Text style={[styles.timeText, { color: theme.colors.textSecondary }]}>
-                          Toggled: {toggleTimes[device.id]}
-                        </Text>
-                      )}
-                    </View>
-                  </View>
-
-                  <View style={styles.cardRight}>
-                    {device.id === "reboot_ack" ? (
-                      <TouchableOpacity
-                        style={[
-                          styles.actionBtn,
-                          {
-                            backgroundColor: locked ? "#E0E0E0" : isOn ? "#FF980020" : "#F5F5F5",
-                          },
-                        ]}
-                        onPress={() => handleToggle(device)}
-                        disabled={locked}
-                        activeOpacity={0.7}
-                      >
-                        <Ionicons
-                          name="refresh"
-                          size={20}
-                          color={locked ? "#BDBDBD" : "#FF9800"}
-                        />
-                      </TouchableOpacity>
-                    ) : (
-                      <Switch
-                        value={isOn}
-                        onValueChange={() => handleToggle(device)}
-                        trackColor={{ false: "#E0E0E0", true: "#4CAF5060" }}
-                        thumbColor={locked ? "#BDBDBD" : isOn ? "#4CAF50" : "#FAFAFA"}
-                        disabled={locked}
-                      />
-                    )}
-                  </View>
-                </View>
-              );
-            })}
+            <View style={styles.sectionHeader}>
+              <Ionicons name={CATEGORY_ICONS[category] || "grid"} size={14} color={theme.colors.textSecondary} />
+              <Text style={[styles.sectionTitle, { color: theme.colors.textSecondary }]}>
+                {CATEGORY_TITLES[category] || category}
+              </Text>
+            </View>
+            {items.map((device) => (
+              <ActuatorCard
+                key={device.id}
+                device={device}
+                actuatorStatus={actuatorStatus}
+                isOn={device.vb === true}
+                locked={deviceLocked}
+                isToggling={updating === device.id}
+                toggleTime={toggleTimes[device.id]}
+                onToggle={(d) => {
+                  // Individual toggle — preserves previous timing values
+                  if (!selectedExternalKey) { Alert.alert("Error", "No device selected"); return; }
+                  if (deviceLocked) return;
+                  setUpdating(d.id);
+                  const newVal = !d.vb;
+                  const time = new Date().toLocaleTimeString();
+                  // Build status with current toggles (previous timing preserved by MqttContext)
+                  const fullStatus = {};
+                  for (const dev of devices) {
+                    fullStatus[dev.actuatorKey] = dev.id === d.id ? newVal : dev.vb;
+                  }
+                  for (const [deviceId, fields] of Object.entries(TIMING_FIELDS)) {
+                    for (const f of fields) {
+                      fullStatus[f.key] = timingValues[f.key] ?? f.defaultVal;
+                    }
+                  }
+                  publishActuatorStatus(selectedExternalKey, fullStatus).then((success) => {
+                    if (success) {
+                      setToggleTimes((prev) => ({ ...prev, [d.id]: time }));
+                      addAlert("device", newVal ? `${d.displayName} ON` : `${d.displayName} OFF`,
+                        `${d.displayName} toggled at ${time}`, newVal ? "success" : "info");
+                    } else {
+                      Alert.alert("Error", `Failed to toggle ${d.displayName}`);
+                    }
+                  }).catch(() => {
+                    Alert.alert("Error", `Failed to toggle ${d.displayName}`);
+                  }).finally(() => setUpdating(null));
+                }}
+                timingValues={timingValues}
+                onTimingChange={handleTimingChange}
+                theme={theme}
+                cardBg={cardBg}
+                borderC={borderC}
+              />
+            ))}
           </View>
         ))}
 
         {/* ── Footer ── */}
-        <View
-          style={[
-            styles.footer,
-            { backgroundColor: cardBg, borderColor: borderC },
-          ]}
-        >
+        <View style={[styles.footer, { backgroundColor: cardBg, borderColor: borderC }]}>
           <Text style={[styles.footerText, { color: theme.colors.textSecondary }]}>
             {selectedDeviceName || "No Device"}
           </Text>
           {modeLabel && isLive && (
             <View style={styles.footerStatus}>
-              <View
-                style={[
-                  styles.footerDot,
-                  { backgroundColor: modeLabel === "MANUAL" ? "#4CAF50" : "#FF9800" },
-                ]}
-              />
-              <Text style={[styles.footerLabel, { color: theme.colors.textSecondary }]}>
-                {modeLabel}
-              </Text>
+              <View style={[styles.footerDot, { backgroundColor: modeLabel === "MANUAL" ? "#4CAF50" : "#FF9800" }]} />
+              <Text style={[styles.footerLabel, { color: theme.colors.textSecondary }]}>{modeLabel}</Text>
             </View>
           )}
         </View>
       </ScrollView>
+
+      {/* ── Sticky Submit Button ── */}
+      <View style={[styles.submitBar, { backgroundColor: theme.colors.background, borderTopColor: borderC }]}>
+        <TouchableOpacity
+          style={[styles.submitBtn, {
+            backgroundColor: deviceLocked ? "#BDBDBD" : "#2E7D32",
+            opacity: isSubmitting ? 0.7 : 1,
+          }]}
+          onPress={handleSubmitAll}
+          disabled={deviceLocked || isSubmitting}
+          activeOpacity={0.8}
+        >
+          {isSubmitting ? (
+            <ActivityIndicator size="small" color="#FFF" />
+          ) : (
+            <Ionicons name="send-outline" size={18} color="#FFF" />
+          )}
+          <Text style={styles.submitBtnText}>
+            {isSubmitting ? "Submitting..." : deviceLocked ? "Device Offline" : "Submit All Settings"}
+          </Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────────────
+// ── Styles ──
 const styles = StyleSheet.create({
   container: { flex: 1 },
   scrollContent: { padding: 16, paddingTop: Platform.OS === "ios" ? 8 : 16 },
 
-  // Header
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 14,
-  },
+  header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 14 },
   headerLeft: { flex: 1, marginRight: 10 },
   title: { fontSize: 26, fontWeight: "700" },
   subtitle: { fontSize: 13, marginTop: 2, opacity: 0.8 },
   modePill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
+    flexDirection: "row", alignItems: "center", gap: 5,
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12,
   },
   modePillText: { color: "#FFF", fontSize: 11, fontWeight: "700", letterSpacing: 0.4 },
 
-  // Banners
-  banner: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    padding: 10,
-    borderRadius: 10,
-    marginBottom: 10,
-  },
+  banner: { flexDirection: "row", alignItems: "center", gap: 8, padding: 10, borderRadius: 10, marginBottom: 10 },
   bannerText: { fontSize: 12, flex: 1, fontWeight: "500" },
-
-  // Mode button
-  modeButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  modeBtnRow: { flexDirection: "row", alignItems: "center", gap: 10, flex: 1 },
-  modeBtnTitle: { color: "#FFF", fontSize: 15, fontWeight: "700", letterSpacing: 0.5 },
-  modeTag: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    backgroundColor: "rgba(255,255,255,0.2)",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 10,
-  },
-  modeDot: { width: 7, height: 7, borderRadius: 4 },
-  modeTagText: { color: "#FFF", fontSize: 11, fontWeight: "500" },
-
-  // Info row
-  infoRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    padding: 10,
-    borderRadius: 10,
-    marginBottom: 8,
-    borderWidth: 1,
-  },
-  infoText: { fontSize: 12, flex: 1, fontWeight: "500" },
-
-  // Switch button
-  switchBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    marginBottom: 8,
-  },
-  switchBtnText: { fontSize: 13, fontWeight: "600" },
-
-  // Device key row
-  keyRow: {
-    padding: 8,
-    borderRadius: 8,
-    marginBottom: 12,
-  },
-  keyText: { fontSize: 11, fontWeight: "500", opacity: 0.8 },
 
   // Sections
   section: { marginTop: 10 },
-  sectionTitle: {
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 0.6,
-    marginBottom: 8,
-    marginLeft: 2,
-  },
+  sectionHeader: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 8, marginLeft: 2 },
+  sectionTitle: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.6 },
 
   // Actuator cards
   card: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: 14,
-    borderRadius: 14,
-    marginBottom: 8,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 2,
-    elevation: 1,
+    borderRadius: 14, marginBottom: 8,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 2, elevation: 1,
+    overflow: "hidden",
   },
-  cardLeft: { flexDirection: "row", alignItems: "center", flex: 1, paddingRight: 12 },
+  cardMain: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 14,
+  },
   iconCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: "center",
-    alignItems: "center",
-    marginRight: 12,
+    width: 42, height: 42, borderRadius: 21,
+    justifyContent: "center", alignItems: "center", marginRight: 12,
   },
-  cardInfo: { flex: 1 },
+  cardInfo: { flex: 1, paddingRight: 12 },
   cardName: { fontSize: 15, fontWeight: "600", marginBottom: 1 },
   cardDesc: { fontSize: 11, marginBottom: 4, opacity: 0.7 },
+  cardMeta: { flexDirection: "row", alignItems: "center", gap: 8 },
   statusChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 8,
-    alignSelf: "flex-start",
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: 7, paddingVertical: 2, borderRadius: 8, alignSelf: "flex-start",
   },
   statusDot: { width: 5, height: 5, borderRadius: 3, marginRight: 5 },
   statusText: { fontSize: 10, fontWeight: "600", letterSpacing: 0.3 },
-  timeText: { fontSize: 9, marginTop: 2, opacity: 0.5 },
-  cardRight: {
-    justifyContent: "center",
-    alignItems: "center",
+  timeText: { fontSize: 9, opacity: 0.5 },
+  cardRight: { flexDirection: "row", alignItems: "center", gap: 6 },
+
+  // Inline timing section (inside card)
+  timingDivider: { height: 1, marginHorizontal: 14 },
+  timingSectionInner: { padding: 14, paddingTop: 10 },
+  timingSectionHeader: {
+    flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 10,
   },
-  actionBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    justifyContent: "center",
-    alignItems: "center",
+  timingSectionLabel: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5, flex: 1 },
+  timingSectionUnit: { fontSize: 10, fontWeight: "500" },
+
+  // Timing inline row (side by side)
+  timingRowInline: {
+    flexDirection: "row",
+    gap: 10,
   },
+  timingInputCard: {
+    flex: 1,
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  timingCardLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    marginBottom: 4,
+  },
+  timingDot: { width: 5, height: 5, borderRadius: 3 },
+  timingInputLabel: { fontSize: 11, fontWeight: "600", flexShrink: 1 },
+  timingInputSub: { fontSize: 9, fontWeight: "600", opacity: 0.5, marginBottom: 6 },
+  timingInput: {
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    fontSize: 14,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  timingInputPreview: { fontSize: 10, fontWeight: "700", textAlign: "right",  },
+
+  // Submit bar (sticky bottom)
+  submitBar: {
+    position: "absolute", bottom: 0, left: 0, right: 0,
+    paddingHorizontal: 16, paddingVertical: 12,
+    paddingBottom: Platform.OS === "ios" ? 30 : 16,
+    borderTopWidth: 1,
+  },
+  submitBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    paddingVertical: 14, borderRadius: 14,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.15, shadowRadius: 6, elevation: 4,
+  },
+  submitBtnText: { color: "#FFF", fontSize: 15, fontWeight: "700", letterSpacing: 0.3 },
 
   // Footer
   footer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    marginTop: 8,
+    flexDirection: "row", justifyContent: "space-between", alignItems: "center",
+    padding: 12, borderRadius: 10, borderWidth: 1, marginTop: 14, marginBottom: 8,
   },
   footerText: { fontSize: 12, fontWeight: "500" },
   footerStatus: { flexDirection: "row", alignItems: "center", gap: 5 },

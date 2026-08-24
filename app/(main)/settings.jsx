@@ -206,6 +206,27 @@ export default function ConfigScreen() {
     return errors;
   };
 
+  // ── Auto-publish on auto_mode toggle (onChange) ──
+  const handleAutoModePublish = async (autoModeValue) => {
+    if (!isConnected) return;
+    if (!externalKey) return;
+    if (!config.report_interval || !config.sampling_interval) return;
+
+    try {
+      const configToSend = {
+        report_interval: config.report_interval,
+        sampling_interval: config.sampling_interval,
+        auto_mode: autoModeValue,
+      };
+      const success = await publishConfig(externalKey, configToSend);
+      if (success) {
+        console.log(`✅ Auto mode ${autoModeValue ? 'ON' : 'OFF'} published via onChange`);
+      }
+    } catch (error) {
+      console.error('Auto mode publish error:', error);
+    }
+  };
+
   // ── Publish configuration using MQTT context ──
   const handlePublish = async () => {
     // Validate all fields are filled
@@ -377,7 +398,12 @@ export default function ConfigScreen() {
           </View>
           <Switch
             value={config.auto_mode}
-            onValueChange={(v) => setConfig((c) => ({ ...c, auto_mode: v }))}
+            onValueChange={(v) => {
+              setConfig((c) => ({ ...c, auto_mode: v }));
+              // Auto-publish immediately on mode change
+              handleAutoModePublish(v);
+            }}
+            disabled={publishing || !isConnected || !isDeviceOnline}
             {...switchColors}
           />
         </View>

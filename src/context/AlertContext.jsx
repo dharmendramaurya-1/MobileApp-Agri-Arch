@@ -224,20 +224,6 @@ export const AlertProvider = ({ children }) => {
     prev.co2Level = current.co2Level;
   }, [sensorData, hasReceivedData]);
 
-  // ── Reboot ACK alert ────────────────────────────────────────────────────
-  useEffect(() => {
-    if (!hasReceivedData || !actuatorStatus) return;
-    
-    const prev = previousState.current;
-    const current = actuatorStatus;
-    
-    if (current.reboot_ack !== null && current.reboot_ack !== prev.reboot_ack && current.reboot_ack === true) {
-      addAlert('system', '🔄 System Reboot Initiated', `System reboot acknowledged at ${new Date().toLocaleTimeString()}`, 'warning');
-    }
-    
-    prev.reboot_ack = current.reboot_ack;
-  }, [actuatorStatus, hasReceivedData]);
-
   // ── ✅ UPDATED: Connection status alert - NO POPUP on initial load ────
   useEffect(() => {
     // ✅ Skip on initial load - don't show any popup
