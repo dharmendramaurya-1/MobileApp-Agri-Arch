@@ -246,7 +246,7 @@ function buildConfigPayload(deviceId, config, previousConfig = {}) {
     { n: "AutoMode", vb: autoMode },
     { n: "BootAck", vb: bootAck },
   ];
-}
+} 
 
 const generateRequestId = () => {
   return Math.random().toString(16).substring(2, 10).toUpperCase();
