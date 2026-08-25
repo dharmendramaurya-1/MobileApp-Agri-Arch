@@ -1,6 +1,7 @@
 // app/(main)/system-control.jsx — System Control tab
 // Device toggles with inline expandable timing inputs + single Submit button.
 import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -18,7 +19,6 @@ import {
 import SliderControl from "../../components/SettingsSlider";
 import { useAlerts } from "../../src/context/AlertContext";
 import { useMqtt } from "../../src/context/MqttContext";
-import { router } from "expo-router";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useSystemMode } from "../../src/context/SystemModeContext";
 import { useTheme } from "../../src/context/ThemContext";
@@ -576,7 +576,7 @@ export default function SystemControl() {
         ))}
 
         {/* ── Footer ── */}
-        <View style={[styles.footer, { backgroundColor: cardBg, borderColor: borderC }]}>
+        {/* <View style={[styles.footer, { backgroundColor: cardBg, borderColor: borderC }]}>
           <Text style={[styles.footerText, { color: theme.colors.textSecondary }]}>
             {selectedDeviceName || "No Device"}
           </Text>
@@ -586,7 +586,7 @@ export default function SystemControl() {
               <Text style={[styles.footerLabel, { color: theme.colors.textSecondary }]}>{modeLabel}</Text>
             </View>
           )}
-        </View>
+        </View> */}
       </ScrollView>
     </View>
   );

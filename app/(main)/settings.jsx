@@ -512,20 +512,40 @@ export default function ConfigScreen() {
           Notifications
         </Text>
         <View style={styles.settingItem}>
-          <Ionicons
-            name="notifications-outline"
-            size={24}
-            color={theme.colors.primary}
-          />
-          <Text style={[styles.settingText, { color: theme.colors.text }]}>
-            Push Notifications
-          </Text>
-          <Switch
-            value={notifications}
-            onValueChange={setNotifications}
-            {...switchColors}
-          />
-        </View>
+  {/* Left side: Icon + Text */}
+  <View
+    style={{
+      flexDirection: "row",
+      alignItems: "center",
+      flex: 1,
+      gap: 16,
+    }}
+  >
+    <Ionicons
+      name="notifications-outline"
+      size={24}
+      color={theme.colors.primary}
+    />
+
+    <Text
+      style={[
+        styles.settingText,
+        {
+          color: theme.colors.text,
+        },
+      ]}
+    >
+      Push Notifications
+    </Text>
+  </View>
+
+  {/* Right side: Switch */}
+  <Switch
+    value={notifications}
+    onValueChange={setNotifications}
+    {...switchColors}
+  />
+</View>
       </View>
 
       {/* Appearance Section */}
@@ -543,17 +563,41 @@ export default function ConfigScreen() {
         >
           Appearance
         </Text>
-        <View style={styles.settingItem}>
-          <Ionicons
-            name="moon-outline"
-            size={24}
-            color={theme.colors.primary}
-          />
-          <Text style={[styles.settingText, { color: theme.colors.text }]}>
-            Dark Mode
-          </Text>
-          <Switch value={isDark} onValueChange={toggleTheme} {...switchColors} />
-        </View>
+       <View style={styles.settingItem}>
+  {/* Left side: Icon + Text */}
+  <View
+    style={{
+      flexDirection: "row",
+      alignItems: "center",
+      flex: 1,
+      gap: 16,
+    }}
+  >
+    <Ionicons
+      name="moon-outline"
+      size={24}
+      color={theme.colors.primary}
+    />
+
+    <Text
+      style={[
+        styles.settingText,
+        {
+          color: theme.colors.text,
+        },
+      ]}
+    >
+      Dark Mode
+    </Text>
+  </View>
+
+  {/* Right side: Switch */}
+  <Switch
+    value={isDark}
+    onValueChange={toggleTheme}
+    {...switchColors}
+  />
+</View>
       </View>
     </ScrollView>
   );
@@ -621,11 +665,11 @@ const styles = StyleSheet.create({
     opacity: 0.8,
   },
   settingItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    padding: 16,
-    gap: 16,
-  },
+  flexDirection: "row",
+  alignItems: "center",
+  padding: 16,
+  gap: 16,
+},
   settingLabelContainer: {
     flexDirection: "row",
     alignItems: "center",

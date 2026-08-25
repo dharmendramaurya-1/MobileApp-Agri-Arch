@@ -295,6 +295,7 @@ export default function Devices() {
     selectDevice,
     selectedDeviceId,
     selectedExternalKey,
+    clearSelectedDevice,
   } = useMqtt();
 
   const { deleteThing } = useAuth();
@@ -419,15 +420,18 @@ export default function Devices() {
         const remaining = registeredDevices.filter((d) => d.id !== device.id);
         setRegisteredDevices(remaining);
 
-        // If deleted device was selected, switch to next online device without reconnecting MQTT
-        if (selectedDevice?.id === device.id) {
+        if (remaining.length === 0) {
+          // ✅ All devices deleted — clear all selected device state in MqttContext
+          setSelectedDevice(null);
+          await clearSelectedDevice();
+        } else if (selectedDevice?.id === device.id) {
+          // If deleted device was selected, switch to next online device
           const nextOnline = remaining.find((d) => {
             const isDvOnline = deviceOnlineStatus?.[d.external_key] || deviceOnlineStatus?.[d.id];
             return isDvOnline === true;
           });
 
           if (nextOnline) {
-            // Just update local state — selectDevice only updates context state, no MQTT reconnect
             await selectDevice(nextOnline.id, nextOnline.name);
             setSelectedDevice(nextOnline);
           } else {

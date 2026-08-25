@@ -488,6 +488,43 @@ export const MqttProvider = ({ children }) => {
     return true;
   };
 
+  // ── Clear selected device (used when all devices are deleted) ──
+  const clearSelectedDevice = async () => {
+    console.log("🗑️ Clearing selected device — no devices left");
+    setSelectedDeviceId(null);
+    setSelectedDeviceName(null);
+    setSelectedExternalKey(null);
+    setExternalKey(null);
+    setActiveDeviceId(null);
+    setConnectionState('idle');
+    setIsConnected(false);
+    setHasReceivedData(false);
+    hasReceivedDataRef.current = false;
+    setIsLiveData(false);
+    setHasEverBeenOnline(false);
+    hasEverBeenOnlineRef.current = false;
+    setSensorData({ ...DEFAULT_SENSOR_DATA });
+    setActuatorStatus({ ...DEFAULT_ACTUATOR_STATUS });
+    setCropSettings({ ...DEFAULT_CROP_SETTINGS });
+    setDeviceConfig({ ...DEFAULT_CONFIG });
+    setDeviceStatus(null);
+    setDeviceStatusFlags(getDefaultDeviceStatus());
+    setAvailableDevices([]);
+    setDevicesData({});
+    setDeviceOnlineStatus({});
+    setDeviceConnectionStatus({});
+    try {
+      await AsyncStorage.removeItem(STORAGE_KEYS.SELECTED_DEVICE_ID);
+      await AsyncStorage.removeItem(STORAGE_KEYS.SELECTED_DEVICE_NAME);
+      await AsyncStorage.removeItem(STORAGE_KEYS.SELECTED_EXTERNAL_KEY);
+      await AsyncStorage.removeItem(STORAGE_KEYS.EXTERNAL_KEY);
+      await AsyncStorage.removeItem(STORAGE_KEYS.ACTIVE_DEVICE_ID);
+      await AsyncStorage.removeItem("no_device_popup_shown");
+    } catch (e) {
+      console.error("❌ Error clearing device storage:", e);
+    }
+  };
+
   const getSelectedDeviceId = () => selectedDeviceId;
   const getSelectedDeviceName = () => selectedDeviceName;
   const getSelectedExternalKey = () => selectedExternalKey;
@@ -2003,6 +2040,7 @@ export const MqttProvider = ({ children }) => {
     selectedDeviceName,
     selectedExternalKey,
     selectDevice,
+    clearSelectedDevice,
     getSelectedDeviceId,
     getSelectedDeviceName,
     getSelectedExternalKey,

@@ -606,32 +606,65 @@ export default function AddCrops() {
   // ============================================
   // CHECK MQTT CONNECTION + LOAD CROPS ON MOUNT
   // ============================================
+  // useEffect(() => {
+  //   checkConnection();
+  //   loadCrops();
+  // }, []);
+
   useEffect(() => {
-    checkConnection();
-    loadCrops();
-  }, []);
+  checkConnection();
+}, [isConnected]);
 
-  const checkConnection = async () => {
-    const key = await AsyncStorage.getItem("external_key");
+useEffect(() => {
+  loadCrops();
+}, []);
 
-    if (key && isConnected) {
-      setConnectionStatus("connected");
-    } else if (key) {
-      setConnectionStatus("reconnecting");
-      try {
-        await forceReconnect(key);
-        setConnectionStatus("connected");
-      } catch (error) {
-        setConnectionStatus("failed");
-      }
-    } else {
-      setConnectionStatus("no_key");
-    }
-  };
+  // const checkConnection = async () => {
+  //   const key = await AsyncStorage.getItem("external_key");
+
+  //   if (key && isConnected) {
+  //     setConnectionStatus("connected");
+  //   } else if (key) {
+  //     setConnectionStatus("reconnecting");
+  //     try {
+  //       await forceReconnect(key);
+  //       setConnectionStatus("connected");
+  //     } catch (error) {
+  //       setConnectionStatus("failed");
+  //     }
+  //   } else {
+  //     setConnectionStatus("no_key");
+  //   }
+  // };
 
   // ============================================
   // API 1: LOAD CROP NAMES (flat string array)
   // ============================================
+  
+  const checkConnection = async () => {
+  const key = await AsyncStorage.getItem("external_key");
+
+  if (!key) {
+    setConnectionStatus("no_key");
+    return;
+  }
+
+  if (isConnected) {
+    setConnectionStatus("connected");
+    return;
+  }
+
+  setConnectionStatus("reconnecting");
+
+  try {
+    await forceReconnect(key);
+    setConnectionStatus("connected");
+  } catch (error) {
+    console.error("MQTT reconnect failed:", error);
+    setConnectionStatus("failed");
+  }
+};
+
   const loadCrops = async () => {
     try {
       setLoading(true);
@@ -1287,28 +1320,75 @@ export default function AddCrops() {
   const primaryDark = theme.colors.primaryDark;
 
   // ── Live device status (MqttContext — DevStat Bit 17 aware) ──────────────
+  // const liveStatus = (() => {
+  //   // Online ONLY when live data was received this session (isLiveData) and
+  //   // nothing reports offline — cached/restored data never shows Online.
+  //   if (
+  //     isLiveData &&
+  //     (deviceStatusFlags?.online === true || connectionState === "online")
+  //   ) {
+  //     return { label: "Online", color: "#4CAF50", bg: "rgba(76,175,80,0.12)" };
+  //   }
+  //   if (connectionState === "connecting" || connectionState === "waiting") {
+  //     return { label: "Connecting...", color: "#FFC107", bg: "rgba(255,193,7,0.12)" };
+  //   }
+  //   // No live data (or explicit offline) -> Offline directly. No waiting state.
+  //   if (
+  //     connectionState === "offline" ||
+  //     deviceStatusFlags?.online === false ||
+  //     !isLiveData
+  //   ) {
+  //     return { label: "Offline", color: "#F44336", bg: "rgba(244,67,54,0.12)" };
+  //   }
+  //   return { label: "Not Connected", color: "#9E9E9E", bg: "rgba(158,158,158,0.12)" };
+  // })();
+
   const liveStatus = (() => {
-    // Online ONLY when live data was received this session (isLiveData) and
-    // nothing reports offline — cached/restored data never shows Online.
-    if (
-      isLiveData &&
-      (deviceStatusFlags?.online === true || connectionState === "online")
-    ) {
-      return { label: "Online", color: "#4CAF50", bg: "rgba(76,175,80,0.12)" };
-    }
-    if (connectionState === "connecting" || connectionState === "waiting") {
-      return { label: "Connecting...", color: "#FFC107", bg: "rgba(255,193,7,0.12)" };
-    }
-    // No live data (or explicit offline) -> Offline directly. No waiting state.
-    if (
-      connectionState === "offline" ||
-      deviceStatusFlags?.online === false ||
-      !isLiveData
-    ) {
-      return { label: "Offline", color: "#F44336", bg: "rgba(244,67,54,0.12)" };
-    }
-    return { label: "Not Connected", color: "#9E9E9E", bg: "rgba(158,158,158,0.12)" };
-  })();
+  // MQTT/device is online
+  if (
+    isConnected === true ||
+    connectionState === "online" ||
+    deviceStatusFlags?.online === true
+  ) {
+    return {
+      label: "Online",
+      color: "#4CAF50",
+      bg: "rgba(76,175,80,0.12)",
+    };
+  }
+
+  // MQTT is trying to connect
+  if (
+    connectionState === "connecting" ||
+    connectionState === "waiting" ||
+    connectionState === "reconnecting"
+  ) {
+    return {
+      label: "Connecting...",
+      color: "#FFC107",
+      bg: "rgba(255,193,7,0.12)",
+    };
+  }
+
+  // Explicitly offline
+  if (
+    connectionState === "offline" ||
+    connectionState === "disconnected" ||
+    deviceStatusFlags?.online === false
+  ) {
+    return {
+      label: "Offline",
+      color: "#F44336",
+      bg: "rgba(244,67,54,0.12)",
+    };
+  }
+
+  return {
+    label: "Not Connected",
+    color: "#9E9E9E",
+    bg: "rgba(158,158,158,0.12)",
+  };
+})();
 
   const stepTitles = {
     crop: "Select Crop",

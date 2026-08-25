@@ -7,6 +7,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Dimensions,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -169,8 +170,11 @@ export default function Dashboard() {
     toggleDeviceStatus,
     deviceStatusFlags,
     connectionState,
-    externalKey
+    externalKey,
+    availableDevices,
   } = useMqtt();
+
+  const hasNoDevices = availableDevices && availableDevices.length === 0;
 
   const sensorData = getSelectedDeviceSensorData();
   const actuatorStatus = getSelectedDeviceActuatorStatus();
@@ -194,6 +198,7 @@ export default function Dashboard() {
   const [pumpStatus, setPumpStatus] = useState("OFF");
   const [isPublishing, setIsPublishing] = useState(false);
   const [optimisticPumpStatus, setOptimisticPumpStatus] = useState(null);
+  const [showNoDevicePopup, setShowNoDevicePopup] = useState(false);
 
   const hasData = hasReceivedData || isLiveData;
   // ✅ Use connectionState as source of truth for online/offline
@@ -259,16 +264,127 @@ export default function Dashboard() {
   const modeColor = isModeSwitching ? '#FF9800' : (getModeColor ? getModeColor() : (isManualMode ? '#4CAF50' : '#FF9800'));
   const displayPumpStatus = optimisticPumpStatus || pumpStatus;
   const showMode = isModeLoaded && (isDeviceOnline || hasData);
+
+  // ✅ One-time "no devices" popup
+  useEffect(() => {
+    if (hasNoDevices) {
+      const checkPopup = async () => {
+        const shown = await AsyncStorage.getItem("no_device_popup_shown");
+        if (!shown) {
+          setShowNoDevicePopup(true);
+          await AsyncStorage.setItem("no_device_popup_shown", "true");
+        }
+      };
+      checkPopup();
+    }
+  }, [hasNoDevices]);
+
+  const handleNoDevicePopupYes = () => {
+    setShowNoDevicePopup(false);
+    router.push("/(main)/devices");
+  };
+
   const formattedTime = formatLastUpdated(sensorData?.lastUpdated);
   const lastUpdatedLabel = formattedTime
     ? (isDeviceOnline ? ` ${formattedTime}` : `Last known: ${formattedTime}`)
     : null;
 
-
-
   const sensorCount = SENSOR_CONFIG.length;
   const activeSensors = SENSOR_CONFIG.filter(s => sensorData?.[s.dataKey] !== null && sensorData?.[s.dataKey] !== undefined).length;
 
+  // ═══════════════════════════════════════════════════════════════════
+  // NO DEVICES EMPTY STATE — show nothing except header + popup
+  // ═══════════════════════════════════════════════════════════════════
+  if (hasNoDevices) {
+    return (
+      <>
+        <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
+          {/* HEADER */}
+          <View style={styles.header}>
+            <View style={styles.headerLeft}>
+              <Text style={[styles.greeting, { color: theme.colors.text }]}>
+                {u_name} 👋
+              </Text>
+            </View>
+            <View style={styles.headerActions}>
+              <TouchableOpacity onPress={() => router.push("/(main)/settings")}
+                style={styles.headerIconBtn} activeOpacity={0.6}>
+                <Ionicons name="settings-outline" size={20} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => router.push("/(main)/profile")}>
+                <View style={[styles.avatar, { backgroundColor: theme.colors.primary }]}>
+                  <Text style={styles.avatarText}>{user?.name?.charAt(0) || "F"}</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Empty State */}
+          <View style={styles.emptyState}>
+            <View style={[styles.emptyIconWrap, { backgroundColor: `${theme.colors.primary}18` }]}>
+              <Ionicons name="hardware-chip-outline" size={56} color={theme.colors.primary} />
+            </View>
+            <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>No Devices Connected</Text>
+            <Text style={[styles.emptyDesc, { color: theme.colors.textSecondary }]}>
+              Add your first AgriArch device to start monitoring your farm in real time.
+            </Text>
+            <TouchableOpacity
+              onPress={() => router.push("/(main)/devices")}
+              style={[styles.emptyAddBtn, { shadowColor: theme.colors.primaryDark }]}
+              activeOpacity={0.85}
+            >
+              <LinearGradient
+                colors={[theme.colors.primary, theme.colors.primaryDark]}
+                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                style={styles.emptyAddBtnGradient}
+              >
+                <Ionicons name="add-circle" size={20} color="#FFF" />
+                <Text style={styles.emptyAddBtnText}>Add Your First Device</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* One-time No Device Popup */}
+        <Modal visible={showNoDevicePopup} transparent animationType="fade" onRequestClose={() => setShowNoDevicePopup(false)}>
+          <View style={styles.noDeviceOverlay}>
+            <View style={[styles.noDeviceModal, { backgroundColor: theme.colors.surface }]}>
+              <View style={[styles.noDeviceIconWrap, { backgroundColor: '#F4433615' }]}>
+                <Ionicons name="hardware-chip-outline" size={40} color="#F44336" />
+              </View>
+              <Text style={[styles.noDeviceTitle, { color: theme.colors.text }]}>No Devices Found</Text>
+              <Text style={[styles.noDeviceDesc, { color: theme.colors.textSecondary }]}>
+                {"You don't have any devices in your list. Add your first device to start monitoring your farm."}
+              </Text>
+              <View style={styles.noDeviceButtons}>
+                <TouchableOpacity
+                  style={[styles.noDeviceCancelBtn, { backgroundColor: `${theme.colors.textSecondary}14` }]}
+                  onPress={() => setShowNoDevicePopup(false)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.noDeviceCancelText, { color: theme.colors.text }]}>Later</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.noDeviceYesBtn}
+                  onPress={handleNoDevicePopupYes}
+                  activeOpacity={0.85}
+                >
+                  <LinearGradient colors={[theme.colors.primary, theme.colors.primaryDark]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.noDeviceYesGradient}>
+                    <Ionicons name="add-circle" size={18} color="#FFF" />
+                    <Text style={styles.noDeviceYesText}>Add Device</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      </>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // NORMAL DASHBOARD — device exists
+  // ═══════════════════════════════════════════════════════════════════
   return (
     <ScrollView
       ref={scrollRef}
@@ -284,13 +400,6 @@ export default function Dashboard() {
           <Text style={[styles.greeting, { color: theme.colors.text }]}>
             {u_name} 👋
           </Text>
-          {/* <View style={styles.headerMetaRow}>
-            <Text style={[styles.deviceName, { color: theme.colors.textSecondary }]} numberOfLines={1}>
-              {selectedDeviceName || 'No Device'}
-            </Text>
-            <ConnectionDot connectionState={connectionState} isLiveData={isLiveData}
-              deviceStatusFlags={deviceStatusFlags} hasReceivedData={hasReceivedData} />
-          </View> */}
         </View>
         <View style={styles.headerActions}>
           {showMode && (
@@ -444,6 +553,32 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.04)", justifyContent: "center", alignItems: "center",
   },
 
+  // ── Empty state ──
+  emptyState: {
+    flex: 1, alignItems: "center", justifyContent: "center",
+    paddingHorizontal: 32, paddingBottom: 60,
+  },
+  emptyIconWrap: {
+    width: 100, height: 100, borderRadius: 50,
+    alignItems: "center", justifyContent: "center", marginBottom: 20,
+  },
+  emptyTitle: { fontSize: 20, fontWeight: "800", textAlign: "center", marginBottom: 8 },
+  emptyDesc: {
+    fontSize: 14, textAlign: "center", lineHeight: 21,
+    marginBottom: 28, paddingHorizontal: 8,
+  },
+  emptyAddBtn: {
+    borderRadius: 50,
+    shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25,
+    shadowRadius: 8, elevation: 5,
+  },
+  emptyAddBtnGradient: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    paddingHorizontal: 24, paddingVertical: 14, borderRadius: 50,
+  },
+  emptyAddBtnText: { color: "#FFF", fontSize: 16, fontWeight: "700" },
+
+  // ── Summary card ──
   summaryCard: {
     marginHorizontal: 16, marginBottom: 14, borderRadius: 14,
     paddingRight: 32,
@@ -461,6 +596,8 @@ const styles = StyleSheet.create({
   },
   summaryValue: { fontSize: 11, fontWeight: "700" },
   summaryLabel: { fontSize: 9, fontWeight: "500", marginTop: 1 },
+
+  // ── Pump card ──
   pumpCardWrapper: {
     marginHorizontal: 16, marginBottom: 16, borderRadius: 18,
     shadowColor: "#000", shadowOffset: { width: 0, height: 4 },
@@ -490,6 +627,8 @@ const styles = StyleSheet.create({
   pumpToggleInner: { flexDirection: "row", alignItems: "center", gap: 4 },
   pumpToggleDot: { width: 8, height: 8, borderRadius: 4 },
   pumpToggleText: { color: "#FFF", fontSize: 12, fontWeight: "700" },
+
+  // ── Sensors section ──
   sectionHeader: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
     marginHorizontal: 20, marginBottom: 10,
@@ -527,6 +666,8 @@ const styles = StyleSheet.create({
     fontSize: 10, fontWeight: "500", textAlign: "center",
     marginTop: 2, marginBottom: 10, paddingHorizontal: 4,
   },
+
+  // ── Valve card ──
   valveCard: {
     width: SENSOR_CARD_W, backgroundColor: "#FFF", borderRadius: 16, height: 140,
     borderWidth: 1, borderColor: "rgba(0,0,0,0.05)", alignItems: "center",
@@ -551,4 +692,67 @@ const styles = StyleSheet.create({
   },
   valveStatus: { fontSize: 10, fontWeight: "800" },
   valveDividerV: { width: 1, backgroundColor: "rgba(0,0,0,0.06)" },
+
+  // ── No Device Popup ──
+  noDeviceOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
+  noDeviceModal: {
+    borderRadius: 20,
+    padding: 28,
+    width: "100%",
+    maxWidth: 360,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  noDeviceIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  noDeviceTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  noDeviceDesc: {
+    fontSize: 14,
+    textAlign: "center",
+    lineHeight: 21,
+    marginBottom: 24,
+    paddingHorizontal: 4,
+  },
+  noDeviceButtons: {
+    flexDirection: "row",
+    gap: 12,
+    width: "100%",
+  },
+  noDeviceCancelBtn: {
+    flex: 1,
+    paddingVertical: 13,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  noDeviceCancelText: { fontSize: 14, fontWeight: "600" },
+  noDeviceYesBtn: { flex: 1, borderRadius: 12, overflow: "hidden" },
+  noDeviceYesGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 13,
+  },
+  noDeviceYesText: { color: "#FFF", fontSize: 14, fontWeight: "700" },
 });
