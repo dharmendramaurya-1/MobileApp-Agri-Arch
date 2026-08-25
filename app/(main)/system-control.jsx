@@ -3,7 +3,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   Animated,
   Dimensions,
@@ -16,6 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import SliderControl from "../../components/SettingsSlider";
 import { useAlerts } from "../../src/context/AlertContext";
 import { useMqtt } from "../../src/context/MqttContext";
 import { router } from "expo-router";
@@ -29,12 +29,12 @@ const { height } = Dimensions.get("window");
 // ── Timing field definitions, grouped by parent device ──
 const TIMING_FIELDS = {
   water_pump: [
-    { key: "water_pump_on_time", label: "ON Time", shortLabel: "WPONT", unit: "ms", min: 1000, max: 60000, step: 1000, defaultVal: 10000 },
-    { key: "water_pump_interval", label: "Interval", shortLabel: "WPINT", unit: "ms", min: 10000, max: 300000, step: 10000, defaultVal: 60000 },
+    { key: "water_pump_on_time", label: "ON Time", shortLabel: "WPONT", unit: "s", min: 1, max: 60, step: 1, defaultVal: 10 },
+    { key: "water_pump_interval", label: "Interval", shortLabel: "WPINT", unit: "s", min: 10, max: 300, step: 10, defaultVal: 60 },
   ],
   nutrient_pump: [
-    { key: "nutrient_pump_duration", label: "Duration", shortLabel: "NP_DI", unit: "ms", min: 10000, max: 600000, step: 10000, defaultVal: 120000 },
-    { key: "nutrient_pump_on_time", label: "ON Time", shortLabel: "NP_OT", unit: "ms", min: 1000, max: 30000, step: 1000, defaultVal: 5000 },
+    { key: "nutrient_pump_duration", label: "Duration", shortLabel: "NP_DI", unit: "s", min: 10, max: 600, step: 10, defaultVal: 120 },
+    { key: "nutrient_pump_on_time", label: "ON Time", shortLabel: "NP_OT", unit: "s", min: 1, max: 30, step: 1, defaultVal: 5 },
   ],
 };
 
@@ -86,15 +86,95 @@ const DEVICE_ORDER = ["water_pump", "water_ILvalve", "water_OLvalve", "nutrient_
 const CATEGORY_TITLES = { pump: "Pumps", valve: "Valves", system: "System" };
 const CATEGORY_ICONS = { pump: "water", valve: "git-network", system: "hardware-chip" };
 
-// ── Format milliseconds ──
-function fmtMs(ms) {
-  if (ms === null || ms === undefined) return "--";
-  if (ms < 1000) return `${ms}ms`;
-  const sec = ms / 1000;
+// ── Format seconds (firmware now sends seconds, not milliseconds) ──
+function fmtSec(sec) {
+  if (sec === null || sec === undefined) return "--";
   if (sec < 60) return `${sec}s`;
   const min = Math.floor(sec / 60);
   const rem = sec % 60;
   return rem === 0 ? `${min}m` : `${min}m ${rem}s`;
+}
+
+// ── Dimming Card Component ──
+function DimmingCard({ dimmingLevel, onDimmingChange, locked, theme, cardBg, borderC }) {
+  // Firmware sends 0-127, display as 0-100%
+  const percentage = dimmingLevel !== null && dimmingLevel !== undefined
+    ? Math.round((dimmingLevel / 127) * 100)
+    : 0;
+  const [localValue, setLocalValue] = useState(percentage);
+
+  // Sync from device when it changes
+  useEffect(() => {
+    if (dimmingLevel !== null && dimmingLevel !== undefined) {
+      setLocalValue(Math.round((dimmingLevel / 127) * 100));
+    }
+  }, [dimmingLevel]);
+
+  const handleValueChange = (val) => {
+    const rounded = Math.round(val);
+    setLocalValue(rounded);
+    const firmwareValue = Math.round((rounded / 100) * 127);
+    onDimmingChange(firmwareValue);
+  };
+
+  const accentColor = "#FFC107";
+  return (
+    <View style={[styles.dimmCard, { backgroundColor: cardBg, borderColor: borderC }]}>
+      <View style={styles.dimmHeader}>
+        <View style={[styles.iconCircle, { backgroundColor: `${accentColor}15` }]}>
+          <Ionicons name="sunny" size={22} color={accentColor} />
+        </View>
+        <View style={styles.dimmTitleWrap}>
+          <Text style={[styles.dimmTitle, { color: theme.colors.text }]}>Light Dimming</Text>
+          <Text style={[styles.dimmSubtitle, { color: theme.colors.textSecondary }]}>Adjust grow light intensity</Text>
+        </View>
+        <View style={styles.dimmValueBadge}>
+          <Text style={[styles.dimmValueText, { color: accentColor }]}>{localValue}%</Text>
+        </View>
+      </View>
+
+      <View style={styles.dimmSliderWrap}>
+        <Ionicons name="sunny-outline" size={14} color={theme.colors.textSecondary} />
+        <View style={{ flex: 1 }}>
+          <SliderControl
+            single
+            min={0}
+            max={100}
+            minValue={localValue}
+            step={1}
+            onChange={handleValueChange}
+            tintColor={accentColor}
+            thumbColor="#FFFFFF"
+            trackColor={`${accentColor}25`}
+            disabled={locked}
+            formatValue={(v) => `${Math.round(v)}%`}
+          />
+        </View>
+        <Text style={[styles.dimmSliderEnd, { color: theme.colors.textSecondary }]}>100%</Text>
+      </View>
+
+      <View style={styles.dimmLabels}>
+        {[0, 25, 50, 75, 100].map((v) => (
+          <TouchableOpacity
+            key={v}
+            style={[styles.dimmQuickBtn, {
+              backgroundColor: localValue === v ? `${accentColor}20` : "transparent",
+              borderColor: localValue === v ? accentColor : borderC,
+            }]}
+            onPress={() => handleValueChange(v)}
+            disabled={locked}
+            activeOpacity={0.7}
+          >
+            <Text style={{
+              fontSize: 11,
+              fontWeight: "600",
+              color: localValue === v ? accentColor : theme.colors.textSecondary,
+            }}>{v}%</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
 }
 
 // ── Expandable Actuator Card with inline timing inputs ──
@@ -196,13 +276,13 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
             <View style={styles.timingSectionHeader}>
               <Ionicons name="time-outline" size={13} color={accentColor} />
               <Text style={[styles.timingSectionLabel, { color: accentColor }]}>Timing Settings</Text>
-              <Text style={[styles.timingSectionUnit, { color: theme.colors.textSecondary }]}>ms</Text>
+              <Text style={[styles.timingSectionUnit, { color: theme.colors.textSecondary }]}>s</Text>
             </View>
             <View style={styles.timingRowInline}>
               {timingFields.map((field) => {
                 const currentValue = timingValues[field.key] ?? actuatorStatus?.[field.key] ?? field.defaultVal;
                 const displayVal = currentValue !== null && currentValue !== undefined ? String(currentValue) : String(field.defaultVal);
-                const preview = fmtMs(currentValue ?? field.defaultVal);
+                const preview = fmtSec(currentValue ?? field.defaultVal);
 
                 return (
                   <View key={field.key} style={[styles.timingInputCard, { borderColor: `${accentColor}20`, backgroundColor: `${accentColor}08` }]}>
@@ -249,16 +329,19 @@ export default function SystemControl() {
     getSelectedDeviceActuatorStatus,
     getSelectedDeviceOnlineStatus,
     getSelectedDeviceName,
+    getSelectedDeviceCropSettings,
     selectedExternalKey,
     deviceStatusFlags,
     isConnected,
     isLiveData,
     publishActuatorStatus,
+    publishSettings,
     hasReceivedData,
     connectionState,
   } = useMqtt();
 
   const actuatorStatus = getSelectedDeviceActuatorStatus();
+  const cropSettings = getSelectedDeviceCropSettings();
   const isOnline = getSelectedDeviceOnlineStatus();
   const selectedDeviceName = getSelectedDeviceName();
   const { isManualMode, toggleMode } = useSystemMode();
@@ -266,7 +349,7 @@ export default function SystemControl() {
 
   const [updating, setUpdating] = useState(null);
   const [toggleTimes, setToggleTimes] = useState({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const publishTimerRef = useRef(null);
 
   // ── Timing values — initialized from actuatorStatus, synced on update ──
   const [timingValues, setTimingValues] = useState(() => {
@@ -322,7 +405,8 @@ export default function SystemControl() {
   // Connection state
   const isNotConnected = connectionState === "idle" || connectionState === "disconnected" || connectionState === "error";
   const isLive = isOnline && isConnected && hasReceivedData;
-  const deviceLocked = !isManualMode || !isOnline || !isConnected || isNotConnected;
+  // ✅ Only lock for connection issues — NOT for AUTO mode (popup handles that)
+  const deviceLocked = !isOnline || !isConnected || isNotConnected;
 
   const displayStatus = getDisplayStatus(deviceStatusFlags);
   const rawMode = displayStatus?.mode;
@@ -333,55 +417,36 @@ export default function SystemControl() {
     setTimingValues((prev) => ({ ...prev, [timingKey]: value }));
   }, []);
 
-  // ── Submit all: sends all toggles + timing values at once ──
-  const handleSubmitAll = useCallback(async () => {
-    if (isSubmitting || deviceLocked) return;
-    if (!selectedExternalKey) {
-      Alert.alert("Error", "No device selected");
+  // ── Dimming handler — publishes on change (debounced) ──
+  const handleDimmingChange = useCallback((firmwareValue) => {
+    if (!selectedExternalKey) return;
+    // ✅ If AUTO mode — show popup
+    if (!isManualMode) {
+      Alert.alert(
+        "🤖 AUTO Mode Active",
+        "Cannot change dimming while system is in AUTO mode.\n\nSwitch to MANUAL mode?",
+        [
+          { text: "No", style: "cancel" },
+          { text: "Yes, Go to Settings", onPress: () => router.push("/(main)/settings") },
+        ]
+      );
       return;
     }
-
-    // Validate timing values
-    for (const [deviceId, fields] of Object.entries(TIMING_FIELDS)) {
-      for (const f of fields) {
-        const val = timingValues[f.key];
-        if (val !== null && val !== undefined) {
-          if (val < f.min || val > f.max) {
-            Alert.alert("Invalid Value", `${f.label} must be between ${f.min} and ${f.max} ${f.unit}`);
-            return;
-          }
-        }
-      }
-    }
-
-    setIsSubmitting(true);
-    try {
-      // Build full status: current toggles + timing values
-      const fullStatus = {};
-      for (const device of devices) {
-        fullStatus[device.actuatorKey] = device.vb;
-      }
-      for (const [deviceId, fields] of Object.entries(TIMING_FIELDS)) {
-        for (const f of fields) {
-          fullStatus[f.key] = timingValues[f.key] ?? f.defaultVal;
-        }
-      }
-
-      const success = await publishActuatorStatus(selectedExternalKey, fullStatus);
-      if (success) {
+    if (deviceLocked) return;
+    // Debounce: clear previous timer
+    if (publishTimerRef.current) clearTimeout(publishTimerRef.current);
+    publishTimerRef.current = setTimeout(async () => {
+      try {
+        // Publish dimming as part of crop settings (Dimm field)
+        const currentCropSettings = cropSettings || {};
+        await publishSettings(selectedExternalKey, { ...currentCropSettings, dimming: firmwareValue });
         const time = new Date().toLocaleTimeString();
-        setToggleTimes((prev) => ({ ...prev, all: time }));
-        addAlert("device", "⚙️ Settings Updated", `All device settings submitted at ${time}`, "success");
-      } else {
-        Alert.alert("Error", "Failed to submit settings");
+        addAlert("device", "☀️ Dimming Updated", `Light dimming set to ${Math.round((firmwareValue / 127) * 100)}% at ${time}`, "success");
+      } catch (err) {
+        console.error("Dimming publish error:", err);
       }
-    } catch (err) {
-      Alert.alert("Error", "Failed to submit settings");
-      console.error("Submit all error:", err);
-    } finally {
-      setIsSubmitting(false);
-    }
-  }, [isSubmitting, deviceLocked, selectedExternalKey, timingValues, devices, publishActuatorStatus, addAlert]);
+    }, 500); // 500ms debounce
+  }, [deviceLocked, selectedExternalKey, cropSettings, publishSettings, addAlert]);
 
   // ── Mode toggle ──
   const cardBg = theme.colors.card || theme.colors.surface || "#FFFFFF";
@@ -394,7 +459,7 @@ export default function SystemControl() {
         style={styles.container}
         contentContainerStyle={[
           styles.scrollContent,
-          { paddingBottom: 100, paddingTop: headerHeight },
+          { paddingBottom: 24, paddingTop: headerHeight },
         ]}
         showsVerticalScrollIndicator={false}
         onScroll={onScroll}
@@ -430,7 +495,19 @@ export default function SystemControl() {
             <Ionicons name="wifi-outline" size={15} color="#F44336" />
             <Text style={[styles.bannerText, { color: "#F44336" }]}>Not connected. Check your connection.</Text>
           </View>
-        )}        {/* ── Actuator Groups ── */}
+        )}
+
+        {/* ── Dimming Card ── */}
+        <DimmingCard
+          dimmingLevel={deviceStatusFlags?.dimmingLevel ?? null}
+          onDimmingChange={handleDimmingChange}
+          locked={deviceLocked}
+          theme={theme}
+          cardBg={cardBg}
+          borderC={borderC}
+        />
+
+        {/* ── Actuator Groups ── */}
         {Object.entries(grouped).map(([category, items]) => (
           <View key={category} style={styles.section}>
             <View style={styles.sectionHeader}>
@@ -449,8 +526,19 @@ export default function SystemControl() {
                 isToggling={updating === device.id}
                 toggleTime={toggleTimes[device.id]}
                 onToggle={(d) => {
-                  // Individual toggle — preserves previous timing values
                   if (!selectedExternalKey) { Alert.alert("Error", "No device selected"); return; }
+                  // ✅ If AUTO mode — show popup instead of silently blocking
+                  if (!isManualMode) {
+                    Alert.alert(
+                      "🤖 AUTO Mode Active",
+                      `Cannot control "${d.displayName}" while system is in AUTO mode.\n\nSwitch to MANUAL mode to control devices?`,
+                      [
+                        { text: "No", style: "cancel" },
+                        { text: "Yes, Go to Settings", onPress: () => router.push("/(main)/settings") },
+                      ]
+                    );
+                    return;
+                  }
                   if (deviceLocked) return;
                   setUpdating(d.id);
                   const newVal = !d.vb;
@@ -500,28 +588,6 @@ export default function SystemControl() {
           )}
         </View>
       </ScrollView>
-
-      {/* ── Sticky Submit Button ── */}
-      <View style={[styles.submitBar, { backgroundColor: theme.colors.background, borderTopColor: borderC }]}>
-        <TouchableOpacity
-          style={[styles.submitBtn, {
-            backgroundColor: deviceLocked ? "#BDBDBD" : "#2E7D32",
-            opacity: isSubmitting ? 0.7 : 1,
-          }]}
-          onPress={handleSubmitAll}
-          disabled={deviceLocked || isSubmitting}
-          activeOpacity={0.8}
-        >
-          {isSubmitting ? (
-            <ActivityIndicator size="small" color="#FFF" />
-          ) : (
-            <Ionicons name="send-outline" size={18} color="#FFF" />
-          )}
-          <Text style={styles.submitBtnText}>
-            {isSubmitting ? "Submitting..." : deviceLocked ? "Device Offline" : "Submit All Settings"}
-          </Text>
-        </TouchableOpacity>
-      </View>
     </View>
   );
 }
@@ -616,20 +682,6 @@ const styles = StyleSheet.create({
   },
   timingInputPreview: { fontSize: 10, fontWeight: "700", textAlign: "right",  },
 
-  // Submit bar (sticky bottom)
-  submitBar: {
-    position: "absolute", bottom: 0, left: 0, right: 0,
-    paddingHorizontal: 16, paddingVertical: 12,
-    paddingBottom: Platform.OS === "ios" ? 30 : 16,
-    borderTopWidth: 1,
-  },
-  submitBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    paddingVertical: 14, borderRadius: 14,
-    shadowColor: "#000", shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.15, shadowRadius: 6, elevation: 4,
-  },
-  submitBtnText: { color: "#FFF", fontSize: 15, fontWeight: "700", letterSpacing: 0.3 },
-
   // Footer
   footer: {
     flexDirection: "row", justifyContent: "space-between", alignItems: "center",
@@ -639,4 +691,33 @@ const styles = StyleSheet.create({
   footerStatus: { flexDirection: "row", alignItems: "center", gap: 5 },
   footerDot: { width: 7, height: 7, borderRadius: 4 },
   footerLabel: { fontSize: 11, fontWeight: "500" },
+
+  // Dimming Card
+  dimmCard: {
+    borderRadius: 14, marginBottom: 14,
+    borderWidth: 1, padding: 16,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2,
+  },
+  dimmHeader: {
+    flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 14,
+  },
+  dimmTitleWrap: { flex: 1 },
+  dimmTitle: { fontSize: 15, fontWeight: "700" },
+  dimmSubtitle: { fontSize: 11, marginTop: 1, opacity: 0.7 },
+  dimmValueBadge: {
+    backgroundColor: "rgba(255,193,7,0.12)", borderRadius: 10,
+    paddingHorizontal: 10, paddingVertical: 4, minWidth: 48, alignItems: "center",
+  },
+  dimmValueText: { fontSize: 16, fontWeight: "800" },
+  dimmSliderWrap: {
+    flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12,
+  },
+  dimmSliderEnd: { fontSize: 11, fontWeight: "600", minWidth: 32, textAlign: "right" },
+  dimmLabels: {
+    flexDirection: "row", justifyContent: "space-between", gap: 6,
+  },
+  dimmQuickBtn: {
+    flex: 1, alignItems: "center", paddingVertical: 6,
+    borderRadius: 8, borderWidth: 1,
+  },
 });

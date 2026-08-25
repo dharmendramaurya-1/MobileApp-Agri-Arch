@@ -196,10 +196,10 @@ export default function Dashboard() {
   const [optimisticPumpStatus, setOptimisticPumpStatus] = useState(null);
 
   const hasData = hasReceivedData || isLiveData;
-  // ✅ Only show waiting/offline visuals when we have NO data yet — once data arrives, keep showing it
-  const isDeviceOnline = isDeviceOnlineFromContext && hasData;
-  const isDeviceWaiting = !hasData && (connectionState === 'connecting' || connectionState === 'waiting' || connectionState === 'idle');
-  const isDeviceOffline = !hasData && (connectionState === 'offline' || connectionState === 'disconnected' || connectionState === 'error');
+  // ✅ Use connectionState as source of truth for online/offline
+  const isDeviceOnline = isDeviceOnlineFromContext && connectionState === 'online';
+  const isDeviceWaiting = connectionState === 'connecting' || connectionState === 'waiting' || connectionState === 'idle';
+  const isDeviceOffline = connectionState === 'offline' || connectionState === 'disconnected' || connectionState === 'error';
   const canPublish = isConnected && isDeviceOnline && isManualMode && !isModeSwitching && !isPublishing;
 
   useEffect(() => {
@@ -369,7 +369,7 @@ export default function Dashboard() {
           <View style={styles.pumpContent}>
             <View style={styles.pumpLeft}>
               <View style={styles.pumpIconCircle}>
-                <Ionicons name="water" size={22} color="#FFF" />
+                <Ionicons name={displayPumpStatus === 'ON' ? 'water' : 'water-outline'} size={22} color="#FFF" />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.pumpTitle}>Water Pump</Text>
