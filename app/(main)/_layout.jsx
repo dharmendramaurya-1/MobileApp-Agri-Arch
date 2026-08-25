@@ -107,6 +107,15 @@ function CustomHeader({ navigation, theme }) {
     extrapolate: "clamp",
   });
 
+  // When hero is collapsed, disable its touch area so dashboard buttons stay tappable
+  const [heroCollapsed, setHeroCollapsed] = useState(false);
+  useEffect(() => {
+    const id = scrollY.addListener(({ value }) => {
+      setHeroCollapsed(value > heroHeight * 0.5);
+    });
+    return () => scrollY.removeListener(id);
+  }, [scrollY, heroHeight]);
+
   useEffect(() => {
     const profile = async () => {
       try {
@@ -168,6 +177,7 @@ function CustomHeader({ navigation, theme }) {
   return (
     <View
       style={styles.headerContainer}
+      pointerEvents="box-none"
       onLayout={(e) => {
         const h = e.nativeEvent.layout.height;
         if (h > 0) setHeaderHeight(h);
@@ -211,6 +221,7 @@ function CustomHeader({ navigation, theme }) {
       </View>
       {/* ── Hero section — slides up behind the top bar on scroll ─────────── */}
       <Animated.View
+          pointerEvents={heroCollapsed ? "none" : "auto"}
           style={[
             styles.heroSection,
             {

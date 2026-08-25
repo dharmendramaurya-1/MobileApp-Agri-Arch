@@ -469,10 +469,10 @@ export default function SystemControl() {
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={[styles.title, { color: theme.colors.text }]}>System Control</Text>
-            <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
+            {/* <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
               {selectedDeviceName || "No Device"}
               {modeLabel ? ` · ${modeLabel}` : ""}
-            </Text>
+            </Text> */}
           </View>
           <TouchableOpacity
             style={[styles.modePill, {
