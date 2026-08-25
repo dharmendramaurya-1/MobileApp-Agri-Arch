@@ -32,8 +32,8 @@ import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
 import { ScrollProvider, useScroll } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
-import { user_profile } from "../../src/services/profile/profile";
 import { getParameterById } from "../../src/services/add_crops/add_crops";
+import { user_profile } from "../../src/services/profile/profile";
 
 const { width, height } = Dimensions.get("window");
 
@@ -59,17 +59,12 @@ function CustomHeader({ navigation, theme }) {
     getSelectedDeviceOnlineStatus,
     externalKey,
     sensorData,
+    connectionState,
   } = useMqtt();
 
   const selectedDeviceName = getSelectedDeviceName();
-  const isDeviceOnlineRaw = getSelectedDeviceOnlineStatus();
-  // ✅ Show online only when we have real sensor data — prevents flicker
-  const hasSensorData = sensorData && (
-    sensorData.ambientTemperature !== null ||
-    sensorData.ambientHumidity !== null ||
-    sensorData.lastUpdated !== null
-  );
-  const isDeviceOnline = isDeviceOnlineRaw && hasSensorData;
+  // ✅ Use deviceOnlineStatus from context (updated by data check interval)
+  const isDeviceOnline = getSelectedDeviceOnlineStatus() && connectionState === 'online';
 
   // ✅ Fetch crop data when CropId changes
   const cropId = sensorData?.cropId;
@@ -213,8 +208,9 @@ function CustomHeader({ navigation, theme }) {
             <Ionicons name="logo-whatsapp" size={22} color="#25D366" />
           </TouchableOpacity>
         </View>
-      </View>        {/* ── Hero section — slides up behind the top bar on scroll ─────────── */}
-        <Animated.View
+      </View>
+      {/* ── Hero section — slides up behind the top bar on scroll ─────────── */}
+      <Animated.View
           style={[
             styles.heroSection,
             {
@@ -235,21 +231,27 @@ function CustomHeader({ navigation, theme }) {
             {/* ── Device Name + Active Badge + Time ── */}
             <View style={styles.weatherTimeRow}>
               <View style={styles.weatherInfo}>
-                <Text style={styles.weatherIcon}>🌱</Text>
+                <View>
+                  <Text style={styles.weatherIcon}>🌱</Text>
+                </View>
                 <View>
                   <View style={styles.deviceNameRow}>
-                    <Text style={styles.weatherTemp} numberOfLines={1}>
+                    <View>
+                      <Text style={styles.weatherTemp} numberOfLines={1}>
                       {selectedDeviceName || 'No Device'}
                     </Text>
+                    </View>
                     {isDeviceOnline && (
                       <View style={styles.activeBadge}>
                         <Text style={styles.activeBadgeText}>Active</Text>
                       </View>
                     )}
                   </View>
-                  <Text style={styles.macIdText}>
+                 <View>
+                   <Text style={styles.macIdText}>
                     MAC: {deviceId === 'No Device Selected' ? '—' : '•••••' + deviceId.slice(-5)}
                   </Text>
+                 </View>
                 </View>
               </View>
               <View style={styles.timeInfo}>
@@ -286,10 +288,8 @@ function CustomHeader({ navigation, theme }) {
                 </View>
               </View>
             </View>
-
-
           </View>
-        </Animated.View>
+      </Animated.View>
 
       {/* ✅ Alert Modal */}
       <Modal
@@ -363,7 +363,7 @@ function CustomDrawerContent({ navigation }) {
       section: "HISTORY",
       items: [
         { name: "Pump History", icon: "time-outline", route: "/(main)/pump-history" },
-        { name: "Sensor History", icon: "analytics-outline", route: "/(main)/sensor-history" },
+        // { name: "Sensor History", icon: "analytics-outline", route: "/(main)/sensor-history" },
       ],
     },
   ];

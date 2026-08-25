@@ -144,7 +144,7 @@ const STORAGE_KEYS = {
 // ── Constants ──
 const GET_STAT_ACTIVE_DURATION = 10 * 60 * 1000;
 const DATA_CHECK_INTERVAL = 30 * 1000;
-const OFFLINE_GRACE_PERIOD = 45 * 1000; // 45s grace before marking offline (prevents flicker)
+const OFFLINE_GRACE_PERIOD = 120 * 1000; // 120s grace before marking offline (prevents flicker on reconnect)
 
 // ── Helper Functions ──
 function parseActuatorToDevices(raw) {
@@ -197,13 +197,13 @@ function buildActuatorPayload(status, externalKey, previousStatus = {}) {
   const p = (key, def) => status[key] ?? previousStatus[key] ?? def;
   const payload = [
     { n: "WatPmp", vb: p('water_pump', false) },
-    { n: "WPONT", v: p('water_pump_on_time', 10000) },
-    { n: "WPINT", v: p('water_pump_interval', 60000) },
+    { n: "WPONT", v: p('water_pump_on_time', 10) },
+    { n: "WPINT", v: p('water_pump_interval', 60) },
     { n: "Wat_ILV", vb: p('water_ILvalve', false) },
     { n: "Wat_OLV", vb: p('water_OLvalve', false) },
     { n: "NUT_PMP", vb: p('nutrient_pump', false) },
-    { n: "NP_DI", v: p('nutrient_pump_duration', 120000) },
-    { n: "NP_OT", v: p('nutrient_pump_on_time', 5000) },
+    { n: "NP_DI", v: p('nutrient_pump_duration', 120) },
+    { n: "NP_OT", v: p('nutrient_pump_on_time', 5) },
     { n: "AC_Stat", vb: p('ac_stat', false) },
   ];
   return payload;
@@ -384,12 +384,23 @@ export const MqttProvider = ({ children }) => {
       
       if (deviceId) {
         setSelectedDeviceId(deviceId);
-        setSelectedDeviceName(deviceName || "Device");
+        // ✅ Resolve name: stored → device list → fallback
+        let resolvedName = deviceName;
+        if (!resolvedName) {
+          // Try availableDevices state first (may be stale but sometimes populated)
+          const dev = availableDevices.find(d => d.id === deviceId);
+          resolvedName = dev?.name || dev?.device_name || `Device ${deviceId.slice(-4)}`;
+        }
+        setSelectedDeviceName(resolvedName);
+        // ✅ Always save resolved name back to AsyncStorage
+        if (resolvedName) {
+          await AsyncStorage.setItem(STORAGE_KEYS.SELECTED_DEVICE_NAME, resolvedName);
+        }
         
         if (extKey) {
           setSelectedExternalKey(extKey);
           console.log("✅ Using stored external key:", extKey);
-          return { deviceId, deviceName, externalKey: extKey };
+          return { deviceId, deviceName: resolvedName, externalKey: extKey };
         }
         
         const device = availableDevices.find(d => d.id === deviceId);
@@ -397,7 +408,7 @@ export const MqttProvider = ({ children }) => {
           setSelectedExternalKey(device.external_key);
           await AsyncStorage.setItem(STORAGE_KEYS.SELECTED_EXTERNAL_KEY, device.external_key);
           console.log("✅ Found external key from devices:", device.external_key);
-          return { deviceId, deviceName, externalKey: device.external_key };
+          return { deviceId, deviceName: resolvedName, externalKey: device.external_key };
         }
         
         const storedKey = await AsyncStorage.getItem(STORAGE_KEYS.EXTERNAL_KEY);
@@ -442,8 +453,8 @@ export const MqttProvider = ({ children }) => {
     let device = availableDevices.find(d => d.id === deviceId);
     if (!device) {
       console.log("🔄 Device not in availableDevices, refreshing...");
-      await loadAvailableDevices();
-      device = availableDevices.find(d => d.id === deviceId);
+      const refreshedDevices = await loadAvailableDevices();
+      device = refreshedDevices.find(d => d.id === deviceId);
       if (!device) {
         console.error("❌ Device not found after refresh:", deviceId);
         return false;
@@ -451,12 +462,13 @@ export const MqttProvider = ({ children }) => {
     }
     
     const extKey = device.external_key;
-    console.log(`📌 Device external key: ${extKey}`);
+    const resolvedName = deviceName || device.name || device.device_name || `Device ${deviceId.slice(-4)}`;
+    console.log(`📌 Device external key: ${extKey}, name: ${resolvedName}`);
     
     setSelectedDeviceId(deviceId);
-    setSelectedDeviceName(deviceName || "Device");
+    setSelectedDeviceName(resolvedName);
     setSelectedExternalKey(extKey);
-    await saveSelectedDevice(deviceId, deviceName, extKey);
+    await saveSelectedDevice(deviceId, resolvedName, extKey);
     
     try {
       await setActiveDevice(deviceId, extKey);
@@ -645,9 +657,15 @@ export const MqttProvider = ({ children }) => {
       const deviceKey = device.external_key;
       const lastResponse = lastGetStatResponseTime.current[deviceKey] || 0;
       const responded = lastResponse > (Date.now() - 5000); // responded within last 5s
+      const hasCachedData = devicesData[deviceKey]?.hasReceivedData;
       
       if (!responded) {
-        // ✅ Don't aggressively mark offline — use grace period instead
+        // ✅ If we have cached data, preserve the online state — don't flicker
+        if (hasCachedData) {
+          console.log(`⏳ Device ${deviceKey} no response but has cached data — keeping current state`);
+          continue;
+        }
+        // ✅ Only mark offline for devices we've never heard from
         const lastOnline = lastOnlineTimePerDevice.current[deviceKey] || 0;
         const timeSinceOnline = Date.now() - lastOnline;
         if (timeSinceOnline > OFFLINE_GRACE_PERIOD || lastOnline === 0) {
@@ -669,12 +687,16 @@ export const MqttProvider = ({ children }) => {
       }
     }
     
-    // If selected device didn't respond, update connection state
+    // If selected device didn't respond, only go offline if we have no cached data
     const selKey = selectedExternalKeyRef.current;
     if (selKey) {
       const lastResponse = lastGetStatResponseTime.current[selKey] || 0;
-      if (lastResponse < (Date.now() - 5000)) {
+      const hasCachedData = devicesData[selKey]?.hasReceivedData || hasReceivedDataRef.current;
+      if (lastResponse < (Date.now() - 5000) && !hasCachedData) {
+        console.log(`⚠️ Selected device ${selKey} — no response, no cached data → OFFLINE`);
         setConnectionState('offline');
+      } else if (lastResponse < (Date.now() - 5000) && hasCachedData) {
+        console.log(`⏳ Selected device ${selKey} — no response but has cached data → staying online`);
       }
     }
     
@@ -889,6 +911,9 @@ export const MqttProvider = ({ children }) => {
         }
       }
       
+      // ✅ We received data — device is reachable regardless of firmware online bit
+      lastOnlineTimePerDevice.current[deviceKey] = Date.now();
+      lastDataReceivedTimePerDevice.current[deviceKey] = Date.now();
       // ✅ Update online status + device data in ONE batch (avoids duplicate re-renders)
       setDevicesData(prev => ({
         ...prev,
@@ -897,11 +922,11 @@ export const MqttProvider = ({ children }) => {
           lastDataReceived: Date.now(),
           hasReceivedData: true,
           isLiveData: true,
-          isOnline: isOnline,
+          isOnline: true, // ✅ Received data = reachable
         }
       }));
-      setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: isOnline }));
-      setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: isOnline ? 'online' : 'offline' }));
+      setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: true }));
+      setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: 'online' }));
       
       // ✅ Use ref to avoid stale closure — always get the latest selectedExternalKey
       const currentSelectedKey = selectedExternalKeyRef.current;
@@ -909,7 +934,7 @@ export const MqttProvider = ({ children }) => {
       
       if (isSelected) {
         updateLegacyState(parsed);
-        setConnectionState(isOnline ? 'online' : 'offline');
+        setConnectionState('online'); // ✅ Received data = online
         if (isOnline) {
           setHasEverBeenOnline(true);
           hasEverBeenOnlineRef.current = true;
@@ -972,9 +997,10 @@ export const MqttProvider = ({ children }) => {
         if (isOnline) lastOnlineTimePerDevice.current[deviceKey] = Date.now(); // ✅ Track online time
         updateDeviceData(deviceKey, parsed);
         
-        // ✅ Update online status for ALL devices (independent of selection)
-        setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: isOnline }));
-        setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: isOnline ? 'online' : 'offline' }));
+        // ✅ We received data from this device — it IS reachable, regardless of firmware online bit
+        lastOnlineTimePerDevice.current[deviceKey] = Date.now();
+        setDeviceOnlineStatus(prev => ({ ...prev, [deviceKey]: true }));
+        setDeviceConnectionStatus(prev => ({ ...prev, [deviceKey]: 'online' }));
         
         // ✅ Use ref to avoid stale closure — always get the latest selectedExternalKey
         const currentSelectedKey = selectedExternalKeyRef.current;
@@ -985,11 +1011,9 @@ export const MqttProvider = ({ children }) => {
         if (isSelected) {
           console.log(`📊 Updating selected device: ${deviceKey}`);
           updateLegacyState(parsed);
-          setConnectionState(isOnline ? 'online' : 'offline');
-          if (isOnline) {
-            setHasEverBeenOnline(true);
-            hasEverBeenOnlineRef.current = true;
-          }
+          setConnectionState('online'); // ✅ We received data — device is reachable
+          setHasEverBeenOnline(true);
+          hasEverBeenOnlineRef.current = true;
           setHasReceivedData(true);
           hasReceivedDataRef.current = true;
           setIsLiveData(true);
@@ -1057,9 +1081,11 @@ export const MqttProvider = ({ children }) => {
       let updatedSensorData = { ...currentData.sensorData };
       let updatedActuatorStatus = { ...currentData.actuatorStatus };
       let updatedDevices = [...currentData.devices];
+      let updatedDeviceConfig = currentData.deviceConfig;
       let newDeviceStatus = currentData.deviceStatus;
       let newDeviceStatusFlags = currentData.deviceStatusFlags;
       let hasActuatorUpdate = false;
+      let hasConfigUpdate = false;
       
       for (const [key, value] of Object.entries(parsed)) {
         if (key.startsWith('_')) continue;
@@ -1112,6 +1138,16 @@ export const MqttProvider = ({ children }) => {
               updatedSensorData[actKey] = actValue;
               hasActuatorUpdate = true;
             }
+          }
+          
+          // ✅ Sync deviceConfig.auto_mode from firmware mode bit (Bit 15)
+          // This ensures settings page and SystemModeContext stay in sync with actual device state
+          const firmwareAutoMode = flags.mode; // true = AUTO, false = MANUAL
+          const currentAutoMode = currentData.deviceConfig?.auto_mode;
+          if (firmwareAutoMode !== null && firmwareAutoMode !== undefined && firmwareAutoMode !== currentAutoMode) {
+            console.log(`🔄 [${deviceKey}] Syncing deviceConfig.auto_mode: ${currentAutoMode} → ${firmwareAutoMode}`);
+            updatedDeviceConfig = { ...currentData.deviceConfig, auto_mode: firmwareAutoMode, lastUpdated: now };
+            hasConfigUpdate = true;
           }
         }
         
@@ -1166,6 +1202,7 @@ export const MqttProvider = ({ children }) => {
           sensorData: updatedSensorData,
           actuatorStatus: updatedActuatorStatus,
           devices: updatedDevices,
+          deviceConfig: hasConfigUpdate ? updatedDeviceConfig : currentData.deviceConfig,
           deviceStatus: newDeviceStatus,
           deviceStatusFlags: newDeviceStatusFlags,
           lastUpdated: now,
@@ -1244,6 +1281,17 @@ export const MqttProvider = ({ children }) => {
       // ✅ Update deviceStatusFlags outside of this updater
       if (newDeviceStatusFlagsLocal) {
         setDeviceStatusFlags(newDeviceStatusFlagsLocal);
+        
+        // ✅ Sync deviceConfig.auto_mode from firmware mode bit (Bit 15)
+        if (newDeviceStatusFlagsLocal.mode !== null && newDeviceStatusFlagsLocal.mode !== undefined) {
+          setDeviceConfig(prev => {
+            if (prev.auto_mode !== newDeviceStatusFlagsLocal.mode) {
+              console.log(`🔄 Syncing deviceConfig.auto_mode from firmware: ${prev.auto_mode} → ${newDeviceStatusFlagsLocal.mode}`);
+              return { ...prev, auto_mode: newDeviceStatusFlagsLocal.mode, lastUpdated: new Date() };
+            }
+            return prev;
+          });
+        }
       }
       if (newDeviceStatusLocal !== null) {
         setDeviceStatus(newDeviceStatusLocal);
@@ -1383,8 +1431,9 @@ export const MqttProvider = ({ children }) => {
     if (!selected && devices.length > 0) {
       // No saved selection — auto-select the last added device
       const lastDevice = devices[devices.length - 1];
-      console.log("🔌 No selected device, auto-selecting last added:", lastDevice.id);
-      await selectDevice(lastDevice.id, lastDevice.name);
+      const autoName = lastDevice.name || lastDevice.device_name || `Device ${(lastDevice.id || '').slice(-4)}`;
+      console.log(`🔌 No selected device, auto-selecting: ${autoName} (${lastDevice.id})`);
+      await selectDevice(lastDevice.id, autoName);
     }
     
     if (selected && !selectedExternalKey) {
@@ -1568,6 +1617,18 @@ export const MqttProvider = ({ children }) => {
           setHasReceivedData(true);
           hasReceivedDataRef.current = true;
           setIsLiveData(true);
+          // ✅ Start as 'online' when we have cached data — prevents flicker (data → offline → online)
+          setConnectionState('online');
+        }
+
+        // ✅ Populate lastOnlineTimePerDevice from cached data so grace period works on reconnect
+        for (const [key, dev] of Object.entries(cached.devicesData)) {
+          if (dev.isOnline) {
+            lastOnlineTimePerDevice.current[key] = Date.now(); // treat cached-online as recently seen
+          }
+          if (dev.hasReceivedData) {
+            lastDataReceivedTimePerDevice.current[key] = Date.now();
+          }
         }
       }
 
@@ -1766,8 +1827,6 @@ export const MqttProvider = ({ children }) => {
         setCropSettings({ ...settings, lastUpdated: new Date() });
       }
     }
-    // ✅ After publishing settings, request GET_STATUS to get confirmed state
-    setTimeout(() => { requestDeviceStatus(deviceKey); }, 1500);
     return success;
   };
 
@@ -1786,16 +1845,22 @@ export const MqttProvider = ({ children }) => {
     if (success) {
       console.log(`✅ Config published to ${deviceKey}`);
       console.log(`📤 Full cfg payload:`, JSON.stringify(payload, null, 2));
+      // ✅ Update config fields EXCEPT auto_mode — wait for device to confirm mode via bitmask
+      // This prevents UI mode toggle from flipping before device actually responds
+      const configWithoutMode = { ...mergedConfig };
+      delete configWithoutMode.auto_mode; // ← Don't touch auto_mode until device confirms
+      configWithoutMode.lastUpdated = new Date();
+      
       setDevicesData(prev => ({
         ...prev,
         [deviceKey]: {
           ...prev[deviceKey],
-          deviceConfig: { ...mergedConfig, lastUpdated: new Date() },
+          deviceConfig: { ...prev[deviceKey]?.deviceConfig, ...configWithoutMode },
         }
       }));
       
       if (deviceKey === selectedExternalKeyRef.current) {
-        setDeviceConfig({ ...mergedConfig, lastUpdated: new Date() });
+        setDeviceConfig(prev => ({ ...prev, ...configWithoutMode }));
       }
     }
     return success;
@@ -1883,6 +1948,20 @@ export const MqttProvider = ({ children }) => {
       }
       if (savedSelectedDeviceName) {
         setSelectedDeviceName(savedSelectedDeviceName);
+      } else {
+        // ✅ Name not saved — try to resolve from availableDevices or generate fallback
+        const devices = await loadAvailableDevices();
+        const matched = devices.find(d => d.id === savedSelectedDeviceId || d.external_key === savedSelectedExtKey);
+        const fallbackName = matched?.name || matched?.device_name || 
+          (savedSelectedDeviceId ? `Device ${savedSelectedDeviceId.slice(-4)}` : null);
+        if (fallbackName) {
+          setSelectedDeviceName(fallbackName);
+          // ✅ Save it so next time it's available immediately
+          await AsyncStorage.setItem(STORAGE_KEYS.SELECTED_DEVICE_NAME, fallbackName);
+        } else if (savedKey) {
+          // ✅ Last resort: use external key as name
+          setSelectedDeviceName(`Device ${savedKey.slice(-6)}`);
+        }
       }
       if (savedSelectedExtKey) {
         setSelectedExternalKey(savedSelectedExtKey);

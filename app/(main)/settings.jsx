@@ -206,12 +206,13 @@ export default function ConfigScreen() {
     return errors;
   };
 
-  // ── Auto-publish on auto_mode toggle (onChange) ──
+  // ── Auto-publish on auto_mode toggle — wait for device response ──
   const handleAutoModePublish = async (autoModeValue) => {
     if (!isConnected) return;
     if (!externalKey) return;
     if (!config.report_interval || !config.sampling_interval) return;
 
+    setPublishing(true);
     try {
       const configToSend = {
         report_interval: config.report_interval,
@@ -220,10 +221,18 @@ export default function ConfigScreen() {
       };
       const success = await publishConfig(externalKey, configToSend);
       if (success) {
-        console.log(`✅ Auto mode ${autoModeValue ? 'ON' : 'OFF'} published via onChange`);
+        console.log(`✅ Auto mode ${autoModeValue ? 'ON' : 'OFF'} published — waiting for device response...`);
+        // ✅ Don't update config here — wait for deviceConfig to change via MQTT response
+        // The useEffect on deviceConfig will sync the toggle state
+      } else {
+        // Revert on failure
+        setConfig((c) => ({ ...c, auto_mode: !autoModeValue }));
       }
     } catch (error) {
       console.error('Auto mode publish error:', error);
+      setConfig((c) => ({ ...c, auto_mode: !autoModeValue }));
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -399,8 +408,7 @@ export default function ConfigScreen() {
           <Switch
             value={config.auto_mode}
             onValueChange={(v) => {
-              setConfig((c) => ({ ...c, auto_mode: v }));
-              // Auto-publish immediately on mode change
+              // ✅ Don't update locally — publish and wait for device response
               handleAutoModePublish(v);
             }}
             disabled={publishing || !isConnected || !isDeviceOnline}

@@ -178,6 +178,7 @@ export default function SensorDetailScreen({
         });
 
         console.log(`📊 Result: ${result.data.length} rows, total=${result.total}, page=${page}, sensor=${getSensorName()}, success=${result.success}`);
+        console.log("table datadddd", result.data)
         if (result.success) {
           setTableData(result.data);
           setTableTotal(result.total);
@@ -312,7 +313,7 @@ export default function SensorDetailScreen({
       <View style={[styles.valueCard, { backgroundColor: theme.colors.surface }]}>
         <View style={styles.valueRow}>
           <Text style={[styles.valueLabel, { color: theme.colors.textSecondary }]}>
-            {config.location} (Live)
+            {/* {config.location} (Live) */}
           </Text>
           <View style={[styles.statusBadge, { 
             backgroundColor: getStatusColor(liveValue) + '20' 
@@ -473,7 +474,6 @@ export default function SensorDetailScreen({
                     Value
                   </Text>
                 </View>
-
                 {/* Table rows */}
                 {tableData.map((point, index) => (
                   <View
