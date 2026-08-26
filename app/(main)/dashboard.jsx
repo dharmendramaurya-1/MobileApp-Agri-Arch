@@ -97,19 +97,21 @@ function fmt(value) {
 function formatLastUpdated(date) {
   if (!date) return null;
 
+  const timeOpts = { hour: "2-digit", minute: "2-digit" };
+
   try {
     if (typeof date === "string") {
       const parsed = new Date(date);
 
       if (!isNaN(parsed.getTime())) {
-        return parsed.toLocaleTimeString();
+        return parsed.toLocaleTimeString([], timeOpts);
       }
 
       return date;
     }
 
     if (date instanceof Date && !isNaN(date.getTime())) {
-      return date.toLocaleTimeString();
+      return date.toLocaleTimeString([], timeOpts);
     }
 
     return null;

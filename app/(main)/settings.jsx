@@ -18,12 +18,6 @@ import { useTheme } from "../../src/context/ThemContext";
 
 const SCREEN_HEIGHT = Dimensions.get("window").height;
 
-const DEFAULT_CONFIG = {
-  report_interval: 120,
-  sampling_interval: 30,
-  auto_mode: false,
-};
-
 function formatDuration(seconds) {
   if (!seconds || seconds < 0) return 'N/A';
   if (seconds < 60) return `${seconds}s`;
@@ -157,12 +151,13 @@ export default function ConfigScreen() {
     externalKey, 
     isConnected, 
     publishConfig, 
-    deviceConfig,
+    getSelectedDeviceConfig,
     isReady,
     getSelectedDeviceName,
     getSelectedDeviceOnlineStatus,
     selectedDeviceId,
   } = useMqtt();
+  const deviceConfig = getSelectedDeviceConfig();
 
   const [notifications, setNotifications] = useState(true);
   const [config, setConfig] = useState({
@@ -179,12 +174,12 @@ export default function ConfigScreen() {
 
   // Load device config from context
   useEffect(() => {
-    if (deviceConfig && deviceConfig.report_interval) {
-      setConfig({
-        report_interval: deviceConfig.report_interval || null,
-        sampling_interval: deviceConfig.sampling_interval || null,
-        auto_mode: deviceConfig.auto_mode || false,
-      });
+    if (deviceConfig) {
+      setConfig((prev) => ({
+        report_interval: deviceConfig.report_interval ?? prev.report_interval,
+        sampling_interval: deviceConfig.sampling_interval ?? prev.sampling_interval,
+        auto_mode: deviceConfig.auto_mode ?? prev.auto_mode,
+      }));
     }
   }, [deviceConfig]);
 

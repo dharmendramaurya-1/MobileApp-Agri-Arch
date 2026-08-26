@@ -1,22 +1,25 @@
 // components/LineChart.jsx
 import { StyleSheet, Text, View } from "react-native";
 
-const PAD = { top: 16, right: 12, bottom: 26, left: 44 };
-const LINE_WIDTH = 2;
+const PAD = { top: 20, right: 14, bottom: 32, left: 48 };
+const LINE_WIDTH = 2.5;
 
 /**
- * Dependency-free line chart built from plain Views.
+ * Enhanced line chart with gradient fill, axis titles, and better labels.
  *
- * data: array of { time (ms), value (number) }  — should already be
- *       sorted oldest → newest.
+ * data: array of { time (ms), value (number) } — sorted oldest → newest.
  */
 export default function LineChart({
   data,
   color = "#4CAF50",
   unit = "",
   width = 320,
-  height = 200,
+  height = 220,
   labelColor = "#999",
+  xTitle = "Time",
+  yTitle = "",
+  showGradient = true,
+  showDots = true,
 }) {
   if (!data || data.length === 0) return null;
 
@@ -31,6 +34,10 @@ export default function LineChart({
     min -= 1;
     max += 1;
   }
+  // Add 10% padding to y range
+  const padding = (max - min) * 0.1;
+  min = min - padding;
+  max = max + padding;
   const span = max - min;
 
   // Time bounds
@@ -64,41 +71,109 @@ export default function LineChart({
   const fmt = (v) =>
     Math.abs(v) >= 100 ? String(Math.round(v)) : String(Number(v.toFixed(1)));
 
-  // Y-axis labels (min / mid / max)
-  const yTicks = [
-    { v: max, y: y(max), key: "y-max" },
-    { v: min + span / 2, y: y(min + span / 2), key: "y-mid" },
-    { v: min, y: y(min), key: "y-min" },
-  ];
+  // Y-axis: 5 grid lines (min, 25%, 50%, 75%, max)
+  const yTicks = [0, 0.25, 0.5, 0.75, 1].map((pct, i) => {
+    const v = min + span * pct;
+    return { v, y: y(v), key: `y-${i}` };
+  });
 
-  // X-axis labels (first / middle / last)
-  const midIdx = Math.floor((points.length - 1) / 2);
-  const xTicks = [0, midIdx, points.length - 1].map((idx) => {
+  // X-axis: show up to 5 labels (first, 25%, 50%, 75%, last)
+  const xTickPcts = data.length <= 5
+    ? data.map((_, i) => i / Math.max(data.length - 1, 1))
+    : [0, 0.25, 0.5, 0.75, 1];
+  const xTicks = xTickPcts.map((pct, i) => {
+    const idx = Math.round(pct * (points.length - 1));
     const t = points[idx].time;
     const d = new Date(t);
     const label =
       tSpan > 2 * 24 * 3600 * 1000
         ? d.toLocaleDateString([], { day: "numeric", month: "short" })
         : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    return { key: `x-${idx}`, label, px: points[idx].px };
+    return { key: `x-${i}`, label, px: points[idx].px };
+  });
+
+  // Gradient fill: build SVG-like fill using horizontal bars
+  const GRADIENT_BARS = 40;
+  const gradientBars = [];
+  if (showGradient && points.length >= 2) {
+    const barWidth = plotW / GRADIENT_BARS;
+    const baselineY = y(min);
+    for (let i = 0; i < GRADIENT_BARS; i++) {
+      const tStart = tMin + (i / GRADIENT_BARS) * tSpan;
+      const tEnd = tMin + ((i + 1) / GRADIENT_BARS) * tSpan;
+      // Interpolate value at midpoint
+      const tMid = (tStart + tEnd) / 2;
+      let val = points[0].value;
+      for (let j = 1; j < points.length; j++) {
+        if (points[j].time >= tMid) {
+          const ratio = (tMid - points[j - 1].time) / (points[j].time - points[j - 1].time || 1);
+          val = points[j - 1].value + ratio * (points[j].value - points[j - 1].value);
+          break;
+        }
+      }
+      const barTop = y(val);
+      const barHeight = Math.max(0, baselineY - barTop);
+      if (barHeight > 0) {
+        gradientBars.push({
+          key: `grad-${i}`,
+          left: PAD.left + i * barWidth,
+          width: barWidth + 1, // slight overlap to avoid gaps
+          top: barTop,
+          height: barHeight,
+          opacity: 0.08 + (i / GRADIENT_BARS) * 0.07,
+        });
+      }
+    }
+  }
+
+  // Min/max markers
+  let minIdx = 0, maxIdx = 0;
+  let minVal = values[0], maxVal = values[0];
+  values.forEach((v, i) => {
+    if (v < minVal) { minVal = v; minIdx = i; }
+    if (v > maxVal) { maxVal = v; maxIdx = i; }
   });
 
   return (
     <View style={{ width, height }}>
-      {/* Grid + Y axis labels */}
+      {/* ── Grid lines ── */}
       {yTicks.map((tick) => (
         <View
           key={tick.key}
-          style={[styles.gridRow, { top: tick.y - 6, width: plotW, left: PAD.left }]}
+          style={[
+            styles.gridRow,
+            { top: tick.y - 6, width: plotW, left: PAD.left },
+          ]}
         >
-          <Text style={[styles.axisLabel, { color: labelColor }]} numberOfLines={1}>
+          <Text
+            style={[styles.axisLabel, { color: labelColor }]}
+            numberOfLines={1}
+          >
             {fmt(tick.v)}
           </Text>
           <View style={styles.gridLine} />
         </View>
       ))}
 
-      {/* Line segments */}
+      {/* ── Gradient fill ── */}
+      {gradientBars.map((bar) => (
+        <View
+          key={bar.key}
+          style={[
+            styles.gradientBar,
+            {
+              left: bar.left,
+              top: bar.top,
+              width: bar.width,
+              height: bar.height,
+              backgroundColor: color,
+              opacity: bar.opacity,
+            },
+          ]}
+        />
+      ))}
+
+      {/* ── Line segments ── */}
       {segments.map((seg) => (
         <View
           key={seg.key}
@@ -115,25 +190,63 @@ export default function LineChart({
         />
       ))}
 
-      {/* Data point dots */}
-      {points.map((p, i) => (
-        <View
-          key={`dot-${i}`}
-          style={[
-            styles.dot,
-            { left: p.px - 3, top: p.py - 3, backgroundColor: color },
-          ]}
-        />
-      ))}
+      {/* ── Data point dots ── */}
+      {showDots &&
+        points.map((p, i) => (
+          <View
+            key={`dot-${i}`}
+            style={[
+              styles.dot,
+              { left: p.px - 3.5, top: p.py - 3.5, backgroundColor: color },
+            ]}
+          />
+        ))}
 
-      {/* X axis labels */}
+      {/* ── Min marker ── */}
+      {points[minIdx] && (
+        <View
+          style={[
+            styles.marker,
+            {
+              left: points[minIdx].px - 14,
+              top: points[minIdx].py - 22,
+              backgroundColor: "#F44336",
+            },
+          ]}
+        >
+          <Text style={styles.markerText}>▼{fmt(minVal)}</Text>
+        </View>
+      )}
+
+      {/* ── Max marker ── */}
+      {points[maxIdx] && (
+        <View
+          style={[
+            styles.marker,
+            {
+              left: points[maxIdx].px - 14,
+              top: points[maxIdx].py - 22,
+              backgroundColor: "#4CAF50",
+            },
+          ]}
+        >
+          <Text style={styles.markerText}>▲{fmt(maxVal)}</Text>
+        </View>
+      )}
+
+      {/* ── X-axis labels ── */}
       {xTicks.map((tick) => (
         <Text
           key={tick.key}
           style={[
             styles.xLabel,
-            { color: labelColor, top: height - PAD.bottom + 6 },
-            { left: Math.max(0, Math.min(tick.px - 20, width - PAD.right - 44)) },
+            { color: labelColor, top: height - PAD.bottom + 8 },
+            {
+              left: Math.max(
+                0,
+                Math.min(tick.px - 24, width - PAD.right - 48)
+              ),
+            },
           ]}
           numberOfLines={1}
         >
@@ -141,11 +254,42 @@ export default function LineChart({
         </Text>
       ))}
 
-      {/* Unit legend */}
-      {unit ? (
-        <Text style={[styles.unitLabel, { color: labelColor }]} numberOfLines={1}>
-          {unit}
+      {/* ── X-axis title ── */}
+      {xTitle ? (
+        <Text
+          style={[
+            styles.axisTitle,
+            { color: labelColor, top: height - 6, left: PAD.left + plotW / 2 - 15 },
+          ]}
+        >
+          {xTitle}
         </Text>
+      ) : null}
+
+      {/* ── Y-axis title ── */}
+      {yTitle ? (
+        <Text
+          style={[
+            styles.axisTitle,
+            {
+              color: labelColor,
+              top: PAD.top + plotH / 2,
+              left: 0,
+              transform: [{ rotate: "-90deg" }, { translateX: -10 }, { translateY: -20 }],
+            },
+          ]}
+        >
+          {yTitle}
+        </Text>
+      ) : null}
+
+      {/* ── Unit badge ── */}
+      {unit ? (
+        <View style={[styles.unitBadge, { backgroundColor: color + "18" }]}>
+          <Text style={[styles.unitText, { color }]} numberOfLines={1}>
+            {unit}
+          </Text>
+        </View>
       ) : null}
     </View>
   );
@@ -161,29 +305,55 @@ const styles = StyleSheet.create({
   axisLabel: { width: PAD.left - 10, fontSize: 9, textAlign: "right" },
   gridLine: {
     flex: 1,
-    height: 1,
-    backgroundColor: "rgba(128,128,128,0.18)",
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "rgba(128,128,128,0.2)",
   },
-  segment: { position: "absolute", height: LINE_WIDTH, borderRadius: 1 },
+  segment: { position: "absolute", height: LINE_WIDTH, borderRadius: 1.5 },
   dot: {
     position: "absolute",
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    borderWidth: 1,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    borderWidth: 1.5,
     borderColor: "#FFF",
   },
   xLabel: {
     position: "absolute",
-    width: 44,
+    width: 48,
     fontSize: 9,
     textAlign: "center",
   },
-  unitLabel: {
+  axisTitle: {
     position: "absolute",
-    top: 0,
-    right: 0,
     fontSize: 9,
-    opacity: 0.8,
+    fontWeight: "600",
+    opacity: 0.6,
+  },
+  gradientBar: {
+    position: "absolute",
+    borderRadius: 2,
+  },
+  marker: {
+    position: "absolute",
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  markerText: {
+    color: "#FFF",
+    fontSize: 8,
+    fontWeight: "700",
+  },
+  unitBadge: {
+    position: "absolute",
+    top: 2,
+    right: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  unitText: {
+    fontSize: 9,
+    fontWeight: "700",
   },
 });

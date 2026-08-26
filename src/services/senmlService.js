@@ -584,6 +584,30 @@ export const fetchAllSensorHistorical = async ({
 };
 
 
+/**
+ * Downsample an array of { time, value, ... } objects so that at most
+ * `maxPoints` evenly-spaced entries are returned.
+ *
+ * Algorithm: divide the time range into `maxPoints` equal buckets and
+ * pick the entry closest to the centre of each bucket.
+ */
+export const downsampleData = (data, maxPoints = 200) => {
+  if (!data || data.length <= maxPoints) return data;
+
+  const sorted = [...data].sort((a, b) => (a.time || 0) - (b.time || 0));
+  const step = sorted.length / maxPoints;
+  const sampled = [];
+
+  for (let i = 0; i < maxPoints; i++) {
+    const start = Math.floor(i * step);
+    const end = Math.floor((i + 1) * step);
+    const mid = Math.floor((start + end) / 2);
+    sampled.push(sorted[mid]);
+  }
+
+  return sampled;
+};
+
 export default {
   searchSenML,
   getSensorDataByTimeRange,
@@ -593,5 +617,6 @@ export default {
   fetchSensorHistorical,
   fetchAllSensorHistorical,
   getSnapshotData,
-  getSenMLByPublisher
+  getSenMLByPublisher,
+  downsampleData,
 };

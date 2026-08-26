@@ -1,35 +1,36 @@
 // app/(main)/sensor/SensorDetailScreen.jsx
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Dimensions,
+  Modal,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
 import LineChart from "../../../components/LineChart";
 import { SENSORS, getSensorByKey } from "../../../src/config/sensorConfigs";
 import { useMqtt } from "../../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../../src/context/ScrollContext";
 import { useTheme } from "../../../src/context/ThemContext";
 import {
+  downsampleData,
   fetchAllSensorHistorical,
-  fetchSensorHistorical,
-  getSenMLByPublisher,
-  searchSenML,
 } from "../../../src/services/senmlService";
 
-const { width } = Dimensions.get("window");
-
+const { width, height: screenHeight } = Dimensions.get("window");
 const PAGE_SIZE = 10;
-
-// Number of days for each time range option
-const RANGE_DAYS = { "1d": 1, "7d": 7, "30d": 30 };
-const RANGE_LABELS = { "1d": "Last 24 hours", "7d": "Last 7 days", "30d": "Last 30 days" };
+const MAX_GRAPH_POINTS = 200;
+const MAX_TABLE_ROWS = 100;
+const RANGE_DAYS = { "1h": 1/24, "1d": 1, "7d": 7, "30d": 30 };
+const RANGE_LABELS = { "1h": "Last 1h", "1d": "Last 24h", "7d": "Last 7d", "30d": "Last 30d" };
 
 export default function SensorDetailScreen({
   sensorKey,
@@ -37,38 +38,32 @@ export default function SensorDetailScreen({
   showHeader = true,
   contentPaddingTop,
 }) {
+  const insets = useSafeAreaInsets();
   const { theme } = useTheme();
   const { getSelectedDeviceSensorData, getSelectedDeviceId, getSelectedExternalKey, availableDevices } = useMqtt();
   const sensorData = getSelectedDeviceSensorData();
-
-  // ✅ Dynamic config lookup — prefer sensorKey, fallback to config prop, then first sensor
-  const config = (sensorKey ? getSensorByKey(sensorKey) : null) || configProp || SENSORS[0];
   const { onScroll, headerHeight } = useScroll();
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
-  const [timeRange, setTimeRange] = useState("7d");
-  const [activeTab, setActiveTab] = useState("table"); // "table" | "graph"
 
-  // Table (paginated) state
-  const [tableData, setTableData] = useState([]);
-  const [tableTotal, setTableTotal] = useState(0);
+  const config = (sensorKey ? getSensorByKey(sensorKey) : null) || configProp || SENSORS[0];
+
+  const [timeRange, setTimeRange] = useState("7d");
+  const [activeTab, setActiveTab] = useState("table");
+  const [allTableData, setAllTableData] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [isTableLoading, setIsTableLoading] = useState(false);
-
-  // Graph state
   const [graphData, setGraphData] = useState([]);
   const [isGraphLoading, setIsGraphLoading] = useState(false);
+  const [isZoomed, setIsZoomed] = useState(false);
 
   const liveValue = sensorData[config.dataKey];
-
-  // ✅ Get the selected device's publisher ID (thing ID) and external key
   const selectedDevId = getSelectedDeviceId();
   const selectedExtKey = getSelectedExternalKey();
 
   const getDevicePublisherAndKey = useCallback(() => {
-    // If we have a selected device, find its thing ID from availableDevices
     if (selectedDevId && availableDevices) {
-      const device = availableDevices.find(d => d.id === selectedDevId);
+      const device = availableDevices.find((d) => d.id === selectedDevId);
       if (device) {
         return {
           publisherId: device.id,
@@ -76,137 +71,54 @@ export default function SensorDetailScreen({
         };
       }
     }
-
-    // Fallback: try to get from context
-    return {
-      publisherId: selectedDevId,
-      externalKey: selectedExtKey,
-    };
+    return { publisherId: selectedDevId, externalKey: selectedExtKey };
   }, [selectedDevId, selectedExtKey, availableDevices]);
 
-  // ✅ Get the sensor name for the API - use apiName from config
-  const getSensorName = () => {
-    // Use the apiName from the config directly
-    return config.apiName || config.dataKey;
-  };
+  const sensorName = config.apiName || config.dataKey;
 
-  // ✅ Debug function
-  const debugHistoricalData = async () => {
-    console.log("🔍 Debugging Historical Data...");
-    console.log("   Config:", config.name);
-    console.log("   DataKey:", config.dataKey);
-    console.log("   ApiName:", config.apiName);
-    
-    const timestampNs = 1785627775000000000;
-    const timestampMs = timestampNs / 1000000;
-    
-    console.log("   Timestamp (ms):", timestampMs);
-    console.log("   Date:", new Date(timestampMs).toLocaleString());
-    
+  const getTimeWindow = useCallback(() => {
+    const days = RANGE_DAYS[timeRange] || 7;
+    const toMs = Date.now();
+    const fromMs = toMs - days * 24 * 60 * 60 * 1000;
+    return { from: fromMs, to: toMs };
+  }, [timeRange]);
+
+  const fetchAllTableData = useCallback(async () => {
+    setIsTableLoading(true);
     try {
-      const result = await searchSenML({
-        from: timestampMs,
-        to: timestampMs + 1000,
-        limit: 20,
-        offset: 0,
+      const { from, to } = getTimeWindow();
+      const { publisherId, externalKey } = getDevicePublisherAndKey();
+
+      const result = await fetchAllSensorHistorical({
+        sensorKey: sensorName,
+        from,
+        to,
+        pageSize: 500,
+        publisherId,
+        externalKey,
       });
-      
-      console.log("   Result success:", result.success);
-      console.log("   Total records:", result.total);
-      console.log("   Messages count:", result.messages?.length || 0);
-      
-      if (result.success && result.messages && result.messages.length > 0) {
-        const data = {};
-        result.messages.forEach(msg => {
-          const name = msg.name ? msg.name.split(':').pop() : 'unknown';
-          data[name] = {
-            value: msg.value !== undefined ? msg.value : msg.bool_value,
-            unit: msg.unit || '',
-          };
-        });
-        console.log("   Available sensors:", Object.keys(data));
-        console.log("   Looking for:", config.apiName);
-        console.log("   Found:", data[config.apiName] ? "✅ Yes" : "❌ No");
+
+      if (result.success) {
+        setAllTableData(downsampleData(result.data, MAX_TABLE_ROWS));
+      } else {
+        setAllTableData([]);
       }
     } catch (error) {
-      console.error("   Debug error:", error);
+      console.error("Table fetch error:", error);
+      setAllTableData([]);
+    } finally {
+      setIsTableLoading(false);
     }
-  };
+  }, [getTimeWindow, getDevicePublisherAndKey, sensorName]);
 
-  const getSensorData = async () => {
-    const result = await getSenMLByPublisher();
-    console.log("🔍 Debugging getSenMLByPublisher...");
-    console.log("data", result.data);
-
-    if (result.success) {
-      console.log("SenML data:", result.data);
-    } else {
-      console.error("Error:", result.error);
-    }
-  };
-
-  // Compute the from/to window for the selected time range
-  const getTimeWindow = useCallback(() => {
-  const days = RANGE_DAYS[timeRange] || 7;
-
-  const toMs = Date.now();
-  const fromMs = toMs - days * 24 * 60 * 60 * 1000;
-
-  // Return milliseconds — fetchSensorHistorical handles ns conversion
-  return { from: fromMs, to: toMs };
-}, [timeRange]);
-
-  // Fetch one page of the historical table
-  const fetchTablePage = useCallback(
-    async (page) => {
-      setIsTableLoading(true);
-      try {
-        const { from, to } = getTimeWindow();
-        const { publisherId, externalKey } = getDevicePublisherAndKey();
-        
-        console.log(`📡 fetchTablePage: page=${page}, sensor=${getSensorName()}, publisher=${publisherId}, extKey=${externalKey}`);
-        console.log(`   Time range: ${new Date(from).toLocaleString()} → ${new Date(to).toLocaleString()}`);
-        
-        const result = await fetchSensorHistorical({
-          sensorKey: getSensorName(),
-          from,
-          to,
-          limit: PAGE_SIZE,
-          offset: (page - 1) * PAGE_SIZE,
-          publisherId,
-          externalKey,
-        });
-
-        console.log(`📊 Result: ${result.data.length} rows, total=${result.total}, page=${page}, sensor=${getSensorName()}, success=${result.success}`);
-        console.log("table datadddd", result.data)
-        if (result.success) {
-          setTableData(result.data);
-          setTableTotal(result.total);
-          setCurrentPage(page);
-        } else {
-          console.error("❌ Error fetching historical table:", result.error);
-          setTableData([]);
-          setTableTotal(0);
-        }
-      } catch (error) {
-        console.error("❌ Error fetching historical table:", error);
-        setTableData([]);
-        setTableTotal(0);
-      } finally {
-        setIsTableLoading(false);
-      }
-    },
-    [getTimeWindow, getDevicePublisherAndKey]
-  );
-
-  // Fetch ALL data points in the range for the graph
   const fetchGraphData = useCallback(async () => {
     setIsGraphLoading(true);
     try {
       const { from, to } = getTimeWindow();
       const { publisherId, externalKey } = getDevicePublisherAndKey();
+
       const result = await fetchAllSensorHistorical({
-        sensorKey: getSensorName(),
+        sensorKey: sensorName,
         from,
         to,
         pageSize: 100,
@@ -215,30 +127,28 @@ export default function SensorDetailScreen({
       });
 
       if (result.success) {
-        setGraphData(result.data);
+        setGraphData(downsampleData(result.data, MAX_GRAPH_POINTS));
       } else {
-        console.error("❌ Error fetching historical graph:", result.error);
         setGraphData([]);
       }
     } catch (error) {
-      console.error("❌ Error fetching historical graph:", error);
+      console.error("Graph fetch error:", error);
       setGraphData([]);
     } finally {
       setIsGraphLoading(false);
     }
-  }, [getTimeWindow, getDevicePublisherAndKey]);
+  }, [getTimeWindow, getDevicePublisherAndKey, sensorName]);
 
-  // Fetch data when the sensor, time range, or selected device changes
   useEffect(() => {
-    fetchTablePage(1);
+    setCurrentPage(1);
+    fetchAllTableData();
     fetchGraphData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.dataKey, timeRange, selectedDevId, selectedExtKey]);
+  }, [sensorName, timeRange, selectedDevId, selectedExtKey]);
 
-  // Format data for display
   const formatValue = (value) => {
     if (value === null || value === undefined) return "--";
-    if (typeof value === 'number') {
+    if (typeof value === "number") {
       return Number.isInteger(value) ? String(value) : value.toFixed(1);
     }
     return String(value);
@@ -247,15 +157,8 @@ export default function SensorDetailScreen({
   const formatTime = (ms) => {
     if (!ms) return "--";
     const d = new Date(ms);
-    const date = d.toLocaleDateString([], {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
-    const time = d.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    const date = d.toLocaleDateString([], { day: "2-digit", month: "short", year: "numeric" });
+    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     return `${date}, ${time}`;
   };
 
@@ -273,62 +176,88 @@ export default function SensorDetailScreen({
     return "Normal";
   };
 
-  const getStatusIcon = (value) => {
-    if (value === null || value === undefined) return "help-circle-outline";
-    if (config.min !== undefined && value < config.min) return "arrow-down-circle-outline";
-    if (config.max !== undefined && value > config.max) return "arrow-up-circle-outline";
-    return "checkmark-circle-outline";
+  // Client-side pagination over downsampled data
+  const tableTotal = allTableData.length;
+  const totalPages = Math.max(1, Math.ceil(tableTotal / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const tableData = allTableData.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const startIndex = tableTotal > 0 ? (safePage - 1) * PAGE_SIZE + 1 : 0;
+  const endIndex = Math.min(safePage * PAGE_SIZE, tableTotal);
+
+  // ── Prepare graph data for LineChart (same format as before) ──
+  const graphPoints = useMemo(() => graphData, [graphData]);
+
+  // ── X‑axis labels: show a few representative timestamps ──
+  const getAxisLabels = () => {
+    if (graphPoints.length < 2) return { xLabels: [], yLabels: [] };
+    const minVal = Math.min(...graphPoints.map((p) => p.value));
+    const maxVal = Math.max(...graphPoints.map((p) => p.value));
+    const range = maxVal - minVal || 1;
+    const yStep = range / 4;
+    const yLabels = [];
+    for (let i = 0; i <= 4; i++) {
+      yLabels.push(minVal + i * yStep);
+    }
+    // X labels: show first, middle, last
+    const indices = [0, Math.floor(graphPoints.length / 2), graphPoints.length - 1];
+    const xLabels = indices.map((i) => {
+      const d = new Date(graphPoints[i].time);
+      return timeRange === "1d" ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : d.toLocaleDateString();
+    });
+    return { xLabels, yLabels };
   };
 
-  const totalPages = Math.max(1, Math.ceil(tableTotal / PAGE_SIZE));
-  const startIndex = tableTotal > 0 ? (currentPage - 1) * PAGE_SIZE + 1 : 0;
-  const endIndex = Math.min(currentPage * PAGE_SIZE, tableTotal);
+  const { xLabels, yLabels } = getAxisLabels();
 
   return (
-    <ScrollView 
+    <>
+    <ScrollView
       ref={scrollRef}
       style={[styles.container, { backgroundColor: theme.colors.background }]}
-      showsVerticalScrollIndicator={false}
-      contentContainerStyle={{ paddingTop: contentPaddingTop ?? headerHeight }}
+      contentContainerStyle={{
+        paddingTop: contentPaddingTop ?? headerHeight,
+        paddingBottom: 10,
+      }}
       onScroll={onScroll}
       scrollEventThrottle={16}
+      showsVerticalScrollIndicator={false}
     >
-      {/* Header (hidden when embedded in the sensor-tabs screen) */}
+      {/* ─── HEADER ─── */}
       {showHeader && (
-        <View style={styles.header}>
+        <View
+          style={[
+            styles.header,
+            {
+              // paddingTop: insets.top + 12,
+              paddingHorizontal: 16,
+            },
+          ]}
+        >
           <TouchableOpacity
             onPress={() => router.back()}
             style={styles.backButton}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
           >
             <Ionicons name="arrow-back" size={24} color={theme.colors.text} />
           </TouchableOpacity>
-          <Text style={[styles.headerTitle, { color: theme.colors.text }]}>
+          <Text style={[styles.headerTitle, { color: theme.colors.text }]} numberOfLines={1}>
             {config.name}
           </Text>
           <View style={{ width: 40 }} />
         </View>
       )}
 
-      {/* Main Value Display - Real-time from MQTT */}
+      {/* ─── LIVE VALUE ─── */}
       <View style={[styles.valueCard, { backgroundColor: theme.colors.surface }]}>
         <View style={styles.valueRow}>
-          <Text style={[styles.valueLabel, { color: theme.colors.textSecondary }]}>
-            {/* {config.location} (Live) */}
-          </Text>
-          <View style={[styles.statusBadge, { 
-            backgroundColor: getStatusColor(liveValue) + '20' 
-          }]}>
-            <Ionicons 
-              name={getStatusIcon(liveValue)} 
-              size={16} 
-              color={getStatusColor(liveValue)} 
-            />
+          <Text style={[styles.valueLabel, { color: theme.colors.textSecondary }]}>Live</Text>
+          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(liveValue) + "20" }]}>
+            <Ionicons name="checkmark-circle-outline" size={16} color={getStatusColor(liveValue)} />
             <Text style={[styles.statusText, { color: getStatusColor(liveValue) }]}>
               {getStatusText(liveValue)}
             </Text>
           </View>
         </View>
-
         <View style={styles.mainValueContainer}>
           <Text style={[styles.mainValue, { color: theme.colors.text }]}>
             {formatValue(liveValue)}
@@ -337,17 +266,9 @@ export default function SensorDetailScreen({
             {config.unit}
           </Text>
         </View>
-
-        {/* {config.min !== undefined && config.max !== undefined && (
-          <View style={styles.rangeContainer}>
-            <Text style={[styles.rangeText, { color: theme.colors.textSecondary }]}>
-              Optimal Range: {config.min} - {config.max} {config.unit}
-            </Text>
-          </View>
-        )} */}
       </View>
 
-      {/* Historical Data Section - From HTTP */}
+      {/* ─── HISTORICAL ─── */}
       <View style={styles.historicalSection}>
         <View style={styles.historicalHeader}>
           <Text style={[styles.historicalTitle, { color: theme.colors.text }]}>
@@ -358,14 +279,13 @@ export default function SensorDetailScreen({
           </Text>
         </View>
 
-        {/* Time Range Selector */}
         <View style={styles.timeRangeContainer}>
-          {["1d", "7d", "30d"].map((range) => (
+          {["1h", "1d", "7d", "30d"].map((range) => (
             <TouchableOpacity
               key={range}
               style={[
                 styles.timeRangeButton,
-                timeRange === range && { backgroundColor: theme.colors.primary },
+                timeRange === range && { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
               ]}
               onPress={() => setTimeRange(range)}
             >
@@ -375,26 +295,16 @@ export default function SensorDetailScreen({
                   { color: timeRange === range ? "#FFF" : theme.colors.textSecondary },
                 ]}
               >
-                {range === '1d' ? '24h' : range === '7d' ? '7d' : '30d'}
+                {range === "1h" ? "1h" : range === "1d" ? "24h" : range === "7d" ? "7d" : "30d"}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
 
-        {/* Tab Switcher: Table | Graph */}
-        <View
-          style={[
-            styles.tabSwitcher,
-            { backgroundColor: theme.colors.surfaceVariant },
-          ]}
-        >
+        <View style={[styles.tabSwitcher, { backgroundColor: theme.colors.surfaceVariant }]}>
           <TouchableOpacity
-            style={[
-              styles.tabButton,
-              activeTab === "table" && { backgroundColor: theme.colors.surface },
-            ]}
+            style={[styles.tabButton, activeTab === "table" && { backgroundColor: theme.colors.surface }]}
             onPress={() => setActiveTab("table")}
-            activeOpacity={0.7}
           >
             <Ionicons
               name="list-outline"
@@ -405,10 +315,7 @@ export default function SensorDetailScreen({
               style={[
                 styles.tabButtonText,
                 {
-                  color:
-                    activeTab === "table"
-                      ? theme.colors.primary
-                      : theme.colors.textSecondary,
+                  color: activeTab === "table" ? theme.colors.primary : theme.colors.textSecondary,
                   fontWeight: activeTab === "table" ? "700" : "500",
                 },
               ]}
@@ -417,12 +324,8 @@ export default function SensorDetailScreen({
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[
-              styles.tabButton,
-              activeTab === "graph" && { backgroundColor: theme.colors.surface },
-            ]}
+            style={[styles.tabButton, activeTab === "graph" && { backgroundColor: theme.colors.surface }]}
             onPress={() => setActiveTab("graph")}
-            activeOpacity={0.7}
           >
             <Ionicons
               name="trending-up-outline"
@@ -433,10 +336,7 @@ export default function SensorDetailScreen({
               style={[
                 styles.tabButtonText,
                 {
-                  color:
-                    activeTab === "graph"
-                      ? theme.colors.primary
-                      : theme.colors.textSecondary,
+                  color: activeTab === "graph" ? theme.colors.primary : theme.colors.textSecondary,
                   fontWeight: activeTab === "graph" ? "700" : "500",
                 },
               ]}
@@ -446,21 +346,18 @@ export default function SensorDetailScreen({
           </TouchableOpacity>
         </View>
 
-        {/* Tab Content */}
-        <View style={[styles.chartContainer, { backgroundColor: theme.colors.surface }]}>
+        <View style={[styles.contentCard, { backgroundColor: theme.colors.surface }]}>
           {activeTab === "table" ? (
-            /* ── Table Tab (paginated) ─────────────────────────────── */
             isTableLoading ? (
-              <View style={styles.chartPlaceholder}>
+              <View style={styles.placeholder}>
                 <ActivityIndicator size="large" color={theme.colors.primary} />
-                <Text style={[styles.chartPlaceholderText, { color: theme.colors.textSecondary }]}>
-                  Loading table data...
+                <Text style={[styles.placeholderText, { color: theme.colors.textSecondary }]}>
+                  Loading table…
                 </Text>
               </View>
             ) : tableData.length > 0 ? (
               <>
-                {/* Table header */}
-                <View style={styles.tableHeaderRow}>
+                <View style={styles.tableHeader}>
                   <Text style={[styles.tableHeaderCell, { color: theme.colors.textSecondary }]}>
                     Date &amp; Time
                   </Text>
@@ -474,14 +371,10 @@ export default function SensorDetailScreen({
                     Value
                   </Text>
                 </View>
-                {/* Table rows */}
-                {tableData.map((point, index) => (
+                {tableData.map((point, idx) => (
                   <View
-                    key={`${point.time}-${index}`}
-                    style={[
-                      styles.tableRow,
-                      index % 2 === 1 && styles.tableRowStriped,
-                    ]}
+                    key={`${point.time}-${idx}`}
+                    style={[styles.tableRow, idx % 2 === 1 && styles.tableRowStriped]}
                   >
                     <Text style={[styles.tableCell, { color: theme.colors.text }]}>
                       {formatTime(point.time)}
@@ -496,175 +389,222 @@ export default function SensorDetailScreen({
                     </View>
                   </View>
                 ))}
-
-                {/* Pagination footer */}
                 <View style={styles.paginationFooter}>
                   <TouchableOpacity
-                    style={[
-                      styles.pageButton,
-                      currentPage <= 1 && { opacity: 0.4 },
-                    ]}
-                    disabled={currentPage <= 1}
-                    onPress={() => fetchTablePage(currentPage - 1)}
-                    activeOpacity={0.7}
+                    style={[styles.pageButton, safePage <= 1 && { opacity: 0.4 }]}
+                    disabled={safePage <= 1}
+                    onPress={() => setCurrentPage(safePage - 1)}
                   >
                     <Ionicons name="chevron-back" size={16} color={theme.colors.primary} />
-                    <Text style={[styles.pageButtonText, { color: theme.colors.primary }]}>
-                      Prev
-                    </Text>
+                    <Text style={[styles.pageButtonText, { color: theme.colors.primary }]}>Prev</Text>
                   </TouchableOpacity>
-
                   <View style={styles.pageInfo}>
                     <Text style={[styles.pageInfoText, { color: theme.colors.text }]}>
-                      Page {currentPage} of {totalPages}
+                      Page {safePage} of {totalPages}
                     </Text>
                     <Text style={[styles.pageInfoSub, { color: theme.colors.textSecondary }]}>
-                      {tableTotal > 0
-                        ? `Showing ${startIndex}-${endIndex} of ${tableTotal}`
-                        : "No records"}
+                      {tableTotal > 0 ? `${startIndex}-${endIndex} of ${tableTotal}` : "No records"}
                     </Text>
                   </View>
-
                   <TouchableOpacity
-                    style={[
-                      styles.pageButton,
-                      currentPage >= totalPages && { opacity: 0.4 },
-                    ]}
-                    disabled={currentPage >= totalPages}
-                    onPress={() => fetchTablePage(currentPage + 1)}
-                    activeOpacity={0.7}
+                    style={[styles.pageButton, safePage >= totalPages && { opacity: 0.4 }]}
+                    disabled={safePage >= totalPages}
+                    onPress={() => setCurrentPage(safePage + 1)}
                   >
-                    <Text style={[styles.pageButtonText, { color: theme.colors.primary }]}>
-                      Next
-                    </Text>
+                    <Text style={[styles.pageButtonText, { color: theme.colors.primary }]}>Next</Text>
                     <Ionicons name="chevron-forward" size={16} color={theme.colors.primary} />
                   </TouchableOpacity>
                 </View>
               </>
             ) : (
-              <View style={styles.chartPlaceholder}>
+              <View style={styles.placeholder}>
                 <Ionicons name="analytics-outline" size={48} color={theme.colors.textSecondary} />
-                <Text style={[styles.chartPlaceholderText, { color: theme.colors.textSecondary }]}>
-                  No historical data available
-                </Text>
-                <Text style={[styles.chartPlaceholderSubtext, { color: theme.colors.textSecondary }]}>
-                  Data will appear here once available
+                <Text style={[styles.placeholderText, { color: theme.colors.textSecondary }]}>
+                  No historical data
                 </Text>
               </View>
             )
           ) : (
-            /* ── Graph Tab (all data) ──────────────────────────────── */
+            // ── GRAPH TAB ──
             isGraphLoading ? (
-              <View style={styles.chartPlaceholder}>
+              <View style={styles.placeholder}>
                 <ActivityIndicator size="large" color={theme.colors.primary} />
-                <Text style={[styles.chartPlaceholderText, { color: theme.colors.textSecondary }]}>
-                  Loading graph data...
+                <Text style={[styles.placeholderText, { color: theme.colors.textSecondary }]}>
+                  Loading graph…
                 </Text>
               </View>
             ) : graphData.length > 0 ? (
               <View style={styles.graphWrapper}>
-                <Text style={[styles.graphSummary, { color: theme.colors.textSecondary }]}>
-                  {graphData.length} data points ·{" "}
-                  {formatValue(Math.min(...graphData.map((d) => d.value)))} -{" "}
-                  {formatValue(Math.max(...graphData.map((d) => d.value)))} {config.unit}
-                </Text>
-                <LineChart
-                  data={graphData}
-                  color={config.color}
-                  unit={config.unit}
-                  width={width - 60}
-                  height={240}
-                  labelColor={theme.colors.textSecondary}
-                />
+                {/* ── Summary + Zoom button ── */}
+                <View style={styles.graphSummaryRow}>
+                  <View style={styles.graphSummaryLeft}>
+                    <Text style={[styles.graphSummary, { color: theme.colors.textSecondary }]}>
+                      {graphData.length} points
+                    </Text>
+                    <Text style={[styles.graphSummaryDetail, { color: theme.colors.textSecondary }]}>
+                      Min {formatValue(Math.min(...graphData.map((d) => d.value)))} · Max {formatValue(Math.max(...graphData.map((d) => d.value)))} {config.unit}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setIsZoomed(true)}
+                    style={[styles.zoomButton, { backgroundColor: theme.colors.primary + "15" }]}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="expand-outline" size={18} color={theme.colors.primary} />
+                    <Text style={[styles.zoomButtonText, { color: theme.colors.primary }]}>Full</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* ── Axis title labels ── */}
+                <View style={styles.axisTitleRow}>
+                  <Text style={[styles.axisTitleText, { color: theme.colors.textSecondary }]}>↑ {config.unit || "Value"}</Text>
+                  <Text style={[styles.axisTitleText, { color: theme.colors.textSecondary }]}>Time →</Text>
+                </View>
+
+                {/* ── Chart ── */}
+                <View style={styles.graphWithAxis}>
+                  <View style={styles.chartAndXAxis}>
+                    <View style={styles.chartArea}>
+                      <LineChart
+                        data={graphData}
+                        color={config.color}
+                        unit=""
+                        width={width - 50}
+                        height={220}
+                        labelColor={theme.colors.textSecondary}
+                        xTitle="Time"
+                        yTitle={config.unit}
+                        showGradient={true}
+                        showDots={graphData.length <= 50}
+                      />
+                    </View>
+                  </View>
+                </View>
               </View>
             ) : (
-              <View style={styles.chartPlaceholder}>
+              <View style={styles.placeholder}>
                 <Ionicons name="analytics-outline" size={48} color={theme.colors.textSecondary} />
-                <Text style={[styles.chartPlaceholderText, { color: theme.colors.textSecondary }]}>
-                  No historical data available
-                </Text>
-                <Text style={[styles.chartPlaceholderSubtext, { color: theme.colors.textSecondary }]}>
-                  Data will appear here once available
+                <Text style={[styles.placeholderText, { color: theme.colors.textSecondary }]}>
+                  No historical data
                 </Text>
               </View>
             )
           )}
         </View>
       </View>
-
-      {/* Sensor Details */}
-      {/* <View style={[styles.detailsCard, { backgroundColor: theme.colors.surface }]}>
-        <Text style={[styles.detailsTitle, { color: theme.colors.text }]}>
-          Sensor Details
-        </Text>
-        
-        <View style={styles.detailRow}>
-          <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>Name</Text>
-          <Text style={[styles.detailValue, { color: theme.colors.text }]}>{config.name}</Text>
-        </View>
-        
-        <View style={styles.detailRow}>
-          <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>Location</Text>
-          <Text style={[styles.detailValue, { color: theme.colors.text }]}>{config.location}</Text>
-        </View>
-        
-        <View style={styles.detailRow}>
-          <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>Unit</Text>
-          <Text style={[styles.detailValue, { color: theme.colors.text }]}>{config.unit}</Text>
-        </View>
-        
-        <View style={styles.detailRow}>
-          <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>API Name</Text>
-          <Text style={[styles.detailValue, { color: theme.colors.text }]}>{config.apiName || 'N/A'}</Text>
-        </View>
-        
-        {config.min !== undefined && config.max !== undefined && (
-          <View style={styles.detailRow}>
-            <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>Optimal Range</Text>
-            <Text style={[styles.detailValue, { color: theme.colors.text }]}>
-              {config.min} - {config.max} {config.unit}
-            </Text>
-          </View>
-        )}
-        
-        {config.description && (
-          <View style={styles.detailRow}>
-            <Text style={[styles.detailLabel, { color: theme.colors.textSecondary }]}>Description</Text>
-            <Text style={[styles.detailValue, { color: theme.colors.text }]}>
-              {config.description}
-            </Text>
-          </View>
-        )}
-      </View> */}
     </ScrollView>
+
+      {/* ─── FULLSCREEN ZOOM MODAL ─── */}
+      <Modal
+        visible={isZoomed}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => setIsZoomed(false)}
+      >
+        <StatusBar hidden />
+        <View style={[styles.zoomContainer, { backgroundColor: theme.colors.background }]}>
+          {/* Zoom Header */}
+          <View style={styles.zoomHeader}>
+            <View style={styles.zoomHeaderLeft}>
+              <Text style={[styles.zoomTitle, { color: theme.colors.text }]}>
+                {config.name}
+              </Text>
+              <Text style={[styles.zoomSubtitle, { color: theme.colors.textSecondary }]}>
+                {RANGE_LABELS[timeRange]} · {graphData.length} points
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={() => setIsZoomed(false)}
+              style={[styles.zoomCloseButton, { backgroundColor: theme.colors.surface }]}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <Ionicons name="contract-outline" size={22} color={theme.colors.primary} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Zoom Stats */}
+          <View style={[styles.zoomStatsRow, { backgroundColor: theme.colors.surface }]}>
+            <View style={styles.zoomStat}>
+              <Text style={[styles.zoomStatLabel, { color: theme.colors.textSecondary }]}>Min</Text>
+              <Text style={[styles.zoomStatValue, { color: "#F44336" }]}>
+                {formatValue(Math.min(...graphData.map((d) => d.value)))} {config.unit}
+              </Text>
+            </View>
+            <View style={[styles.zoomStatDivider, { backgroundColor: theme.colors.border }]} />
+            <View style={styles.zoomStat}>
+              <Text style={[styles.zoomStatLabel, { color: theme.colors.textSecondary }]}>Avg</Text>
+              <Text style={[styles.zoomStatValue, { color: theme.colors.primary }]}>
+                {formatValue(graphData.reduce((s, d) => s + d.value, 0) / graphData.length)} {config.unit}
+              </Text>
+            </View>
+            <View style={[styles.zoomStatDivider, { backgroundColor: theme.colors.border }]} />
+            <View style={styles.zoomStat}>
+              <Text style={[styles.zoomStatLabel, { color: theme.colors.textSecondary }]}>Max</Text>
+              <Text style={[styles.zoomStatValue, { color: "#4CAF50" }]}>
+                {formatValue(Math.max(...graphData.map((d) => d.value)))} {config.unit}
+              </Text>
+            </View>
+          </View>
+
+          {/* Fullscreen Chart */}
+          <View style={styles.zoomChartWrapper}>
+            <Text style={[styles.zoomAxisTitle, { color: theme.colors.textSecondary }]}>↑ {config.unit || "Value"}</Text>
+            <View style={styles.zoomChartInner}>
+              <LineChart
+                data={graphData}
+                color={config.color}
+                unit=""
+                width={screenHeight - 100}
+                height={width - 60}
+                labelColor={theme.colors.textSecondary}
+                xTitle="Time"
+                yTitle={config.unit}
+                showGradient={true}
+                showDots={graphData.length <= 80}
+              />
+            </View>
+            <Text style={[styles.zoomAxisTitle, { color: theme.colors.textSecondary }]}>Time →</Text>
+          </View>
+
+          {/* Zoom out button */}
+          <TouchableOpacity
+            onPress={() => setIsZoomed(false)}
+            style={[styles.zoomOutButton, { backgroundColor: theme.colors.primary }]}
+          >
+            <Ionicons name="contract-outline" size={18} color="#FFF" />
+            <Text style={styles.zoomOutButtonText}>Zoom Out</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+    </>
   );
 }
 
+// ─── STYLES ──────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: {  },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingTop: 60,
-    paddingBottom: 20,
+    paddingBottom: 12,
   },
-  backButton: { padding: 8 },
-  headerTitle: { fontSize: 20, fontWeight: "700" },
+  backButton: { padding: 4 },
+  headerTitle: { fontSize: 20, fontWeight: "700", flex: 1, textAlign: "center" },
 
-  /* ── Live value card ───────────────────────────────────────────── */
   valueCard: {
-    marginHorizontal: 0,
-    padding: 10,
-    // borderRadius: 16,
+    marginHorizontal: 16,
+    padding: 16,
+    borderRadius: 16,
     marginBottom: 4,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.06)",
   },
   valueRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 0,
+    marginBottom: 4,
   },
   valueLabel: { fontSize: 14, fontWeight: "500" },
   statusBadge: {
@@ -681,15 +621,12 @@ const styles = StyleSheet.create({
     alignItems: "baseline",
     gap: 8,
   },
-  mainValue: { fontSize: 48, fontWeight: "700" },
+  mainValue: { fontSize: 42, fontWeight: "700" },
   mainUnit: { fontSize: 18, fontWeight: "500" },
-  rangeContainer: { marginTop: 12 },
-  rangeText: { fontSize: 14 },
 
-  /* ── Historical section ────────────────────────────────────────── */
   historicalSection: {
     marginHorizontal: 16,
-    marginBottom: 16,
+    marginTop: 12,
   },
   historicalHeader: {
     flexDirection: "row",
@@ -700,7 +637,6 @@ const styles = StyleSheet.create({
   historicalTitle: { fontSize: 18, fontWeight: "700" },
   historicalSubtitle: { fontSize: 12 },
 
-  /* ── Time range pills ──────────────────────────────────────────── */
   timeRangeContainer: {
     flexDirection: "row",
     justifyContent: "center",
@@ -716,7 +652,6 @@ const styles = StyleSheet.create({
   },
   timeRangeText: { fontSize: 13, fontWeight: "600" },
 
-  /* ── Table / Graph tab switcher ────────────────────────────────── */
   tabSwitcher: {
     flexDirection: "row",
     borderRadius: 12,
@@ -734,32 +669,15 @@ const styles = StyleSheet.create({
   },
   tabButtonText: { fontSize: 14, fontWeight: "500" },
 
-  /* ── Content card (shared by table & graph) ────────────────────── */
-  chartContainer: {
-    padding: 0,
+  contentCard: {
     borderRadius: 16,
     overflow: "hidden",
-    minHeight: 220,
     borderWidth: 1,
     borderColor: "rgba(0,0,0,0.06)",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
+    minHeight: 200,
   },
-  chartPlaceholder: {
-    justifyContent: "center",
-    alignItems: "center",
-    minHeight: 180,
-    padding: 16,
-    gap: 8,
-  },
-  chartPlaceholderText: { fontSize: 15, fontWeight: "500" },
-  chartPlaceholderSubtext: { fontSize: 12, opacity: 0.6 },
 
-  /* ── Table styles ──────────────────────────────────────────────── */
-  tableHeaderRow: {
+  tableHeader: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: "rgba(0,0,0,0.04)",
@@ -775,10 +693,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-  tableHeaderCellRight: {
-    flex: 1,
-    textAlign: "right",
-  },
+  tableHeaderCellRight: { flex: 1, textAlign: "right" },
   tableRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -787,14 +702,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: "rgba(0,0,0,0.06)",
   },
-  tableRowStriped: {
-    backgroundColor: "rgba(76,175,80,0.04)",
-  },
-  tableCell: {
-    flex: 2,
-    fontSize: 13,
-    lineHeight: 18,
-  },
+  tableRowStriped: { backgroundColor: "rgba(76,175,80,0.04)" },
+  tableCell: { flex: 2, fontSize: 13 },
   tableValueCell: {
     flex: 1,
     flexDirection: "row",
@@ -805,7 +714,6 @@ const styles = StyleSheet.create({
   tableValue: { fontSize: 15, fontWeight: "700" },
   tableUnit: { fontSize: 11, fontWeight: "500" },
 
-  /* ── Pagination ────────────────────────────────────────────────── */
   paginationFooter: {
     flexDirection: "row",
     alignItems: "center",
@@ -828,33 +736,128 @@ const styles = StyleSheet.create({
   pageInfoText: { fontSize: 13, fontWeight: "600" },
   pageInfoSub: { fontSize: 11, marginTop: 2, opacity: 0.7 },
 
-  /* ── Graph wrapper ─────────────────────────────────────────────── */
-  graphWrapper: {
-    alignItems: "stretch",
-    padding: 14,
-    gap: 10,
-  },
-  graphSummary: {
-    fontSize: 12,
-    fontWeight: "500",
-    marginBottom: 4,
-  },
+  graphWrapper: { padding: 14, gap: 10 },
+  graphSummary: { fontSize: 12, fontWeight: "500", textAlign: "center" },
 
-  /* ── Sensor details card ───────────────────────────────────────── */
-  detailsCard: {
-    marginHorizontal: 16,
-    padding: 16,
-    borderRadius: 16,
-    marginBottom: 20,
+  graphWithAxis: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    marginTop: 4,
   },
-  detailsTitle: { fontSize: 16, fontWeight: "700", marginBottom: 12 },
-  detailRow: {
+  yAxisContainer: {
+    justifyContent: "space-between",
+    paddingRight: 8,
+    paddingVertical: 12,
+    width: 40,
+  },
+  chartAndXAxis: {
+    flex: 1,
+    alignItems: "center",
+  },
+  chartArea: {
+    width: "100%",
+  },
+  xAxisContainer: {
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(0,0,0,0.05)",
+    width: "100%",
+    paddingHorizontal: 4,
+    marginTop: 4,
   },
-  detailLabel: { fontSize: 14 },
-  detailValue: { fontSize: 14, fontWeight: "600" },
+  axisLabel: {
+    fontSize: 10,
+    fontWeight: "500",
+  },
+
+  placeholder: {
+    justifyContent: "center",
+    alignItems: "center",
+    minHeight: 180,
+    padding: 16,
+    gap: 8,
+  },
+  placeholderText: { fontSize: 15, fontWeight: "500" },
+
+  // Graph enhancements
+  graphSummaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  graphSummaryLeft: { gap: 2 },
+  graphSummaryDetail: { fontSize: 11, fontWeight: "500" },
+  zoomButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+  },
+  zoomButtonText: { fontSize: 12, fontWeight: "600" },
+  axisTitleRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingHorizontal: 4,
+    marginBottom: 4,
+  },
+  axisTitleText: { fontSize: 10, fontWeight: "600", opacity: 0.7 },
+
+  // Zoom modal
+  zoomContainer: {
+    flex: 1,
+    paddingTop: 40,
+  },
+  zoomHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
+  zoomHeaderLeft: { flex: 1 },
+  zoomTitle: { fontSize: 20, fontWeight: "700" },
+  zoomSubtitle: { fontSize: 12, marginTop: 2 },
+  zoomCloseButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  zoomStatsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginHorizontal: 16,
+    padding: 14,
+    borderRadius: 14,
+    marginBottom: 16,
+  },
+  zoomStat: { flex: 1, alignItems: "center", gap: 4 },
+  zoomStatLabel: { fontSize: 11, fontWeight: "500" },
+  zoomStatValue: { fontSize: 16, fontWeight: "700" },
+  zoomStatDivider: { width: 1, height: 30, opacity: 0.3 },
+  zoomChartWrapper: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 16,
+  },
+  zoomChartInner: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  zoomAxisTitle: { fontSize: 11, fontWeight: "600", opacity: 0.6, marginVertical: 4 },
+  zoomOutButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginHorizontal: 16,
+    marginBottom: 40,
+    paddingVertical: 14,
+    borderRadius: 12,
+  },
+  zoomOutButtonText: { color: "#FFF", fontSize: 15, fontWeight: "600" },
 });
