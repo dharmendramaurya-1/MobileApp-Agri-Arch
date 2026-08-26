@@ -540,12 +540,14 @@ export default function Devices() {
             >
               <Ionicons name="hardware-chip-outline" size={48} color={primary} />
             </LinearGradient>
-            <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
+            <View>
+              <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
               No Devices Connected
             </Text>
             <Text style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}>
               Add your first AgriArch sensor device to start monitoring your farm in real time.
             </Text>
+              </View>
             <TouchableOpacity
               style={[styles.emptyButton, { shadowColor: primaryDark }]}
               onPress={openAddWizard}
@@ -559,7 +561,9 @@ export default function Devices() {
                 style={styles.emptyButtonGradient}
               >
                 <Ionicons name="add-circle" size={20} color="#FFF" />
-                <Text style={styles.emptyButtonText}>Add Your First Device</Text>
+                <View>
+                  <Text style={styles.emptyButtonText}>Add Your First Device</Text>
+                  </View>
               </LinearGradient>
             </TouchableOpacity>
           </View>

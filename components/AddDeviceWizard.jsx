@@ -541,15 +541,19 @@ export default function AddDeviceWizard({ visible, onClose, onDeviceAdded }) {
                 <Ionicons name="hardware-chip" size={40} color="#fff" />
               </LinearGradient>
 
-              <Text style={[styles.title, { color: theme.colors.text }]}>
+             <View>
+               <Text style={[styles.title, { color: theme.colors.text }]}>
                 Connect a New Device
               </Text>
-              <Text
+             </View>
+             <View>
+               <Text
                 style={[styles.subtitle, { color: theme.colors.textSecondary }]}
               >
                 Link another AgriArch sensor device so your farm keeps
                 reporting in real time. Choose how you&apos;d like to connect.
               </Text>
+             </View>
 
               {/* Method cards */}
               <TouchableOpacity
@@ -631,6 +635,7 @@ export default function AddDeviceWizard({ visible, onClose, onDeviceAdded }) {
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
               >
+                <View>
                 <Text style={[styles.formEyebrow, { color: primary }]}>
                   DEVICE DETAILS
                 </Text>
@@ -649,6 +654,7 @@ export default function AddDeviceWizard({ visible, onClose, onDeviceAdded }) {
                 >
                   Device name
                 </Text>
+                </View>
                 <View
                   style={[
                     styles.inputGroup,
@@ -683,11 +689,13 @@ export default function AddDeviceWizard({ visible, onClose, onDeviceAdded }) {
                 </View>
 
                 {/* External key */}
-                <Text
+                <View>
+                  <Text
                   style={[styles.fieldLabel, { color: theme.colors.textSecondary }]}
                 >
                   Device ID / External key
                 </Text>
+                </View>
                 <View
                   style={[
                     styles.inputGroup,
@@ -953,20 +961,24 @@ export default function AddDeviceWizard({ visible, onClose, onDeviceAdded }) {
                 </LinearGradient>
               </View>
 
-              <Text style={[styles.title, { color: theme.colors.text }]}>
+              <View>  
+                <Text style={[styles.title, { color: theme.colors.text }]}>
                 {connectError
                   ? "Connection failed"
                   : isConnecting
                   ? "Connecting your device..."
                   : "Device connected!"}
               </Text>
-              <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
+              </View>
+              <View>
+                <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
                 {connectError
                   ? "We couldn't connect this device. Please check the details and try again."
                   : isConnecting
                   ? "This usually takes a few seconds. Please don't close the app."
                   : "Your device is live and reporting to your farm."}
               </Text>
+              </View>
 
               {/* Device summary card */}
               {summary && (
@@ -1013,7 +1025,9 @@ export default function AddDeviceWizard({ visible, onClose, onDeviceAdded }) {
                       style={styles.primaryBtnGradient}
                     >
                       <Ionicons name="refresh" size={20} color="#fff" />
-                      <Text style={styles.primaryBtnText}>Try Again</Text>
+                      <View>
+                        <Text style={styles.primaryBtnText}>Try Again</Text>
+                      </View>
                     </LinearGradient>
                   </TouchableOpacity>
                 </View>
@@ -1033,7 +1047,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 45,
     paddingBottom: 4,
   },
   iconButton: {

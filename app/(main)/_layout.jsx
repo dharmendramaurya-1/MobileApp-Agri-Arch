@@ -4,7 +4,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { getDrawerStatusFromState } from "@react-navigation/drawer";
 import { LinearGradient } from "expo-linear-gradient";
-import { router, useNavigation } from "expo-router";
+import { router, useNavigation, usePathname } from "expo-router";
 import { Drawer } from "expo-router/drawer";
 import { Component, useEffect, useRef, useState } from "react";
 import {
@@ -24,7 +24,7 @@ import {
 
 
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { AlertBadge } from "../../components/AlertBadge";
 import { AlertList } from "../../components/AlertList";
 import Logo from "../../components/Logo";
@@ -544,6 +544,91 @@ export default function MainLayout() {
   );
 }
 
+/* ── BOTTOM TAB BAR (for Drawer layout) ── */
+function DrawerBottomBar({ theme }) {
+  const insets = useSafeAreaInsets();
+  const pathname = usePathname();
+  // Extract the screen name from pathname, e.g. "/(main)/settings" -> "settings"
+  const currentRoute = pathname?.split("/").filter(Boolean).pop() || "dashboard";
+
+  const tabs = [
+    { key: "dashboard", label: "Dashboard", icon: "grid-outline", iconActive: "grid" },
+    { key: "system-control", label: "Control", icon: "options-outline", iconActive: "options" },
+    { key: "add_crops", label: "Crops", icon: "leaf-outline", iconActive: "leaf" },
+    { key: "devices", label: "Devices", icon: "hardware-chip-outline", iconActive: "hardware-chip" },
+    { key: "settings", label: "Settings", icon: "settings-outline", iconActive: "settings" },
+  ];
+
+  const activeColor = theme.colors.primary;
+  const inactiveColor = theme.colors.textSecondary || "#999";
+  const tabBarBg = theme.dark ? "#1A1A1A" : "#FFFFFF";
+
+  return (
+    <View style={styles.bottomBarWrapper}>
+      <LinearGradient
+        colors={theme.dark
+          ? ["#1B5E2000", "#2E7D32", "#1B5E2000"]
+          : ["#4CAF5000", "#4CAF50", "#4CAF5000"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+        style={styles.bottomBarGradient}
+      />
+      <View
+        style={[
+          styles.bottomBar,
+          {
+            backgroundColor: tabBarBg,
+            paddingBottom: insets.bottom > 0 ? insets.bottom : 8,
+          },
+        ]}
+      >
+        {tabs.map((tab) => {
+          const isActive = currentRoute === tab.key;
+          return (
+            <TouchableOpacity
+              key={tab.key}
+              style={styles.bottomTabItem}
+              onPress={() => {
+                if (currentRoute !== tab.key) {
+                  router.push(`/(main)/${tab.key}`);
+                }
+              }}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
+            >
+              <View style={styles.bottomTabIconContainer}>
+                <Ionicons
+                  name={isActive ? tab.iconActive : tab.icon}
+                  size={22}
+                  color={isActive ? activeColor : inactiveColor}
+                />
+              </View>
+              <Text
+                style={[
+                  styles.bottomTabLabel,
+                  {
+                    color: isActive ? activeColor : inactiveColor,
+                    fontWeight: isActive ? "700" : "500",
+                  },
+                ]}
+                numberOfLines={1}
+              >
+                {tab.label}
+              </Text>
+              <View
+                style={[
+                  styles.bottomTabIndicator,
+                  { backgroundColor: isActive ? activeColor : "transparent" },
+                ]}
+              />
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 function MainDrawer({ theme }) {
   const navigation = useNavigation();
 
@@ -584,6 +669,7 @@ function MainDrawer({ theme }) {
   }, [navigation]);
 
   return (
+    <View style={{ flex: 1 }}>
     <Drawer
         screenOptions={{
           drawerPosition: "left",
@@ -641,6 +727,8 @@ function MainDrawer({ theme }) {
         <Drawer.Screen name="sensor/ph-level" options={{ title: "pH Details" }} />
         <Drawer.Screen name="sensor/ec-value" options={{ title: "EC Details" }} />
       </Drawer>
+      <DrawerBottomBar theme={theme} />
+    </View>
   );
 }
 
@@ -865,4 +953,50 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   logoutText: { fontSize: 13, fontWeight: "600", color: "#F44336" },
+  // ── Bottom Tab Bar ──
+  bottomBarWrapper: {
+    backgroundColor: "transparent",
+  },
+  bottomBarGradient: {
+    height: 2,
+    width: "100%",
+  },
+  bottomBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-around",
+    paddingTop: 6,
+    borderTopWidth: 0,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    elevation: 15,
+  },
+  bottomTabItem: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 4,
+    position: "relative",
+  },
+  bottomTabIconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 3,
+  },
+  bottomTabLabel: {
+    fontSize: 10,
+    marginTop: 3,
+    letterSpacing: 0.2,
+  },
+  bottomTabIndicator: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    marginTop: 4,
+  },
 });

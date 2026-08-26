@@ -451,20 +451,17 @@ export default function SystemControl() {
   // ── Mode toggle ──
   const cardBg = theme.colors.card || theme.colors.surface || "#FFFFFF";
   const borderC = theme.colors.border || "#E0E0E0";
-
+  const { scrollY } = useScroll();
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <ScrollView
-        ref={scrollRef}
-        style={styles.container}
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: 24, paddingTop: headerHeight },
-        ]}
-        showsVerticalScrollIndicator={false}
-        onScroll={onScroll}
-        scrollEventThrottle={16}
-      >
+      contentContainerStyle={{ paddingTop: headerHeight, paddingBottom: 80 }}
+      onScroll={Animated.event(
+        [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+        { useNativeDriver: false }
+      )}
+      scrollEventThrottle={16}
+    >
         {/* ── Header ── */}
         <View style={styles.header}>
           <View style={styles.headerLeft}>
@@ -594,7 +591,7 @@ export default function SystemControl() {
 
 // ── Styles ──
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, padding:10, paddingBottom:0, },
   scrollContent: { padding: 16, paddingTop: Platform.OS === "ios" ? 8 : 16 },
 
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 14 },
