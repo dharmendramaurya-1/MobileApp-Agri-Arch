@@ -7,14 +7,13 @@ import {
   Alert,
   Animated,
   Dimensions,
-  Platform,
   ScrollView,
   StyleSheet,
   Switch,
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from "react-native";
 import SliderControl from "../../components/SettingsSlider";
 import { useAlerts } from "../../src/context/AlertContext";
@@ -86,7 +85,7 @@ const DEVICE_ORDER = ["water_pump", "water_ILvalve", "water_OLvalve", "nutrient_
 const CATEGORY_TITLES = { pump: "Pumps", valve: "Valves", system: "System" };
 const CATEGORY_ICONS = { pump: "water", valve: "git-network", system: "hardware-chip" };
 
-// ── Format seconds (firmware now sends seconds, not milliseconds) ──
+// ── Format seconds ──
 function fmtSec(sec) {
   if (sec === null || sec === undefined) return "--";
   if (sec < 60) return `${sec}s`;
@@ -97,13 +96,11 @@ function fmtSec(sec) {
 
 // ── Dimming Card Component ──
 function DimmingCard({ dimmingLevel, onDimmingChange, locked, theme, cardBg, borderC }) {
-  // Firmware sends 0-127, display as 0-100%
   const percentage = dimmingLevel !== null && dimmingLevel !== undefined
     ? Math.round((dimmingLevel / 127) * 100)
     : 0;
   const [localValue, setLocalValue] = useState(percentage);
 
-  // Sync from device when it changes
   useEffect(() => {
     if (dimmingLevel !== null && dimmingLevel !== undefined) {
       setLocalValue(Math.round((dimmingLevel / 127) * 100));
@@ -177,9 +174,8 @@ function DimmingCard({ dimmingLevel, onDimmingChange, locked, theme, cardBg, bor
   );
 }
 
-// ── Expandable Actuator Card with inline timing inputs ──
+// ── Expandable Actuator Card ──
 function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggleTime, onToggle, timingValues, onTimingChange, theme, cardBg, borderC }) {
-  // Pump cards start expanded by default
   const [expanded, setExpanded] = useState(() => {
     const timingFields = TIMING_FIELDS[device.id] || [];
     return timingFields.length > 0;
@@ -191,7 +187,6 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
   const timingFields = TIMING_FIELDS[device.id] || [];
   const hasTiming = timingFields.length > 0;
 
-  // Pulse on status change
   const prevIsOn = useRef(isOn);
   useEffect(() => {
     if (prevIsOn.current !== isOn) {
@@ -223,7 +218,6 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
       borderWidth: isOn ? 1.5 : 1,
       transform: [{ scale: pulseAnim }],
     }]}>
-      {/* ── Main Row ── */}
       <TouchableOpacity
         style={styles.cardMain}
         onPress={toggleExpand}
@@ -264,7 +258,6 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
         </View>
       </TouchableOpacity>
 
-      {/* ── Expandable Timing Section ── */}
       {hasTiming && (
         <Animated.View style={{
           maxHeight: expandAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 130] }),
@@ -325,19 +318,14 @@ export default function SystemControl() {
 
   const {
     getSelectedDeviceActuatorStatus,
-    getSelectedDeviceOnlineStatus,
     getSelectedDeviceName,
     getSelectedDeviceCropSettings,
     selectedExternalKey,
     deviceStatusFlags,
     isConnected,
-    isLiveData,
     publishActuatorStatus,
     publishSettings,
-    hasReceivedData,
     connectionState,
-    getDeviceStatusSync,
-    selectedDeviceId,
     deviceOnlineStatus,
     deviceInitialLoadComplete,
   } = useMqtt();
@@ -352,31 +340,70 @@ export default function SystemControl() {
   const [toggleTimes, setToggleTimes] = useState({});
   const publishTimerRef = useRef(null);
 
-  // ── ✅ FIX: Directly compute status from context values ──
-  // This avoids the complex ref/state sync issues
-  const isOnline = useMemo(() => {
-    if (!selectedExternalKey) return false;
-    return deviceOnlineStatus[selectedExternalKey] === true;
-  }, [selectedExternalKey, deviceOnlineStatus]);
+  // ── ✅ FIX: STABLE STATUS DERIVATION (SAME AS LAYOUT) ──
+  const deviceKey = selectedExternalKey;
 
+  // ✅ STABLE: Device online status (only changes when definitive)
+  const isDeviceOnline = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceOnlineStatus[deviceKey] === true;
+  }, [deviceKey, deviceOnlineStatus]);
+
+  // ✅ STABLE: Initial load complete (only changes once)
   const isInitialLoadComplete = useMemo(() => {
-    if (!selectedExternalKey) return false;
-    return deviceInitialLoadComplete[selectedExternalKey] === true;
-  }, [selectedExternalKey, deviceInitialLoadComplete]);
+    if (!deviceKey) return false;
+    return deviceInitialLoadComplete[deviceKey] === true;
+  }, [deviceKey, deviceInitialLoadComplete]);
 
+  // ✅ STABLE: Loading state (derived from initial load)
   const isLoading = useMemo(() => {
-    if (!selectedExternalKey) return false;
-    // If initial load is not complete, we're loading
+    if (!deviceKey) return false;
     return !isInitialLoadComplete;
-  }, [selectedExternalKey, isInitialLoadComplete]);
+  }, [deviceKey, isInitialLoadComplete]);
 
+  // ✅ STABLE: Offline state (only when confirmed)
   const isOffline = useMemo(() => {
-    if (!selectedExternalKey) return false;
-    // If initial load is complete AND we're not online -> offline
-    return isInitialLoadComplete && !isOnline;
-  }, [selectedExternalKey, isInitialLoadComplete, isOnline]);
+    return isInitialLoadComplete && !isDeviceOnline;
+  }, [isInitialLoadComplete, isDeviceOnline]);
 
-  // ── Timing values — initialized from actuatorStatus, synced on update ──
+  // ✅ STABLE: Waiting state
+  const isWaiting = useMemo(() => {
+    return (!isInitialLoadComplete && !isLoading) ||
+      connectionState === "connecting" ||
+      connectionState === "waiting" ||
+      connectionState === "idle";
+  }, [isInitialLoadComplete, isLoading, connectionState]);
+
+  // ✅ STABLE: Is not connected
+  const isNotConnected = useMemo(() => {
+    return connectionState === "idle" || connectionState === "disconnected" || connectionState === "error";
+  }, [connectionState]);
+
+  // ── ✅ STATUS DISPLAY (SAME AS LAYOUT) ──
+  const getStatusDisplay = useCallback(() => {
+    // ✅ When loading or waiting, show NOTHING
+    if (isLoading || isWaiting) return null;
+    // ✅ When online, show Online
+    if (isDeviceOnline) return { text: 'Online', color: '#4CAF50' };
+    // ✅ When offline (confirmed), show Offline
+    if (isOffline) return { text: 'Offline', color: '#f44336' };
+    // ✅ Default: show nothing
+    return null;
+  }, [isLoading, isWaiting, isDeviceOnline, isOffline]);
+
+  const statusDisplay = getStatusDisplay();
+
+  // ── ✅ DEVICE READY STATE (stable, no flicker) ──
+  const isDeviceReady = useMemo(() => {
+    return isConnected && isInitialLoadComplete && isDeviceOnline;
+  }, [isConnected, isInitialLoadComplete, isDeviceOnline]);
+
+  // ── ✅ DEVICE LOCKED (only lock when definitely offline or disconnected) ──
+  const deviceLocked = useMemo(() => {
+    return !isConnected || isNotConnected || isOffline;
+  }, [isConnected, isNotConnected, isOffline]);
+
+  // ── Timing values — initialized from actuatorStatus ──
   const [timingValues, setTimingValues] = useState(() => {
     const init = {};
     for (const [deviceId, fields] of Object.entries(TIMING_FIELDS)) {
@@ -387,7 +414,7 @@ export default function SystemControl() {
     return init;
   });
 
-  // Sync timing values when actuatorStatus updates (from device data)
+  // Sync timing values when actuatorStatus updates
   useEffect(() => {
     setTimingValues((prev) => {
       const updated = { ...prev };
@@ -427,12 +454,7 @@ export default function SystemControl() {
     prevActuatorRef.current = actuatorStatus;
   }, [actuatorStatus, updating]);
 
-  // Connection state
-  const isNotConnected = connectionState === "idle" || connectionState === "disconnected" || connectionState === "error";
-  
-  // ✅ FIX: Only lock for connection issues — NOT for loading or AUTO mode
-  const deviceLocked = !isConnected || isNotConnected || isOffline;
-
+  // ── Get mode label from device status flags ──
   const displayStatus = getDisplayStatus(deviceStatusFlags);
   const rawMode = displayStatus?.mode;
   const modeLabel = rawMode === "AUTO" ? "AUTO" : rawMode === "MANUAL" ? "MANUAL" : null;
@@ -442,10 +464,9 @@ export default function SystemControl() {
     setTimingValues((prev) => ({ ...prev, [timingKey]: value }));
   }, []);
 
-  // ── Dimming handler — publishes on change (debounced) ──
+  // ── Dimming handler ──
   const handleDimmingChange = useCallback((firmwareValue) => {
     if (!selectedExternalKey) return;
-    // ✅ If AUTO mode — show popup
     if (!isManualMode) {
       Alert.alert(
         "🤖 AUTO Mode Active",
@@ -458,11 +479,9 @@ export default function SystemControl() {
       return;
     }
     if (deviceLocked) return;
-    // Debounce: clear previous timer
     if (publishTimerRef.current) clearTimeout(publishTimerRef.current);
     publishTimerRef.current = setTimeout(async () => {
       try {
-        // Publish dimming as part of crop settings (Dimm field)
         const currentCropSettings = cropSettings || {};
         await publishSettings(selectedExternalKey, { ...currentCropSettings, dimming: firmwareValue });
         const time = new Date().toLocaleTimeString();
@@ -470,33 +489,35 @@ export default function SystemControl() {
       } catch (err) {
         console.error("Dimming publish error:", err);
       }
-    }, 500); // 500ms debounce
+    }, 500);
   }, [deviceLocked, selectedExternalKey, cropSettings, publishSettings, addAlert, isManualMode]);
 
-  // ── Mode toggle ──
-  const cardBg = theme.colors.card || theme.colors.surface || "#FFFFFF";
-  const borderC = theme.colors.border || "#E0E0E0";
-  const { scrollY } = useScroll();
-
-  // ✅ FIX: Determine mode pill status - stable
+  // ── ✅ STABLE MODE PILL (SHOW NOTHING DURING LOADING) ──
   const getModePillStyle = useCallback(() => {
-    if (isNotConnected) {
+    // ✅ When loading or waiting, show NOTHING (return null)
+    if (isLoading || isWaiting) {
+      return null;
+    }
+    // ✅ When offline or disconnected, show OFFLINE
+    if (isNotConnected || isOffline) {
       return { bg: "#F44336", icon: "wifi-outline", label: "OFFLINE" };
     }
-    if (isLoading) {
-      // Show neutral state while loading
-      return { bg: "#9E9E9E", icon: "sync-outline", label: "..." };
-    }
-    if (isOnline && modeLabel === "MANUAL") {
+    // ✅ When online and manual mode
+    if (isDeviceOnline && modeLabel === "MANUAL") {
       return { bg: "#4CAF50", icon: "hand-left-outline", label: "MANUAL" };
     }
-    if (isOnline && modeLabel === "AUTO") {
+    // ✅ When online and auto mode
+    if (isDeviceOnline && modeLabel === "AUTO") {
       return { bg: "#FF9800", icon: "sync-outline", label: "AUTO" };
     }
-    return { bg: "#9E9E9E", icon: "wifi-outline", label: "NO DATA" };
-  }, [isNotConnected, isLoading, isOnline, modeLabel]);
+    // ✅ Default: show nothing for unknown states
+    return null;
+  }, [isLoading, isWaiting, isNotConnected, isOffline, isDeviceOnline, modeLabel]);
 
   const modePill = getModePillStyle();
+
+  const cardBg = theme.colors.card || theme.colors.surface || "#FFFFFF";
+  const borderC = theme.colors.border || "#E0E0E0";
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
@@ -504,7 +525,7 @@ export default function SystemControl() {
         ref={scrollRef}
         contentContainerStyle={{ paddingTop: headerHeight, paddingBottom: 80 }}
         onScroll={Animated.event(
-          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          [{ nativeEvent: { contentOffset: { y: useScroll().scrollY } } }],
           { useNativeDriver: false }
         )}
         scrollEventThrottle={16}
@@ -513,20 +534,59 @@ export default function SystemControl() {
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={[styles.title, { color: theme.colors.text }]}>System Control</Text>
+            {selectedDeviceName && (
+              <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
+                {selectedDeviceName}
+              </Text>
+            )}
           </View>
-          {/* ✅ FIX: Mode pill shows stable status - no flickering */}
-          <TouchableOpacity
-            style={[styles.modePill, { backgroundColor: modePill.bg }]}
-            onPress={() => router.push("/(main)/settings")}
-            activeOpacity={0.7}
-          >
-            <Ionicons name={modePill.icon} size={12} color="#FFF" />
-            <Text style={styles.modePillText}>{modePill.label}</Text>
-            <Ionicons name="chevron-forward" size={10} color="#FFF" opacity={0.7} />
-          </TouchableOpacity>
+          {/* ✅ Mode pill - ONLY show when definitive state */}
+          {modePill && (
+            <TouchableOpacity
+              style={[styles.modePill, { backgroundColor: modePill.bg }]}
+              onPress={() => router.push("/(main)/settings")}
+              activeOpacity={0.7}
+            >
+              <Ionicons name={modePill.icon} size={12} color="#FFF" />
+              <Text style={styles.modePillText}>{modePill.label}</Text>
+              <Ionicons name="chevron-forward" size={10} color="#FFF" opacity={0.7} />
+            </TouchableOpacity>
+          )}
         </View>
 
-        {/* ── Connection Banner ── */}
+        {/* ── Device Info ── */}
+        {deviceKey && (
+          <View style={[
+            styles.deviceInfo,
+            {
+              backgroundColor: theme.colors.surface,
+              borderColor: theme.colors.border,
+            }
+          ]}>
+            <Ionicons name="hardware-chip-outline" size={16} color={theme.colors.primary} />
+            <Text style={[styles.deviceIdText, { color: theme.colors.text }]}>
+              Device: {deviceKey.slice(0, 12)}...
+            </Text>
+            {/* ✅ Show dot ONLY when online, NOTHING when loading */}
+            {isDeviceOnline && isInitialLoadComplete && (
+              <View style={[styles.onlineDot, { backgroundColor: '#4CAF50' }]} />
+            )}
+          </View>
+        )}
+
+        {/* ── Status Badge - ONLY show when definitive ── */}
+        {statusDisplay && (
+          <View style={[
+            styles.statusBadge,
+            { backgroundColor: statusDisplay.color }
+          ]}>
+            <Text style={[styles.statusText, { color: '#fff' }]}>
+              {statusDisplay.text}
+            </Text>
+          </View>
+        )}
+
+        {/* ── BANNERS: ONLY show when definitely offline/disconnected ── */}
         {isNotConnected && (
           <View style={[styles.banner, { backgroundColor: "#F4433612" }]}>
             <Ionicons name="wifi-outline" size={15} color="#F44336" />
@@ -539,7 +599,7 @@ export default function SystemControl() {
             <Text style={[styles.bannerText, { color: "#FF9800" }]}>Device offline. Waiting for connection...</Text>
           </View>
         )}
-        {/* ✅ REMOVED the "Connecting..." banner - show nothing while loading */}
+        {/* ✅ REMOVED: "Connecting..." banner - show NOTHING while loading */}
 
         {/* ── Dimming Card ── */}
         <DimmingCard
@@ -570,8 +630,10 @@ export default function SystemControl() {
                 isToggling={updating === device.id}
                 toggleTime={toggleTimes[device.id]}
                 onToggle={(d) => {
-                  if (!selectedExternalKey) { Alert.alert("Error", "No device selected"); return; }
-                  // ✅ If AUTO mode — show popup instead of silently blocking
+                  if (!selectedExternalKey) {
+                    Alert.alert("Error", "No device selected");
+                    return;
+                  }
                   if (!isManualMode) {
                     Alert.alert(
                       "🤖 AUTO Mode Active",
@@ -583,11 +645,18 @@ export default function SystemControl() {
                     );
                     return;
                   }
-                  if (deviceLocked) return;
+                  if (deviceLocked) {
+                    Alert.alert(
+                      "Device Not Ready",
+                      isOffline
+                        ? "Device is offline. Please wait for device to connect."
+                        : "Device is not ready. Please wait."
+                    );
+                    return;
+                  }
                   setUpdating(d.id);
                   const newVal = !d.vb;
                   const time = new Date().toLocaleTimeString();
-                  // Build status with current toggles (previous timing preserved by MqttContext)
                   const fullStatus = {};
                   for (const dev of devices) {
                     fullStatus[dev.actuatorKey] = dev.id === d.id ? newVal : dev.vb;
@@ -626,17 +695,52 @@ export default function SystemControl() {
 // ── Styles ──
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 10, paddingBottom: 0 },
-  scrollContent: { padding: 16, paddingTop: Platform.OS === "ios" ? 8 : 16 },
 
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 14 },
   headerLeft: { flex: 1, marginRight: 10 },
   title: { fontSize: 26, fontWeight: "700" },
   subtitle: { fontSize: 13, marginTop: 2, opacity: 0.8 },
+
   modePill: {
     flexDirection: "row", alignItems: "center", gap: 5,
     paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12,
   },
   modePillText: { color: "#FFF", fontSize: 11, fontWeight: "700", letterSpacing: 0.4 },
+
+  // ── Device Info ──
+  deviceInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 8,
+    gap: 8,
+  },
+  deviceIdText: {
+    fontSize: 13,
+    fontWeight: '500',
+    flex: 1,
+  },
+  onlineDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+
+  // ── Status Badge ──
+  statusBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginBottom: 10,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#fff',
+  },
 
   banner: { flexDirection: "row", alignItems: "center", gap: 8, padding: 10, borderRadius: 10, marginBottom: 10 },
   bannerText: { fontSize: 12, flex: 1, fontWeight: "500" },
@@ -672,7 +776,7 @@ const styles = StyleSheet.create({
   timeText: { fontSize: 9, opacity: 0.5 },
   cardRight: { flexDirection: "row", alignItems: "center", gap: 6 },
 
-  // Inline timing section (inside card)
+  // Inline timing section
   timingDivider: { height: 1, marginHorizontal: 14 },
   timingSectionInner: { padding: 14, paddingTop: 10 },
   timingSectionHeader: {
@@ -680,12 +784,7 @@ const styles = StyleSheet.create({
   },
   timingSectionLabel: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5, flex: 1 },
   timingSectionUnit: { fontSize: 10, fontWeight: "500" },
-
-  // Timing inline row (side by side)
-  timingRowInline: {
-    flexDirection: "row",
-    gap: 10,
-  },
+  timingRowInline: { flexDirection: "row", gap: 10 },
   timingInputCard: {
     flex: 1,
     borderRadius: 10,

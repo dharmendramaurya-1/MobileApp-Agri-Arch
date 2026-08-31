@@ -3,7 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"; // ✅ Added useMemo
 import {
   ActivityIndicator,
   Alert,
@@ -73,8 +73,6 @@ function convertToSenML(cropData, customSettings) {
 
 // ============================================
 // CUSTOMIZE SETTINGS — SLIDER SECTIONS
-// Each range section renders one dual-thumb slider (min may equal max);
-// "single" sections render a single 0-100 style slider (Dimming).
 // ============================================
 const SLIDER_SECTIONS = [
   {
@@ -128,7 +126,7 @@ const SLIDER_SECTIONS = [
 ];
 
 // ============================================
-// CUSTOMIZE SETTINGS MODAL (standalone component)
+// CUSTOMIZE SETTINGS MODAL
 // ============================================
 function CustomizeSettingsModal({
   visible,
@@ -146,7 +144,6 @@ function CustomizeSettingsModal({
     return initial;
   });
 
-  // Re-sync the draft whenever the modal opens
   useEffect(() => {
     if (visible) {
       const initial = {};
@@ -319,7 +316,7 @@ function CustomizeSettingsModal({
 }
 
 // ============================================
-// SENML PREVIEW MODAL (standalone component)
+// SENML PREVIEW MODAL
 // ============================================
 function SenMLPreviewModal({ visible, onClose, cropDetails, customSettings, theme }) {
   if (!cropDetails) return null;
@@ -385,7 +382,6 @@ function SenMLPreviewModal({ visible, onClose, cropDetails, customSettings, them
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={styles.modalContainer}>
         <View style={[styles.modalContent, { maxHeight: "85%", backgroundColor: theme.colors.surface }]}>
-          {/* Header */}
           <View style={styles.modalHeader}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
               <View style={[styles.previewHeaderIcon, { backgroundColor: "rgba(33,150,243,0.12)" }]}>
@@ -404,7 +400,6 @@ function SenMLPreviewModal({ visible, onClose, cropDetails, customSettings, them
             </TouchableOpacity>
           </View>
 
-          {/* Crop Info Chip */}
           <View style={[styles.previewCropChip, { backgroundColor: `${theme.colors.primary}10`, borderColor: `${theme.colors.primary}30` }]}>
             <Ionicons name="leaf-outline" size={14} color={theme.colors.primary} />
             <Text style={[styles.previewCropChipText, { color: theme.colors.primary }]}>
@@ -413,7 +408,6 @@ function SenMLPreviewModal({ visible, onClose, cropDetails, customSettings, them
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 20 }}>
-            {/* Base Name + Timestamp Card */}
             <View style={[styles.previewInfoCard, { backgroundColor: theme.colors.inputBackground || theme.colors.background, borderColor: theme.colors.border }]}>
               <View style={styles.previewInfoRow}>
                 <Ionicons name="finger-print-outline" size={16} color={theme.colors.textSecondary} />
@@ -430,7 +424,6 @@ function SenMLPreviewModal({ visible, onClose, cropDetails, customSettings, them
               </View>
             </View>
 
-            {/* Sensor Groups */}
             {SENSOR_GROUPS.map((group) => (
               <View key={group.title} style={[styles.previewGroupCard, { backgroundColor: theme.colors.inputBackground || theme.colors.background, borderColor: theme.colors.border }]}>
               <View style={[styles.previewGroupHeader, { borderLeftColor: group.color }]}>
@@ -466,6 +459,7 @@ export default function AddCrops() {
   const { onScroll, headerHeight } = useScroll();
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
+  
   const {
     isConnected,
     externalKey,
@@ -474,24 +468,73 @@ export default function AddCrops() {
     connectionState,
     isLiveData,
     deviceStatusFlags,
-    getSelectedDeviceOnlineStatus,
+    deviceOnlineStatus,
+    deviceInitialLoadComplete,
+    selectedExternalKey,
   } = useMqtt();
 
   const { isAutoMode, isManualMode } = useSystemMode();
 
-  // ✅ FIX: Get device status properly
-  const deviceStatusValue = getSelectedDeviceOnlineStatus();
-  const isDeviceOnline = deviceStatusValue === true;
-  const isDeviceLoading = deviceStatusValue === 'loading' || deviceStatusValue === 'checking';
-  const isDeviceOffline = deviceStatusValue === false;
+  // ── ✅ FIX: STABLE STATUS DERIVATION (SAME AS LAYOUT) ──
+  const deviceKey = selectedExternalKey || externalKey;
+
+  // ✅ STABLE: Device online status (only changes when definitive)
+  const isDeviceOnline = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceOnlineStatus[deviceKey] === true;
+  }, [deviceKey, deviceOnlineStatus]);
+
+  // ✅ STABLE: Initial load complete (only changes once)
+  const isInitialLoadComplete = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceInitialLoadComplete[deviceKey] === true;
+  }, [deviceKey, deviceInitialLoadComplete]);
+
+  // ✅ STABLE: Loading state (derived from initial load)
+  const isLoading = useMemo(() => {
+    if (!deviceKey) return false;
+    return !isInitialLoadComplete;
+  }, [deviceKey, isInitialLoadComplete]);
+
+  // ✅ STABLE: Offline state (only when confirmed)
+  const isOffline = useMemo(() => {
+    return isInitialLoadComplete && !isDeviceOnline;
+  }, [isInitialLoadComplete, isDeviceOnline]);
+
+  // ✅ STABLE: Waiting state
+  const isWaiting = useMemo(() => {
+    return (!isInitialLoadComplete && !isLoading) ||
+      connectionState === "connecting" ||
+      connectionState === "waiting" ||
+      connectionState === "idle";
+  }, [isInitialLoadComplete, isLoading, connectionState]);
+
+  // ✅ STABLE: Is not connected
+  const isNotConnected = useMemo(() => {
+    return connectionState === "idle" || connectionState === "disconnected" || connectionState === "error";
+  }, [connectionState]);
+
+  // ── ✅ STATUS DISPLAY (SAME AS LAYOUT) ──
+  const getStatusDisplay = useCallback(() => {
+    // ✅ When loading or waiting, show NOTHING
+    if (isLoading || isWaiting) return null;
+    // ✅ When online, show Online
+    if (isDeviceOnline) return { label: "Online", color: "#4CAF50", bg: "rgba(76,175,80,0.12)" };
+    // ✅ When offline (confirmed), show Offline
+    if (isOffline) return { label: "Offline", color: "#F44336", bg: "rgba(244,67,54,0.12)" };
+    // ✅ Default: show nothing
+    return null;
+  }, [isLoading, isWaiting, isDeviceOnline, isOffline]);
+
+  const liveStatus = getStatusDisplay();
 
   // Wizard step: 'crop' -> 'variety' -> 'stage' -> 'details'
   const [step, setStep] = useState("crop");
 
   // Data from the 3 APIs
-  const [crops, setCrops] = useState([]);                 // API 1: string[]
-  const [varietyData, setVarietyData] = useState([]);     // API 2: raw list for selected crop
-  const [cropDetails, setCropDetails] = useState(null);    // API 3: full details
+  const [crops, setCrops] = useState([]);
+  const [varietyData, setVarietyData] = useState([]);
+  const [cropDetails, setCropDetails] = useState(null);
 
   // Selections
   const [selectedCropName, setSelectedCropName] = useState("");
@@ -524,26 +567,18 @@ export default function AddCrops() {
     dimming: 75,
   });
 
-  // ─── Step slide transition (forward: left→right, back: right→left) ────
+  // ─── Step slide transition ────
   const screenW = Dimensions.get("window").width;
-  const [displayStep, setDisplayStep] = useState("crop"); // step in the base panel
-  const [incomingStep, setIncomingStep] = useState(null);   // step sliding in
-  // Two stable Animated values drive the two panels. They run on the JS driver
-  // (useNativeDriver: false): the transform is re-applied to the native views
-  // every frame from the value's current position, so a re-render mid-slide can
-  // never detach the animation and leave the incoming panel stuck off-screen
-  // (the bug that made crop sub-data appear to "not load").
-  const baseX = useRef(new Animated.Value(0)).current;      // base panel translateX
-  const incomingX = useRef(new Animated.Value(0)).current;  // incoming panel translateX
+  const [displayStep, setDisplayStep] = useState("crop");
+  const [incomingStep, setIncomingStep] = useState(null);
+  const baseX = useRef(new Animated.Value(0)).current;
+  const incomingX = useRef(new Animated.Value(0)).current;
   const transitionLock = useRef(false);
   const prevStepRef = useRef("crop");
-  const stepRef = useRef(step);     // always the LATEST step (completion callbacks)
+  const stepRef = useRef(step);
   stepRef.current = step;
-  const settleTimer = useRef(null); // safety net in case a completion is swallowed
+  const settleTimer = useRef(null);
 
-  // Instantly settle both panels to the latest step. Every completion path
-  // (success, interruption, mid-slide lock, or the safety timeout) calls this,
-  // so the wizard can never stay stuck showing a stale/empty panel.
   const settlePanels = () => {
     if (settleTimer.current) {
       clearTimeout(settleTimer.current);
@@ -562,15 +597,13 @@ export default function AddCrops() {
     prevStepRef.current = step;
 
     if (transitionLock.current) {
-      // mid-slide change: settle instantly instead of fighting the animation.
       baseX.stopAnimation();
       incomingX.stopAnimation();
       settlePanels();
       return;
     }
 
-    const dir =
-      STEP_ORDER.indexOf(step) > STEP_ORDER.indexOf(prev) ? "forward" : "back";
+    const dir = STEP_ORDER.indexOf(step) > STEP_ORDER.indexOf(prev) ? "forward" : "back";
     transitionLock.current = true;
 
     setDisplayStep(prev);
@@ -595,12 +628,9 @@ export default function AddCrops() {
       ]).start(() => settlePanels());
     });
 
-    // Safety net: if the animation callback never fires (e.g. the app is
-    // backgrounded mid-slide), force-settle so content is never left hidden.
     settleTimer.current = setTimeout(settlePanels, 450);
   }, [step]);
 
-  // Stop any running slide if the screen unmounts mid-animation
   useEffect(
     () => () => {
       baseX.stopAnimation();
@@ -646,13 +676,11 @@ export default function AddCrops() {
   };
 
   // ============================================
-  // API 1: LOAD CROP NAMES (flat string array)
+  // API 1: LOAD CROP NAMES
   // ============================================
   const loadCrops = async () => {
     try {
       setLoading(true);
-      // Instantly render the last-known crops while the fresh fetch runs, so
-      // re-visiting this screen never shows an empty list.
       if (cropsCache && cropsCache.length > 0) setCrops(cropsCache);
       const result = await getAllCrops();
       if (result.success && Array.isArray(result.data) && result.data.length > 0) {
@@ -672,7 +700,7 @@ export default function AddCrops() {
   };
 
   // ============================================
-  // API 3: FETCH FULL DETAILS FOR A parameter_id
+  // API 3: FETCH FULL DETAILS
   // ============================================
   const handleSelectStage = useCallback(async (stageItem) => {
     setSelectedStageItem(stageItem);
@@ -716,8 +744,7 @@ export default function AddCrops() {
   }, []);
 
   // ============================================
-  // Pick a variety -> either go to stage list, or
-  // auto-select if there's only one stage
+  // Pick a variety
   // ============================================
   const handleSelectVariety = useCallback((varietyName) => {
     setSelectedVariety(varietyName);
@@ -733,7 +760,7 @@ export default function AddCrops() {
   }, [varietyData, handleSelectStage]);
 
   // ============================================
-  // API 2: FETCH VARIETIES/STAGES FOR A SELECTED CROP
+  // API 2: FETCH VARIETIES/STAGES
   // ============================================
   const handleSelectCrop = useCallback(async (cropName) => {
     setSelectedCropName(cropName);
@@ -776,7 +803,7 @@ export default function AddCrops() {
   }, [handleSelectStage]);
 
   // ============================================
-  // BACK NAVIGATION BETWEEN STEPS
+  // BACK NAVIGATION
   // ============================================
   const handleBack = () => {
     if (step === "crop") {
@@ -810,8 +837,6 @@ export default function AddCrops() {
       );
       const varietyNames = [...new Set(varietyData.map((i) => i.crop_variety_name || "General"))];
 
-      // NOTE: cropDetails is intentionally kept so the details panel stays
-      // fully rendered while it slides out (no blank frame during the back swipe).
       setSelectedStageItem(null);
 
       if (stagesForVariety.length > 1) {
@@ -850,7 +875,7 @@ export default function AddCrops() {
     if (!isDeviceOnline) {
       Alert.alert(
         "Device Offline",
-        isDeviceLoading 
+        isLoading || isWaiting
           ? "Device is still connecting. Please wait for the device to come online before publishing crop settings."
           : "Device is offline. Please make sure the device is connected and try again."
       );
@@ -881,7 +906,6 @@ export default function AddCrops() {
       let success = false;
 
       if (typeof publishSettings === "function") {
-        // publishSettings expects (deviceKey, settings)
         success = await publishSettings(externalKey, cropSettings);
       }
 
@@ -1234,13 +1258,13 @@ export default function AddCrops() {
           </LinearGradient>
         </TouchableOpacity>
 
-        {/* ✅ FIX: Show device status messages - NOTHING while loading */}
+        {/* ✅ FIX: Show status messages - NOTHING while loading */}
         {!isConnected && (
           <Text style={[styles.statusMessage, { color: '#f44336' }]}>
             ⚠️ Device not connected. Please check your connection.
           </Text>
         )}
-        {isConnected && isDeviceOffline && (
+        {isConnected && isOffline && (
           <Text style={[styles.statusMessage, { color: '#f44336' }]}>
             ⚠️ Device is offline. Please wait for device to connect.
           </Text>
@@ -1250,7 +1274,7 @@ export default function AddCrops() {
     );
   };
 
-  // Renders whichever wizard step is requested (used by both slide panels)
+  // Renders whichever wizard step is requested
   const renderStepFor = (s) => {
     if (s === "crop") return renderCropStep();
     if (s === "variety") return renderVarietyStep();
@@ -1259,15 +1283,11 @@ export default function AddCrops() {
     return null;
   };
 
-  // Shared wizard header (back button, title, progress, subtitle, live
-  // device banner). Rendered INSIDE each step's scrollable content so the
-  // whole section rises to the top as the drawer hero collapses — the same
-  // shutter behavior as the rest of the app.
+  // Shared wizard header
   const renderWizardHeader = (s) => {
     const idx = STEP_ORDER.indexOf(s) + 1;
     return (
       <View>
-        {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity
             onPress={handleBack}
@@ -1286,7 +1306,6 @@ export default function AddCrops() {
           <View style={styles.headerRight} />
         </View>
 
-        {/* Progress indicator */}
         <View style={styles.progressWrap}>
           <View style={styles.progressTrack}>
             {STEP_ORDER.map((_, i) => (
@@ -1303,7 +1322,7 @@ export default function AddCrops() {
             <Text style={[styles.stepLabel, { color: theme.colors.textSecondary }]}>
               Step {idx} of 4 · {stepLabels[s]}
             </Text>
-            {/* ✅ FIX: Show status ONLY when not loading */}
+            {/* ✅ FIX: Show status ONLY when not loading - SAME AS LAYOUT */}
             <View style={[styles.statusPill, { backgroundColor: liveStatus ? liveStatus.bg : 'transparent' }]}>
               {liveStatus && (
                 <>
@@ -1326,24 +1345,6 @@ export default function AddCrops() {
 
   const primary = theme.colors.primary;
   const primaryDark = theme.colors.primaryDark;
-
-  // ✅ FIX: Live device status - show NOTHING while loading
-  const liveStatus = (() => {
-    // ✅ When loading, show nothing - return null to hide status
-    if (isDeviceLoading) {
-      return null; // Show nothing while connecting internally
-    }
-    if (isDeviceOnline) {
-      return { label: "Online", color: "#4CAF50", bg: "rgba(76,175,80,0.12)" };
-    }
-    if (isDeviceOffline) {
-      return { label: "Offline", color: "#F44336", bg: "rgba(244,67,54,0.12)" };
-    }
-    if (connectionState === "connecting" || connectionState === "reconnecting" || connectionState === "waiting") {
-      return null; // Show nothing while connecting
-    }
-    return { label: "Not Connected", color: "#9E9E9E", bg: "rgba(158,158,158,0.12)" };
-  })();
 
   const stepTitles = {
     crop: "Select Crop",
@@ -1443,12 +1444,7 @@ export default function AddCrops() {
       ]}
       edges={["bottom"]}
     >
-      {/* Step content with directional slide (no blink) — the wizard header
-          (title, progress, subtitle, device banner) lives inside each step's
-          scrollable via renderWizardHeader, so the whole section rises to the
-          top as the drawer hero collapses. */}
       <View style={styles.stepBody}>
-        {/* Base panel — current step (slides out in the travel direction) */}
         <Animated.View
           style={[
             StyleSheet.absoluteFillObject,
@@ -1458,7 +1454,6 @@ export default function AddCrops() {
           {renderStepFor(displayStep)}
         </Animated.View>
 
-        {/* Incoming panel — next step (slides in from the opposite edge) */}
         {incomingStep && (
           <Animated.View
             style={[
@@ -1470,7 +1465,6 @@ export default function AddCrops() {
           </Animated.View>
         )}
 
-        {/* Loading overlay — keeps current content visible while fetching */}
         {loading && step !== "crop" && step !== "details" && (
           <View
             style={[
@@ -1488,7 +1482,6 @@ export default function AddCrops() {
         )}
       </View>
 
-      {/* ALWAYS RENDER THE MODALS - visibility controlled by `visible` prop */}
       <CustomizeSettingsModal
         visible={showCustomizeModal}
         onClose={() => setShowCustomizeModal(false)}
