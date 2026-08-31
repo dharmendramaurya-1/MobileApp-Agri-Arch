@@ -6,7 +6,7 @@ import { getDrawerStatusFromState } from "@react-navigation/drawer";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useNavigation, usePathname } from "expo-router";
 import { Drawer } from "expo-router/drawer";
-import { Component, useEffect, useRef, useState } from "react";
+import { Component, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Animated,
@@ -51,20 +51,77 @@ function CustomHeader({ navigation, theme }) {
   
   const [cropInfo, setCropInfo] = useState(null);
 
-  // ✅ Get selected device data
+  // ✅ Get MQTT context - DIRECT ACCESS
   const { 
     getSelectedDeviceName,
-    selectedDeviceId,
-    deviceOnlineStatus,
-    getSelectedDeviceOnlineStatus,
+    selectedExternalKey,
     externalKey,
     sensorData,
     connectionState,
+    isConnected,
+    // ✅ Directly access context values
+    deviceOnlineStatus,
+    deviceInitialLoadComplete,
   } = useMqtt();
 
   const selectedDeviceName = getSelectedDeviceName();
-  // ✅ Use deviceOnlineStatus from context (updated by data check interval)
-  const isDeviceOnline = getSelectedDeviceOnlineStatus() && connectionState === 'online';
+  
+  // ✅ Get device key
+  const deviceKey = selectedExternalKey || externalKey;
+
+  // ✅ Directly read from context - SAME as dashboard
+  const isDeviceOnline = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceOnlineStatus[deviceKey] === true;
+  }, [deviceKey, deviceOnlineStatus]);
+
+  const isInitialLoadComplete = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceInitialLoadComplete[deviceKey] === true;
+  }, [deviceKey, deviceInitialLoadComplete]);
+
+  // ✅ Same status derivation as dashboard
+  const isLoading = useMemo(() => {
+    if (!deviceKey) return false;
+    return !isInitialLoadComplete;
+  }, [deviceKey, isInitialLoadComplete]);
+
+  // ✅ Device is offline ONLY if initial load is complete AND not online
+  const isOffline = useMemo(() => {
+    return isInitialLoadComplete && !isDeviceOnline;
+  }, [isInitialLoadComplete, isDeviceOnline]);
+
+  // ✅ Device is in waiting state (connecting, but no status yet)
+  const isWaiting = useMemo(() => {
+    return (!isInitialLoadComplete && !isLoading) || 
+      connectionState === "connecting" || 
+      connectionState === "waiting" || 
+      connectionState === "idle";
+  }, [isInitialLoadComplete, isLoading, connectionState]);
+
+  // ✅ Get status display info - CLEAR STATES
+  const getStatusDisplay = () => {
+    // ✅ When loading (actively fetching), show nothing
+    if (isLoading) {
+      return null;
+    }
+    // ✅ When waiting (initial connection), show nothing
+    if (isWaiting) {
+      return null;
+    }
+    // ✅ When online, show Online
+    if (isDeviceOnline) {
+      return { text: 'Online', color: '#4CAF50' };
+    }
+    // ✅ When offline (confirmed), show Offline
+    if (isOffline) {
+      return { text: 'Offline', color: '#f44336' };
+    }
+    // ✅ Default: show nothing for unknown states
+    return null;
+  };
+
+  const statusDisplay = getStatusDisplay();
 
   // ✅ Fetch crop data when CropId changes
   const cropId = sensorData?.cropId;
@@ -239,7 +296,7 @@ function CustomHeader({ navigation, theme }) {
         >
           <View style={[styles.heroImage, { backgroundColor: "#2E7D32" }]} />
           <View style={styles.heroContent}>
-            {/* ── Device Name + Active Badge + Time ── */}
+            {/* ── Device Name + Time ── */}
             <View style={styles.weatherTimeRow}>
               <View style={styles.weatherInfo}>
                 <View>
@@ -247,22 +304,15 @@ function CustomHeader({ navigation, theme }) {
                 </View>
                 <View>
                   <View style={styles.deviceNameRow}>
-                    <View>
-                      <Text style={styles.weatherTemp} numberOfLines={1}>
+                    <Text style={styles.weatherTemp} numberOfLines={1}>
                       {selectedDeviceName || 'No Device'}
                     </Text>
-                    </View>
-                    {isDeviceOnline && (
-                      <View style={styles.activeBadge}>
-                        <Text style={styles.activeBadgeText}>Active</Text>
-                      </View>
-                    )}
                   </View>
-                 <View>
-                   <Text style={styles.macIdText}>
-                    MAC: {deviceId === 'No Device Selected' ? '—' : '•••••' + deviceId.slice(-5)}
-                  </Text>
-                 </View>
+                  <View>
+                    <Text style={styles.macIdText}>
+                      MAC: {deviceId === 'No Device Selected' ? '—' : '•••••' + deviceId.slice(-5)}
+                    </Text>
+                  </View>
                 </View>
               </View>
               <View style={styles.timeInfo}>
@@ -293,9 +343,17 @@ function CustomHeader({ navigation, theme }) {
                 <Ionicons name="radio-outline" size={14} color="#FFF" />
                 <View>
                   <Text style={styles.cropInfoLabel}>Status</Text>
-                  <Text style={[styles.cropInfoValue, { color: '#FFF' }]}>
-                    {isDeviceOnline ? 'Online' : 'Offline'}
-                  </Text>
+                  {/* ✅ ONLY show Online or Offline - NOTHING while loading/waiting */}
+                  {statusDisplay ? (
+                    <Text style={[styles.cropInfoValue, { color: statusDisplay.color }]}>
+                      {statusDisplay.text}
+                    </Text>
+                  ) : (
+                    // ✅ Show nothing (blank) while loading/waiting - just an empty space
+                    <Text style={[styles.cropInfoValue, { color: 'transparent' }]}>
+                      —
+                    </Text>
+                  )}
                 </View>
               </View>
             </View>
@@ -320,13 +378,68 @@ function CustomDrawerContent({ navigation }) {
   const { logout } = useAuth();
   const { 
     getSelectedDeviceName, 
-    getSelectedDeviceOnlineStatus,
     getSelectedDeviceId,
+    selectedExternalKey,
+    externalKey,
+    // ✅ Directly access context values
+    deviceOnlineStatus,
+    deviceInitialLoadComplete,
+    connectionState,
+    isConnected,
   } = useMqtt();
 
   const selectedDeviceName = getSelectedDeviceName();
-  const isOnline = getSelectedDeviceOnlineStatus();
   const selectedDeviceId = getSelectedDeviceId();
+  
+  // ✅ Get device key
+  const deviceKey = selectedExternalKey || externalKey;
+
+  // ✅ Directly read from context - SAME as dashboard
+  const isDeviceOnline = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceOnlineStatus[deviceKey] === true;
+  }, [deviceKey, deviceOnlineStatus]);
+
+  const isInitialLoadComplete = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceInitialLoadComplete[deviceKey] === true;
+  }, [deviceKey, deviceInitialLoadComplete]);
+
+  // ✅ Same status derivation as dashboard
+  const isLoading = useMemo(() => {
+    if (!deviceKey) return false;
+    return !isInitialLoadComplete;
+  }, [deviceKey, isInitialLoadComplete]);
+
+  // ✅ Device is offline ONLY if initial load is complete AND not online
+  const isOffline = useMemo(() => {
+    return isInitialLoadComplete && !isDeviceOnline;
+  }, [isInitialLoadComplete, isDeviceOnline]);
+
+  // ✅ Device is in waiting state (connecting, but no status yet)
+  const isWaiting = useMemo(() => {
+    return (!isInitialLoadComplete && !isLoading) || 
+      connectionState === "connecting" || 
+      connectionState === "waiting" || 
+      connectionState === "idle";
+  }, [isInitialLoadComplete, isLoading, connectionState]);
+
+  // ✅ Get status display for drawer - ONLY show Active or Offline, NOTHING while loading/waiting
+  const getDrawerStatusDisplay = () => {
+    // ✅ When loading or waiting, show nothing
+    if (isLoading || isWaiting) {
+      return null;
+    }
+    if (isDeviceOnline) {
+      return { text: '🟢 Active', dotColor: '#4CAF50' };
+    }
+    if (isOffline) {
+      return { text: '🔴 Offline', dotColor: '#f44336' };
+    }
+    return null;
+  };
+
+  const drawerStatus = getDrawerStatusDisplay();
 
   const handleLogout = async () => {
     Alert.alert("Logout", "Are you sure you want to logout?", [
@@ -421,18 +534,32 @@ function CustomDrawerContent({ navigation }) {
             </MaskedView>
           </View>
 
-          {/* ✅ Show selected device in drawer */}
+          {/* ✅ Show selected device in drawer with correct status */}
           {selectedDeviceName && (
             <View style={styles.drawerDeviceInfo}>
               <View style={styles.drawerDeviceStatus}>
-                <View style={[styles.drawerStatusDot, { backgroundColor: isOnline ? '#4CAF50' : '#F44336' }]} />
+                {/* ✅ Show status dot ONLY when not loading/waiting */}
+                {!isLoading && !isWaiting && drawerStatus && (
+                  <View style={[styles.drawerStatusDot, { backgroundColor: drawerStatus.dotColor }]} />
+                )}
+                {(isLoading || isWaiting) && (
+                  <View style={[styles.drawerStatusDot, { backgroundColor: '#9E9E9E' }]} />
+                )}
                 <Text style={[styles.drawerDeviceName, { color: theme.colors.text }]}>
                   {selectedDeviceName}
                 </Text>
               </View>
-              <Text style={[styles.drawerDeviceStatusText, { color: theme.colors.textSecondary }]}>
-                {isOnline ? '🟢 Active' : '🔴 Offline'}
-              </Text>
+              {/* ✅ Show status text ONLY when not loading/waiting */}
+              {!isLoading && !isWaiting && drawerStatus && (
+                <Text style={[styles.drawerDeviceStatusText, { color: theme.colors.textSecondary }]}>
+                  {drawerStatus.text}
+                </Text>
+              )}
+              {(isLoading || isWaiting) && (
+                <Text style={[styles.drawerDeviceStatusText, { color: theme.colors.textSecondary }]}>
+                  — 
+                </Text>
+              )}
             </View>
           )}
         </View>
@@ -794,7 +921,6 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   activeBadge: {
-    backgroundColor: "rgba(76,175,80,0.9)",
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 10,

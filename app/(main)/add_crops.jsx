@@ -474,9 +474,16 @@ export default function AddCrops() {
     connectionState,
     isLiveData,
     deviceStatusFlags,
+    getSelectedDeviceOnlineStatus,
   } = useMqtt();
 
   const { isAutoMode, isManualMode } = useSystemMode();
+
+  // ✅ FIX: Get device status properly
+  const deviceStatusValue = getSelectedDeviceOnlineStatus();
+  const isDeviceOnline = deviceStatusValue === true;
+  const isDeviceLoading = deviceStatusValue === 'loading' || deviceStatusValue === 'checking';
+  const isDeviceOffline = deviceStatusValue === false;
 
   // Wizard step: 'crop' -> 'variety' -> 'stage' -> 'details'
   const [step, setStep] = useState("crop");
@@ -606,65 +613,41 @@ export default function AddCrops() {
   // ============================================
   // CHECK MQTT CONNECTION + LOAD CROPS ON MOUNT
   // ============================================
-  // useEffect(() => {
-  //   checkConnection();
-  //   loadCrops();
-  // }, []);
+  useEffect(() => {
+    checkConnection();
+  }, [isConnected]);
 
   useEffect(() => {
-  checkConnection();
-}, [isConnected]);
+    loadCrops();
+  }, []);
 
-useEffect(() => {
-  loadCrops();
-}, []);
+  const checkConnection = async () => {
+    const key = await AsyncStorage.getItem("external_key");
 
-  // const checkConnection = async () => {
-  //   const key = await AsyncStorage.getItem("external_key");
+    if (!key) {
+      setConnectionStatus("no_key");
+      return;
+    }
 
-  //   if (key && isConnected) {
-  //     setConnectionStatus("connected");
-  //   } else if (key) {
-  //     setConnectionStatus("reconnecting");
-  //     try {
-  //       await forceReconnect(key);
-  //       setConnectionStatus("connected");
-  //     } catch (error) {
-  //       setConnectionStatus("failed");
-  //     }
-  //   } else {
-  //     setConnectionStatus("no_key");
-  //   }
-  // };
+    if (isConnected) {
+      setConnectionStatus("connected");
+      return;
+    }
+
+    setConnectionStatus("reconnecting");
+
+    try {
+      await forceReconnect(key);
+      setConnectionStatus("connected");
+    } catch (error) {
+      console.error("MQTT reconnect failed:", error);
+      setConnectionStatus("failed");
+    }
+  };
 
   // ============================================
   // API 1: LOAD CROP NAMES (flat string array)
   // ============================================
-  
-  const checkConnection = async () => {
-  const key = await AsyncStorage.getItem("external_key");
-
-  if (!key) {
-    setConnectionStatus("no_key");
-    return;
-  }
-
-  if (isConnected) {
-    setConnectionStatus("connected");
-    return;
-  }
-
-  setConnectionStatus("reconnecting");
-
-  try {
-    await forceReconnect(key);
-    setConnectionStatus("connected");
-  } catch (error) {
-    console.error("MQTT reconnect failed:", error);
-    setConnectionStatus("failed");
-  }
-};
-
   const loadCrops = async () => {
     try {
       setLoading(true);
@@ -860,6 +843,17 @@ useEffect(() => {
 
     if (!externalKey) {
       Alert.alert("No Device", "No device key found. Please add a device first.");
+      return;
+    }
+
+    // ✅ FIX: Check if device is actually online
+    if (!isDeviceOnline) {
+      Alert.alert(
+        "Device Offline",
+        isDeviceLoading 
+          ? "Device is still connecting. Please wait for the device to come online before publishing crop settings."
+          : "Device is offline. Please make sure the device is connected and try again."
+      );
       return;
     }
 
@@ -1166,20 +1160,22 @@ useEffect(() => {
         {/* Customize + Preview */}
         <View style={styles.actionContainer}>
           <TouchableOpacity
-            style={[styles.actionButton, { shadowColor: "#E65100", opacity: isAutoMode ? 0.5 : 1 }]}
-            onPress={() => !isAutoMode && setShowCustomizeModal(true)}
+            style={[styles.actionButton, { shadowColor: "#E65100", opacity: (isAutoMode || !isDeviceOnline) ? 0.5 : 1 }]}
+            onPress={() => !isAutoMode && isDeviceOnline && setShowCustomizeModal(true)}
             activeOpacity={0.85}
-            disabled={isAutoMode}
+            disabled={isAutoMode || !isDeviceOnline}
             accessibilityRole="button"
           >
             <LinearGradient
-              colors={isAutoMode ? ["#BDBDBD", "#9E9E9E"] : ["#FFB300", "#F57C00"]}
+              colors={isAutoMode || !isDeviceOnline ? ["#BDBDBD", "#9E9E9E"] : ["#FFB300", "#F57C00"]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
               style={styles.actionGradient}
             >
-              <Ionicons name={isAutoMode ? "lock-closed-outline" : "settings-outline"} size={18} color="#fff" />
-              <Text style={styles.actionButtonText}>{isAutoMode ? "Locked" : "Customize"}</Text>
+              <Ionicons name={isAutoMode || !isDeviceOnline ? "lock-closed-outline" : "settings-outline"} size={18} color="#fff" />
+              <Text style={styles.actionButtonText}>
+                {isAutoMode ? "Locked" : !isDeviceOnline ? "Offline" : "Customize"}
+              </Text>
             </LinearGradient>
           </TouchableOpacity>
 
@@ -1205,17 +1201,17 @@ useEffect(() => {
         <TouchableOpacity
           style={[
             styles.publishBtn,
-            (isConnected && isManualMode) ? { shadowColor: primaryDark } : null,
-            isAutoMode && { opacity: 0.5 },
+            (isConnected && isManualMode && isDeviceOnline) ? { shadowColor: primaryDark } : null,
+            (isAutoMode || !isDeviceOnline) && { opacity: 0.5 },
           ]}
           onPress={handlePublish}
-          // disabled={!isConnected || isSubmitting || isAutoMode}
+          disabled={!isConnected || isSubmitting || isAutoMode || !isDeviceOnline}
           activeOpacity={0.85}
           accessibilityRole="button"
         >
           <LinearGradient
             colors={
-              isConnected && isManualMode
+              isConnected && isManualMode && isDeviceOnline
                 ? [primary, primaryDark]
                 : ["#9E9E9E", "#757575"]
             }
@@ -1227,14 +1223,29 @@ useEffect(() => {
               <ActivityIndicator color="#fff" />
             ) : (
               <>
-                <Ionicons name={isAutoMode ? "lock-closed-outline" : "cloud-upload-outline"} size={20} color="#fff" />
+                <Ionicons name={isAutoMode || !isDeviceOnline ? "lock-closed-outline" : "cloud-upload-outline"} size={20} color="#fff" />
                 <Text style={styles.publishButtonText}>
-                  {isAutoMode ? "Switch to Manual to Publish" : isConnected ? "Publish Settings" : "Device Not Connected"}
+                  {isAutoMode ? "Switch to Manual to Publish" : 
+                   !isDeviceOnline ? "Device Offline" :
+                   isConnected ? "Publish Settings" : "Device Not Connected"}
                 </Text>
               </>
             )}
           </LinearGradient>
         </TouchableOpacity>
+
+        {/* ✅ FIX: Show device status messages - NOTHING while loading */}
+        {!isConnected && (
+          <Text style={[styles.statusMessage, { color: '#f44336' }]}>
+            ⚠️ Device not connected. Please check your connection.
+          </Text>
+        )}
+        {isConnected && isDeviceOffline && (
+          <Text style={[styles.statusMessage, { color: '#f44336' }]}>
+            ⚠️ Device is offline. Please wait for device to connect.
+          </Text>
+        )}
+        {/* ✅ REMOVED the "Connecting..." message - show nothing while loading */}
       </ScrollView>
     );
   };
@@ -1292,11 +1303,16 @@ useEffect(() => {
             <Text style={[styles.stepLabel, { color: theme.colors.textSecondary }]}>
               Step {idx} of 4 · {stepLabels[s]}
             </Text>
-            <View style={[styles.statusPill, { backgroundColor: liveStatus.bg }]}>
-              <View style={[styles.statusDot, { backgroundColor: liveStatus.color }]} />
-              <Text style={[styles.statusPillText, { color: liveStatus.color }]}>
-                {liveStatus.label}
-              </Text>
+            {/* ✅ FIX: Show status ONLY when not loading */}
+            <View style={[styles.statusPill, { backgroundColor: liveStatus ? liveStatus.bg : 'transparent' }]}>
+              {liveStatus && (
+                <>
+                  <View style={[styles.statusDot, { backgroundColor: liveStatus.color }]} />
+                  <Text style={[styles.statusPillText, { color: liveStatus.color }]}>
+                    {liveStatus.label}
+                  </Text>
+                </>
+              )}
             </View>
           </View>
         </View>
@@ -1304,14 +1320,6 @@ useEffect(() => {
         <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>
           {stepSubtitles[s]}
         </Text>
-
-        {/* Live device connection status — DevStat Bit 17 online/offline */}
-        {/* <ConnectionStatusBanner
-          connectionState={connectionState}
-          hasReceivedData={hasReceivedData}
-          deviceStatus={deviceStatus}
-          deviceStatusFlags={deviceStatusFlags}
-        /> */}
       </View>
     );
   };
@@ -1319,76 +1327,23 @@ useEffect(() => {
   const primary = theme.colors.primary;
   const primaryDark = theme.colors.primaryDark;
 
-  // ── Live device status (MqttContext — DevStat Bit 17 aware) ──────────────
-  // const liveStatus = (() => {
-  //   // Online ONLY when live data was received this session (isLiveData) and
-  //   // nothing reports offline — cached/restored data never shows Online.
-  //   if (
-  //     isLiveData &&
-  //     (deviceStatusFlags?.online === true || connectionState === "online")
-  //   ) {
-  //     return { label: "Online", color: "#4CAF50", bg: "rgba(76,175,80,0.12)" };
-  //   }
-  //   if (connectionState === "connecting" || connectionState === "waiting") {
-  //     return { label: "Connecting...", color: "#FFC107", bg: "rgba(255,193,7,0.12)" };
-  //   }
-  //   // No live data (or explicit offline) -> Offline directly. No waiting state.
-  //   if (
-  //     connectionState === "offline" ||
-  //     deviceStatusFlags?.online === false ||
-  //     !isLiveData
-  //   ) {
-  //     return { label: "Offline", color: "#F44336", bg: "rgba(244,67,54,0.12)" };
-  //   }
-  //   return { label: "Not Connected", color: "#9E9E9E", bg: "rgba(158,158,158,0.12)" };
-  // })();
-
+  // ✅ FIX: Live device status - show NOTHING while loading
   const liveStatus = (() => {
-  // MQTT/device is online
-  if (
-    isConnected === true ||
-    connectionState === "online" ||
-    deviceStatusFlags?.online === true
-  ) {
-    return {
-      label: "Online",
-      color: "#4CAF50",
-      bg: "rgba(76,175,80,0.12)",
-    };
-  }
-
-  // MQTT is trying to connect
-  if (
-    connectionState === "connecting" ||
-    connectionState === "waiting" ||
-    connectionState === "reconnecting"
-  ) {
-    return {
-      label: "Connecting...",
-      color: "#FFC107",
-      bg: "rgba(255,193,7,0.12)",
-    };
-  }
-
-  // Explicitly offline
-  if (
-    connectionState === "offline" ||
-    connectionState === "disconnected" ||
-    deviceStatusFlags?.online === false
-  ) {
-    return {
-      label: "Offline",
-      color: "#F44336",
-      bg: "rgba(244,67,54,0.12)",
-    };
-  }
-
-  return {
-    label: "Not Connected",
-    color: "#9E9E9E",
-    bg: "rgba(158,158,158,0.12)",
-  };
-})();
+    // ✅ When loading, show nothing - return null to hide status
+    if (isDeviceLoading) {
+      return null; // Show nothing while connecting internally
+    }
+    if (isDeviceOnline) {
+      return { label: "Online", color: "#4CAF50", bg: "rgba(76,175,80,0.12)" };
+    }
+    if (isDeviceOffline) {
+      return { label: "Offline", color: "#F44336", bg: "rgba(244,67,54,0.12)" };
+    }
+    if (connectionState === "connecting" || connectionState === "reconnecting" || connectionState === "waiting") {
+      return null; // Show nothing while connecting
+    }
+    return { label: "Not Connected", color: "#9E9E9E", bg: "rgba(158,158,158,0.12)" };
+  })();
 
   const stepTitles = {
     crop: "Select Crop",
@@ -1882,4 +1837,10 @@ const styles = StyleSheet.create({
   },
   errorTitle: { fontSize: 22, fontWeight: "800", marginTop: 4 },
   errorText: { fontSize: 14, textAlign: "center", marginTop: 8, marginBottom: 28, lineHeight: 20, opacity: 0.9 },
+  statusMessage: {
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 12,
+    fontWeight: '600',
+  },
 });

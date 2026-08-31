@@ -22,7 +22,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import SliderControl from "../../components/SettingsSlider";
-import { useAuth } from "../../src/context/AuthContext"; // ✅ Import useAuth
+import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
 import { useSystemMode } from "../../src/context/SystemModeContext";
 import { useTheme } from "../../src/context/ThemContext";
@@ -137,9 +137,16 @@ export default function AddCrops() {
     hasReceivedData,
     deviceStatus,
     deviceStatusFlags,
+    getSelectedDeviceOnlineStatus,
   } = useMqtt();
-  const { resetSignupFlow } = useAuth(); // ✅ Get resetSignupFlow from AuthContext
+  const { resetSignupFlow } = useAuth();
   const { isAutoMode, isManualMode } = useSystemMode();
+
+  // ✅ FIX: Get device status properly
+  const deviceStatusValue = getSelectedDeviceOnlineStatus();
+  const isDeviceOnline = deviceStatusValue === true;
+  const isDeviceLoading = deviceStatusValue === 'loading' || deviceStatusValue === 'checking';
+  const isDeviceOffline = deviceStatusValue === false;
 
   // Wizard step: 'crop' -> 'variety' -> 'stage' -> 'details'
   const [step, setStep] = useState("crop");
@@ -449,7 +456,6 @@ export default function AddCrops() {
   const handleBack = () => {
     if (step === "crop") {
       router.push("/(auth)/add_device"); // Navigate back to add_device
-      // router.back();
       return;
     }
 
@@ -512,6 +518,17 @@ export default function AddCrops() {
 
     if (!externalKey) {
       Alert.alert("No Device", "No device key found. Please add a device first.");
+      return;
+    }
+
+    // ✅ FIX: Check if device is actually online
+    if (!isDeviceOnline) {
+      Alert.alert(
+        "Device Offline",
+        isDeviceLoading 
+          ? "Device is still connecting. Please wait for the device to come online before publishing crop settings."
+          : "Device is offline. Please make sure the device is connected and try again."
+      );
       return;
     }
 
@@ -855,20 +872,22 @@ export default function AddCrops() {
         {/* Customize + Preview */}
         <View style={styles.actionContainer}>
           <TouchableOpacity
-            style={[styles.actionButton, { shadowColor: "#E65100", opacity: isAutoMode ? 0.5 : 1 }]}
-            onPress={() => !isAutoMode && setShowCustomizeModal(true)}
+            style={[styles.actionButton, { shadowColor: "#E65100", opacity: (isAutoMode || !isDeviceOnline) ? 0.5 : 1 }]}
+            onPress={() => !isAutoMode && isDeviceOnline && setShowCustomizeModal(true)}
             activeOpacity={0.85}
-            disabled={isAutoMode}
+            disabled={isAutoMode || !isDeviceOnline}
             accessibilityRole="button"
           >
             <LinearGradient
-              colors={isAutoMode ? ["#BDBDBD", "#9E9E9E"] : ["#FFB300", "#F57C00"]}
+              colors={isAutoMode || !isDeviceOnline ? ["#BDBDBD", "#9E9E9E"] : ["#FFB300", "#F57C00"]}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
               style={styles.actionGradient}
             >
-              <Ionicons name={isAutoMode ? "lock-closed-outline" : "settings-outline"} size={18} color="#fff" />
-              <Text style={styles.actionButtonText}>{isAutoMode ? "Locked" : "Customize"}</Text>
+              <Ionicons name={isAutoMode || !isDeviceOnline ? "lock-closed-outline" : "settings-outline"} size={18} color="#fff" />
+              <Text style={styles.actionButtonText}>
+                {isAutoMode ? "Locked" : !isDeviceOnline ? "Offline" : "Customize"}
+              </Text>
             </LinearGradient>
           </TouchableOpacity>
 
@@ -894,17 +913,17 @@ export default function AddCrops() {
         <TouchableOpacity
           style={[
             styles.publishBtn,
-            (isConnected && isManualMode) ? { shadowColor: primaryDark } : null,
-            isAutoMode && { opacity: 0.5 },
+            (isConnected && isManualMode && isDeviceOnline) ? { shadowColor: primaryDark } : null,
+            (isAutoMode || !isDeviceOnline) && { opacity: 0.5 },
           ]}
           onPress={handlePublish}
-          disabled={!isConnected || isSubmitting || isAutoMode}
+          disabled={!isConnected || isSubmitting || isAutoMode || !isDeviceOnline}
           activeOpacity={0.85}
           accessibilityRole="button"
         >
           <LinearGradient
             colors={
-              isConnected && isManualMode
+              isConnected && isManualMode && isDeviceOnline
                 ? [primary, primaryDark]
                 : ["#9E9E9E", "#757575"]
             }
@@ -916,14 +935,29 @@ export default function AddCrops() {
               <ActivityIndicator color="#fff" />
             ) : (
               <>
-                <Ionicons name={isAutoMode ? "lock-closed-outline" : "cloud-upload-outline"} size={20} color="#fff" />
+                <Ionicons name={isAutoMode || !isDeviceOnline ? "lock-closed-outline" : "cloud-upload-outline"} size={20} color="#fff" />
                 <Text style={styles.publishButtonText}>
-                  {isAutoMode ? "Switch to Manual to Publish" : isConnected ? "Publish Settings" : "Device Not Connected"}
+                  {isAutoMode ? "Switch to Manual to Publish" : 
+                   !isDeviceOnline ? "Device Offline" :
+                   isConnected ? "Publish Settings" : "Device Not Connected"}
                 </Text>
               </>
             )}
           </LinearGradient>
         </TouchableOpacity>
+
+        {/* ✅ FIX: Show device status message - NOTHING while loading */}
+        {!isConnected && (
+          <Text style={[styles.statusMessage, { color: '#f44336' }]}>
+            ⚠️ Device not connected. Please check your connection.
+          </Text>
+        )}
+        {isConnected && isDeviceOffline && (
+          <Text style={[styles.statusMessage, { color: '#f44336' }]}>
+            ⚠️ Device is offline. Please wait for device to connect.
+          </Text>
+        )}
+        {/* ✅ REMOVED the "Connecting..." message - show nothing while loading */}
       </ScrollView>
     );
   };
@@ -1167,26 +1201,20 @@ export default function AddCrops() {
 
   const currentStepIndex = STEP_ORDER.indexOf(step) + 1;
 
-  // ── Live device status (MqttContext — DevStat Bit 17 aware) ──────────────
+  // ── Live device status - show NOTHING while loading ──
   const liveStatus = (() => {
-    // Online only when data is present and nothing reports offline.
-    if (
-      deviceStatusFlags?.online === true ||
-      connectionState === "online" ||
-      (hasReceivedData && connectionState !== "offline")
-    ) {
+    // ✅ When loading, show nothing - return null to hide status
+    if (isDeviceLoading) {
+      return null; // Show nothing while connecting internally
+    }
+    if (isDeviceOnline) {
       return { label: "Online", color: "#4CAF50", bg: "rgba(76,175,80,0.12)" };
     }
-    if (connectionState === "connecting") {
-      return { label: "Connecting...", color: "#FFC107", bg: "rgba(255,193,7,0.12)" };
-    }
-    // No data (or explicit offline) -> Offline directly. No waiting state.
-    if (
-      connectionState === "offline" ||
-      deviceStatusFlags?.online === false ||
-      !hasReceivedData
-    ) {
+    if (isDeviceOffline) {
       return { label: "Offline", color: "#F44336", bg: "rgba(244,67,54,0.12)" };
+    }
+    if (connectionState === "connecting") {
+      return null; // Show nothing while connecting
     }
     return { label: "Not Connected", color: "#9E9E9E", bg: "rgba(158,158,158,0.12)" };
   })();
@@ -1326,11 +1354,16 @@ export default function AddCrops() {
           <Text style={[styles.stepLabel, { color: theme.colors.textSecondary }]}>
             Step {currentStepIndex} of 4 · {stepLabels[step]}
           </Text>
-          <View style={[styles.statusPill, { backgroundColor: liveStatus.bg }]}>
-            <View style={[styles.statusDot, { backgroundColor: liveStatus.color }]} />
-            <Text style={[styles.statusPillText, { color: liveStatus.color }]}>
-              {liveStatus.label}
-            </Text>
+          {/* ✅ FIX: Show status ONLY when not loading */}
+          <View style={[styles.statusPill, { backgroundColor: liveStatus ? liveStatus.bg : 'transparent' }]}>
+            {liveStatus && (
+              <>
+                <View style={[styles.statusDot, { backgroundColor: liveStatus.color }]} />
+                <Text style={[styles.statusPillText, { color: liveStatus.color }]}>
+                  {liveStatus.label}
+                </Text>
+              </>
+            )}
           </View>
         </View>
       </View>
@@ -1338,14 +1371,6 @@ export default function AddCrops() {
       <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>
         {stepSubtitles[step]}
       </Text>
-
-      {/* Live device connection status — DevStat Bit 17 online/offline */}
-      {/* <ConnectionStatusBanner
-        connectionState={connectionState}
-        hasReceivedData={hasReceivedData}
-        deviceStatus={deviceStatus}
-        deviceStatusFlags={deviceStatusFlags}
-      /> */}
 
       {/* Step content with directional slide (no blink) */}
       <View style={styles.stepBody}>
@@ -1729,4 +1754,10 @@ const styles = StyleSheet.create({
   },
   errorTitle: { fontSize: 22, fontWeight: "800", marginTop: 4 },
   errorText: { fontSize: 14, textAlign: "center", marginTop: 8, marginBottom: 28, lineHeight: 20, opacity: 0.9 },
+  statusMessage: {
+    fontSize: 12,
+    textAlign: 'center',
+    marginTop: 12,
+    fontWeight: '600',
+  },
 });

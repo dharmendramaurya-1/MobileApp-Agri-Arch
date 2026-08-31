@@ -1,6 +1,6 @@
 // components/AlertList.jsx
 import { Ionicons } from '@expo/vector-icons';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -21,8 +21,7 @@ const { width, height } = Dimensions.get('window');
 export const AlertList = ({ onClose }) => {
   const { alerts, markAsRead, clearAlerts, markAllAsRead } = useAlerts();
   const [swipedId, setSwipedId] = useState(null);
-  const [expandedId, setExpandedId] = useState(null);
-  const [showClearAll, setShowClearAll] = useState(false);
+  const [flickerAnim] = useState(new Animated.Value(1));
 
   const colors = {
     background: '#f5f7fa',
@@ -37,16 +36,55 @@ export const AlertList = ({ onClose }) => {
     info: '#3b82f6',
   };
 
-  // ✅ Filter alerts - only from data topic responses
-  const dataAlerts = alerts.filter(alert => 
-    alert.type === 'device' || 
-    alert.type === 'pump' || 
-    alert.type === 'valve' ||
-    alert.type === 'tank' ||
-    alert.type === 'sensor' ||
-    alert.type === 'mode' ||
-    alert.type === 'system'
-  );
+  // Show ALL alerts
+  const dataAlerts = alerts;
+
+  // Debug logs
+  console.log('🔔 AlertList - Total alerts:', alerts.length);
+  if (alerts.length > 0) {
+    console.log('🔔 AlertList - First alert:', alerts[0]);
+  }
+
+  // ── Flicker animation for dimming > 100% ──
+  const startFlicker = () => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(flickerAnim, {
+          toValue: 0.3,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(flickerAnim, {
+          toValue: 1,
+          duration: 200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(flickerAnim, {
+          toValue: 0.5,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.timing(flickerAnim, {
+          toValue: 1,
+          duration: 250,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  };
+
+  // Check for dimming > 100 in alerts
+  useEffect(() => {
+    const hasDimmingOver100 = dataAlerts.some(alert => 
+      alert.title && alert.title.includes('Dimming') && 
+      alert.title.includes('100') && 
+      !alert.read
+    );
+    
+    if (hasDimmingOver100) {
+      startFlicker();
+    }
+  }, [dataAlerts]);
 
   const getSeverityIcon = (severity) => {
     switch (severity) {
@@ -82,14 +120,10 @@ export const AlertList = ({ onClose }) => {
     const days = Math.floor(diff / 86400000);
 
     if (minutes < 1) return 'Just now';
-    if (minutes < 60) return `${minutes}m ago`;
-    if (hours < 24) return `${hours}h ago`;
-    if (days < 7) return `${days}d ago`;
+    if (minutes < 60) return `${minutes}m`;
+    if (hours < 24) return `${hours}h`;
+    if (days < 7) return `${days}d`;
     return new Date(timestamp).toLocaleDateString();
-  };
-
-  const getFullTime = (timestamp) => {
-    return new Date(timestamp).toLocaleString();
   };
 
   const handleDelete = (id) => {
@@ -136,14 +170,14 @@ export const AlertList = ({ onClose }) => {
           return Math.abs(gestureState.dx) > 10;
         },
         onPanResponderMove: (_, gestureState) => {
-          if (gestureState.dx < 0 && gestureState.dx > -150) {
+          if (gestureState.dx < 0 && gestureState.dx > -120) {
             pan.x.setValue(gestureState.dx);
           }
         },
         onPanResponderRelease: (_, gestureState) => {
-          if (gestureState.dx < -80) {
+          if (gestureState.dx < -60) {
             Animated.spring(pan, {
-              toValue: { x: -120, y: 0 },
+              toValue: { x: -90, y: 0 },
               useNativeDriver: false,
               friction: 5,
             }).start();
@@ -166,12 +200,12 @@ export const AlertList = ({ onClose }) => {
       handleDelete(alert.id);
     };
 
-    const toggleExpand = () => {
-      setExpandedId(expandedId === alert.id ? null : alert.id);
-    };
-
-    const isExpanded = expandedId === alert.id;
     const isUnread = !alert.read;
+    
+    // Check if this is a dimming alert > 100%
+    const isDimmingOver100 = alert.title && 
+      alert.title.includes('Dimming') && 
+      alert.title.includes('100');
 
     return (
       <View style={styles.swipeContainer}>
@@ -182,8 +216,8 @@ export const AlertList = ({ onClose }) => {
               transform: [{ translateX: pan.x }],
               backgroundColor: isUnread ? getSeverityBg(alert.severity) : colors.surface,
               borderLeftColor: isUnread ? getSeverityColor(alert.severity) : colors.border,
-              borderLeftWidth: 4,
-              opacity: isUnread ? 1 : 0.6,
+              borderLeftWidth: 3,
+              opacity: isDimmingOver100 ? flickerAnim : (isUnread ? 1 : 0.6),
             },
           ]}
           {...panResponder.panHandlers}
@@ -192,21 +226,23 @@ export const AlertList = ({ onClose }) => {
             style={styles.alertContent}
             onPress={() => {
               if (isUnread) markAsRead(alert.id);
-              toggleExpand();
             }}
             activeOpacity={0.7}
           >
             <View style={styles.alertHeader}>
               <View style={[styles.alertIconContainer, { 
-                backgroundColor: getSeverityColor(alert.severity) + '20' 
+                backgroundColor: getSeverityColor(alert.severity) + '20',
+                width: 28,
+                height: 28,
+                borderRadius: 14,
               }]}>
                 <Ionicons
                   name={getSeverityIcon(alert.severity)}
-                  size={20}
+                  size={16}
                   color={getSeverityColor(alert.severity)}
                 />
               </View>
-              <Text style={[styles.alertTitle, { color: colors.text }]}>
+              <Text style={[styles.alertTitle, { color: colors.text }]} numberOfLines={1}>
                 {alert.title}
               </Text>
               {isUnread && (
@@ -215,7 +251,7 @@ export const AlertList = ({ onClose }) => {
             </View>
             <Text 
               style={[styles.alertMessage, { color: colors.textSecondary }]}
-              numberOfLines={isExpanded ? undefined : 2}
+              numberOfLines={1}
             >
               {alert.message}
             </Text>
@@ -223,18 +259,11 @@ export const AlertList = ({ onClose }) => {
               <Text style={[styles.alertTime, { color: colors.textSecondary }]}>
                 {getTimeDisplay(alert.timestamp)}
               </Text>
-              {isExpanded && (
-                <Text style={[styles.alertFullTime, { color: colors.textSecondary }]}>
-                  {getFullTime(alert.timestamp)}
+              {isDimmingOver100 && (
+                <Text style={[styles.flickerWarning, { color: colors.error }]}>
+                  ⚡ Flickering!
                 </Text>
               )}
-              <TouchableOpacity onPress={toggleExpand} style={styles.expandButton}>
-                <Ionicons 
-                  name={isExpanded ? "chevron-up" : "chevron-down"} 
-                  size={18} 
-                  color={colors.textSecondary} 
-                />
-              </TouchableOpacity>
             </View>
           </TouchableOpacity>
         </Animated.View>
@@ -245,7 +274,7 @@ export const AlertList = ({ onClose }) => {
             style={styles.deleteButton}
             onPress={handleDeleteSwipe}
           >
-            <Ionicons name="trash-outline" size={24} color="#FFF" />
+            <Ionicons name="trash-outline" size={20} color="#FFF" />
             <Text style={styles.deleteButtonText}>Delete</Text>
           </TouchableOpacity>
         )}
@@ -352,46 +381,46 @@ export const AlertList = ({ onClose }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    paddingTop: height * 0.1, // ✅ 10% margin from top
+    paddingTop: height * 0.08, // Reduced from 0.1
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12, // Reduced
     borderBottomWidth: 1,
   },
   backButton: {
     padding: 4,
-    marginRight: 12,
+    marginRight: 10,
   },
   title: {
-    fontSize: 22,
+    fontSize: 20, // Reduced
     fontWeight: '700',
     flex: 1,
   },
   headerActions: {
     flexDirection: 'row',
-    gap: 12,
+    gap: 8,
   },
   actionButton: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
     backgroundColor: 'rgba(0,0,0,0.05)',
   },
   actionText: {
-    fontSize: 12,
+    fontSize: 11, // Reduced
     fontWeight: '600',
   },
   statsBar: {
     flexDirection: 'row',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
+    paddingVertical: 8, // Reduced
+    paddingHorizontal: 16,
     justifyContent: 'space-around',
-    marginHorizontal: 16,
-    marginVertical: 12,
-    borderRadius: 12,
+    marginHorizontal: 12,
+    marginVertical: 8,
+    borderRadius: 10,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
@@ -402,12 +431,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   statNumber: {
-    fontSize: 20,
+    fontSize: 16, // Reduced
     fontWeight: '700',
   },
   statLabel: {
-    fontSize: 10,
-    marginTop: 2,
+    fontSize: 9, // Reduced
+    marginTop: 1,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
@@ -417,115 +446,111 @@ const styles = StyleSheet.create({
   },
   scrollView: {
     flex: 1,
-    paddingHorizontal: 16,
+    paddingHorizontal: 12,
   },
   scrollContent: {
-    paddingBottom: 20,
+    paddingBottom: 16,
   },
   swipeContainer: {
-    marginBottom: 10,
+    marginBottom: 6, // Reduced
     position: 'relative',
   },
   alertItemWrapper: {
-    borderRadius: 12,
+    borderRadius: 8, // Reduced
     overflow: 'hidden',
     backgroundColor: '#fff',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
+    shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowRadius: 2,
+    elevation: 1,
   },
   alertContent: {
-    padding: 16,
+    padding: 10, // Reduced from 16
   },
   alertHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 6,
+    marginBottom: 3, // Reduced
   },
   alertIconContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 8,
   },
   alertTitle: {
-    fontSize: 15,
+    fontSize: 13, // Reduced
     fontWeight: '600',
     flex: 1,
   },
   unreadDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: '#3b82f6',
-    marginLeft: 8,
+    marginLeft: 6,
   },
   alertMessage: {
-    fontSize: 14,
-    marginLeft: 48,
-    marginBottom: 8,
-    lineHeight: 20,
+    fontSize: 12, // Reduced
+    marginLeft: 36, // Reduced
+    marginBottom: 4, // Reduced
+    lineHeight: 16,
   },
   alertFooter: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginLeft: 48,
+    marginLeft: 36, // Reduced
   },
   alertTime: {
-    fontSize: 11,
+    fontSize: 10, // Reduced
     color: '#6b7280',
   },
-  alertFullTime: {
+  flickerWarning: {
     fontSize: 10,
-    color: '#6b7280',
-    marginLeft: 8,
-  },
-  expandButton: {
-    padding: 4,
+    fontWeight: '600',
   },
   deleteButton: {
     position: 'absolute',
     right: 0,
     top: 0,
     bottom: 0,
-    width: 100,
+    width: 80, // Reduced
     backgroundColor: '#ef4444',
     justifyContent: 'center',
     alignItems: 'center',
-    borderTopRightRadius: 12,
-    borderBottomRightRadius: 12,
+    borderTopRightRadius: 8,
+    borderBottomRightRadius: 8,
     flexDirection: 'row',
-    gap: 8,
+    gap: 4,
   },
   deleteButtonText: {
     color: '#FFF',
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: '600',
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 80,
+    paddingVertical: 60,
   },
   emptyText: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '600',
-    marginTop: 16,
+    marginTop: 12,
     color: '#6b7280',
   },
   emptySubtext: {
-    fontSize: 14,
-    marginTop: 8,
+    fontSize: 12,
+    marginTop: 6,
     color: '#6b7280',
     textAlign: 'center',
   },
   bottomSpacer: {
-    height: 20,
+    height: 16,
   },
 });

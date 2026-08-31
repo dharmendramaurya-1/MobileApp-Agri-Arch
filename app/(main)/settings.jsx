@@ -1,6 +1,6 @@
 // app/(main)/config.jsx
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Dimensions,
@@ -154,9 +154,11 @@ export default function ConfigScreen() {
     getSelectedDeviceConfig,
     isReady,
     getSelectedDeviceName,
-    getSelectedDeviceOnlineStatus,
-    selectedDeviceId,
+    // ✅ Directly access context values
+    deviceOnlineStatus,
+    deviceInitialLoadComplete,
   } = useMqtt();
+  
   const deviceConfig = getSelectedDeviceConfig();
 
   const [notifications, setNotifications] = useState(true);
@@ -170,7 +172,52 @@ export default function ConfigScreen() {
 
   // Get selected device info
   const selectedDeviceName = getSelectedDeviceName();
-  const isDeviceOnline = getSelectedDeviceOnlineStatus();
+
+  // ✅ Get device key
+  const deviceKey = externalKey;
+
+  // ✅ SIMPLIFIED: Just check if device is online - stable value
+  const isDeviceOnline = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceOnlineStatus[deviceKey] === true;
+  }, [deviceKey, deviceOnlineStatus]);
+
+  // ✅ SIMPLIFIED: Check if initial load is complete - stable value
+  const isInitialLoadComplete = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceInitialLoadComplete[deviceKey] === true;
+  }, [deviceKey, deviceInitialLoadComplete]);
+
+  // ✅ SIMPLIFIED: Device is offline only if initial load is complete AND not online
+  const isDeviceOffline = useMemo(() => {
+    return isInitialLoadComplete && !isDeviceOnline;
+  }, [isInitialLoadComplete, isDeviceOnline]);
+
+  // ✅ SIMPLIFIED: Get status - ONLY show Online or Offline, NOTHING during loading
+  const getStatusInfo = () => {
+    // If not connected, show nothing
+    if (!isConnected) {
+      return null;
+    }
+    
+    // ✅ When loading or initial load not complete, show NOTHING
+    if (!isInitialLoadComplete) {
+      return null;
+    }
+    
+    // Only show status when we have a definitive state
+    if (isDeviceOnline) {
+      return { text: '● Online', color: '#4CAF50' };
+    }
+    
+    if (isDeviceOffline) {
+      return { text: '● Offline', color: '#f44336' };
+    }
+    
+    return null;
+  };
+
+  const statusInfo = getStatusInfo();
 
   // Load device config from context
   useEffect(() => {
@@ -197,7 +244,6 @@ export default function ConfigScreen() {
     if (!config.sampling_interval || config.sampling_interval <= 0) {
       errors.push("Sampling Interval");
     }
-    // Auto mode is a boolean, it's always set (true/false)
     return errors;
   };
 
@@ -217,10 +263,7 @@ export default function ConfigScreen() {
       const success = await publishConfig(externalKey, configToSend);
       if (success) {
         console.log(`✅ Auto mode ${autoModeValue ? 'ON' : 'OFF'} published — waiting for device response...`);
-        // ✅ Don't update config here — wait for deviceConfig to change via MQTT response
-        // The useEffect on deviceConfig will sync the toggle state
       } else {
-        // Revert on failure
         setConfig((c) => ({ ...c, auto_mode: !autoModeValue }));
       }
     } catch (error) {
@@ -233,7 +276,6 @@ export default function ConfigScreen() {
 
   // ── Publish configuration using MQTT context ──
   const handlePublish = async () => {
-    // Validate all fields are filled
     const errors = validateConfig();
     if (errors.length > 0) {
       setShowError(true);
@@ -257,6 +299,17 @@ export default function ConfigScreen() {
       Alert.alert(
         "No Device ID",
         "External key not found. Please restart the app."
+      );
+      return;
+    }
+
+    // ✅ Check if device is actually online
+    if (!isDeviceOnline) {
+      Alert.alert(
+        "Device Offline",
+        !isInitialLoadComplete
+          ? "Device is still connecting. Please wait for the device to come online before publishing configuration."
+          : "Device is offline. Please make sure the device is connected and try again."
       );
       return;
     }
@@ -327,14 +380,17 @@ export default function ConfigScreen() {
             </Text>
           )}
         </View>
-        <View style={[
-          styles.statusBadge,
-          { backgroundColor: isConnected && isDeviceOnline ? '#4CAF50' : '#f44336' }
-        ]}>
-          <Text style={styles.statusText}>
-            {isConnected && isDeviceOnline ? '● Online' : '● Offline'}
-          </Text>
-        </View>
+        {/* ✅ FIX: Show status ONLY when not loading and we have a definitive state */}
+        {statusInfo && (
+          <View style={[
+            styles.statusBadge,
+            { backgroundColor: statusInfo.color }
+          ]}>
+            <Text style={[styles.statusText, { color: '#fff' }]}>
+              {statusInfo.text}
+            </Text>
+          </View>
+        )}
       </View>
 
       {/* Device Info */}
@@ -350,7 +406,8 @@ export default function ConfigScreen() {
           <Text style={[styles.deviceId, { color: theme.colors.text }]}>
             Device: {externalKey}
           </Text>
-          {isConnected && isDeviceOnline && (
+          {/* ✅ Only show dot when online, nothing when loading/offline */}
+          {isDeviceOnline && isInitialLoadComplete && (
             <View style={[styles.onlineDot, { backgroundColor: '#4CAF50' }]} />
           )}
         </View>
@@ -400,10 +457,10 @@ export default function ConfigScreen() {
             </Text>
             <Text style={[styles.requiredBadge, { color: '#F44336' }]}>*</Text>
           </View>
+          {/* ✅ FIX: Disable switch when device is offline or loading */}
           <Switch
             value={config.auto_mode}
             onValueChange={(v) => {
-              // ✅ Don't update locally — publish and wait for device response
               handleAutoModePublish(v);
             }}
             disabled={publishing || !isConnected || !isDeviceOnline}
@@ -462,14 +519,15 @@ export default function ConfigScreen() {
           )}
         </View>
 
+        {/* ✅ FIX: Publish button - only enabled when device is online and initial load complete */}
         <Pressable
           onPress={handlePublish}
-          disabled={publishing || !isConnected}
+          disabled={publishing || !isConnected || !isDeviceOnline || !isInitialLoadComplete}
           style={[
             styles.publishButton,
             { 
-              backgroundColor: isConnected && isDeviceOnline ? theme.colors.primary : '#888',
-              opacity: publishing || !isConnected || !isDeviceOnline ? 0.6 : 1 
+              backgroundColor: (isConnected && isDeviceOnline && isInitialLoadComplete) ? theme.colors.primary : '#888',
+              opacity: publishing || !isConnected || !isDeviceOnline || !isInitialLoadComplete ? 0.6 : 1 
             },
           ]}
         >
@@ -479,16 +537,13 @@ export default function ConfigScreen() {
           </Text>
         </Pressable>
 
-        {!isConnected && (
+        {/* ✅ FIX: Show warning ONLY when device is definitely offline */}
+        {isConnected && isDeviceOffline && (
           <Text style={[styles.warningText, { color: '#f44336' }]}>
-            ⚠️ MQTT not connected. Please check your connection.
-          </Text>
-        )}
-        {isConnected && !isDeviceOnline && (
-          <Text style={[styles.warningText, { color: '#FF9800' }]}>
             ⚠️ Device is offline. Please wait for device to connect.
           </Text>
         )}
+        {/* ✅ REMOVED: "Not connected" and "Connecting..." warnings - show nothing */}
       </View>
 
       {/* Notifications Section */}
@@ -507,40 +562,36 @@ export default function ConfigScreen() {
           Notifications
         </Text>
         <View style={styles.settingItem}>
-  {/* Left side: Icon + Text */}
-  <View
-    style={{
-      flexDirection: "row",
-      alignItems: "center",
-      flex: 1,
-      gap: 16,
-    }}
-  >
-    <Ionicons
-      name="notifications-outline"
-      size={24}
-      color={theme.colors.primary}
-    />
-
-    <Text
-      style={[
-        styles.settingText,
-        {
-          color: theme.colors.text,
-        },
-      ]}
-    >
-      Push Notifications
-    </Text>
-  </View>
-
-  {/* Right side: Switch */}
-  <Switch
-    value={notifications}
-    onValueChange={setNotifications}
-    {...switchColors}
-  />
-</View>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              flex: 1,
+              gap: 16,
+            }}
+          >
+            <Ionicons
+              name="notifications-outline"
+              size={24}
+              color={theme.colors.primary}
+            />
+            <Text
+              style={[
+                styles.settingText,
+                {
+                  color: theme.colors.text,
+                },
+              ]}
+            >
+              Push Notifications
+            </Text>
+          </View>
+          <Switch
+            value={notifications}
+            onValueChange={setNotifications}
+            {...switchColors}
+          />
+        </View>
       </View>
 
       {/* Appearance Section */}
@@ -558,41 +609,37 @@ export default function ConfigScreen() {
         >
           Appearance
         </Text>
-       <View style={styles.settingItem}>
-  {/* Left side: Icon + Text */}
-  <View
-    style={{
-      flexDirection: "row",
-      alignItems: "center",
-      flex: 1,
-      gap: 16,
-    }}
-  >
-    <Ionicons
-      name="moon-outline"
-      size={24}
-      color={theme.colors.primary}
-    />
-
-    <Text
-      style={[
-        styles.settingText,
-        {
-          color: theme.colors.text,
-        },
-      ]}
-    >
-      Dark Mode
-    </Text>
-  </View>
-
-  {/* Right side: Switch */}
-  <Switch
-    value={isDark}
-    onValueChange={toggleTheme}
-    {...switchColors}
-  />
-</View>
+        <View style={styles.settingItem}>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              flex: 1,
+              gap: 16,
+            }}
+          >
+            <Ionicons
+              name="moon-outline"
+              size={24}
+              color={theme.colors.primary}
+            />
+            <Text
+              style={[
+                styles.settingText,
+                {
+                  color: theme.colors.text,
+                },
+              ]}
+            >
+              Dark Mode
+            </Text>
+          </View>
+          <Switch
+            value={isDark}
+            onValueChange={toggleTheme}
+            {...switchColors}
+          />
+        </View>
       </View>
     </ScrollView>
   );
@@ -618,7 +665,6 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   statusText: {
-    color: '#fff',
     fontSize: 12,
     fontWeight: '600',
   },
@@ -660,11 +706,11 @@ const styles = StyleSheet.create({
     opacity: 0.8,
   },
   settingItem: {
-  flexDirection: "row",
-  alignItems: "center",
-  padding: 16,
-  gap: 16,
-},
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 16,
+    gap: 16,
+  },
   settingLabelContainer: {
     flexDirection: "row",
     alignItems: "center",

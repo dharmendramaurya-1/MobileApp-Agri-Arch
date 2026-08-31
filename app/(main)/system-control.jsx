@@ -2,7 +2,7 @@
 // Device toggles with inline expandable timing inputs + single Submit button.
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Animated,
@@ -289,10 +289,8 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
                     <View style={styles.timingCardLabelRow}>
                       <View style={[styles.timingDot, { backgroundColor: accentColor }]} />
                       <Text style={[styles.timingInputLabel, { color: theme.colors.text }]} numberOfLines={1}>{field.label}</Text>
-                  
                       <Text style={[styles.timingInputPreview, { color: accentColor }]}>{preview}</Text>
                     </View>
-                    {/* <Text style={[styles.timingInputSub, { color: theme.colors.textSecondary }]}>{field.shortLabel}</Text> */}
                     <TextInput
                       style={[styles.timingInput, { color: theme.colors.text, borderColor: `${accentColor}30`, backgroundColor: '#FFF' }]}
                       value={displayVal}
@@ -307,7 +305,7 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
                       placeholder={String(field.defaultVal)}
                       placeholderTextColor="#BDBDBD"
                     />
-                    </View>
+                  </View>
                 );
               })}
             </View>
@@ -338,11 +336,14 @@ export default function SystemControl() {
     publishSettings,
     hasReceivedData,
     connectionState,
+    getDeviceStatusSync,
+    selectedDeviceId,
+    deviceOnlineStatus,
+    deviceInitialLoadComplete,
   } = useMqtt();
 
   const actuatorStatus = getSelectedDeviceActuatorStatus();
   const cropSettings = getSelectedDeviceCropSettings();
-  const isOnline = getSelectedDeviceOnlineStatus();
   const selectedDeviceName = getSelectedDeviceName();
   const { isManualMode, toggleMode } = useSystemMode();
   const { addAlert } = useAlerts();
@@ -350,6 +351,30 @@ export default function SystemControl() {
   const [updating, setUpdating] = useState(null);
   const [toggleTimes, setToggleTimes] = useState({});
   const publishTimerRef = useRef(null);
+
+  // ── ✅ FIX: Directly compute status from context values ──
+  // This avoids the complex ref/state sync issues
+  const isOnline = useMemo(() => {
+    if (!selectedExternalKey) return false;
+    return deviceOnlineStatus[selectedExternalKey] === true;
+  }, [selectedExternalKey, deviceOnlineStatus]);
+
+  const isInitialLoadComplete = useMemo(() => {
+    if (!selectedExternalKey) return false;
+    return deviceInitialLoadComplete[selectedExternalKey] === true;
+  }, [selectedExternalKey, deviceInitialLoadComplete]);
+
+  const isLoading = useMemo(() => {
+    if (!selectedExternalKey) return false;
+    // If initial load is not complete, we're loading
+    return !isInitialLoadComplete;
+  }, [selectedExternalKey, isInitialLoadComplete]);
+
+  const isOffline = useMemo(() => {
+    if (!selectedExternalKey) return false;
+    // If initial load is complete AND we're not online -> offline
+    return isInitialLoadComplete && !isOnline;
+  }, [selectedExternalKey, isInitialLoadComplete, isOnline]);
 
   // ── Timing values — initialized from actuatorStatus, synced on update ──
   const [timingValues, setTimingValues] = useState(() => {
@@ -404,9 +429,9 @@ export default function SystemControl() {
 
   // Connection state
   const isNotConnected = connectionState === "idle" || connectionState === "disconnected" || connectionState === "error";
-  const isLive = isOnline && isConnected && hasReceivedData;
-  // ✅ Only lock for connection issues — NOT for AUTO mode (popup handles that)
-  const deviceLocked = !isOnline || !isConnected || isNotConnected;
+  
+  // ✅ FIX: Only lock for connection issues — NOT for loading or AUTO mode
+  const deviceLocked = !isConnected || isNotConnected || isOffline;
 
   const displayStatus = getDisplayStatus(deviceStatusFlags);
   const rawMode = displayStatus?.mode;
@@ -446,42 +471,57 @@ export default function SystemControl() {
         console.error("Dimming publish error:", err);
       }
     }, 500); // 500ms debounce
-  }, [deviceLocked, selectedExternalKey, cropSettings, publishSettings, addAlert]);
+  }, [deviceLocked, selectedExternalKey, cropSettings, publishSettings, addAlert, isManualMode]);
 
   // ── Mode toggle ──
   const cardBg = theme.colors.card || theme.colors.surface || "#FFFFFF";
   const borderC = theme.colors.border || "#E0E0E0";
   const { scrollY } = useScroll();
+
+  // ✅ FIX: Determine mode pill status - stable
+  const getModePillStyle = useCallback(() => {
+    if (isNotConnected) {
+      return { bg: "#F44336", icon: "wifi-outline", label: "OFFLINE" };
+    }
+    if (isLoading) {
+      // Show neutral state while loading
+      return { bg: "#9E9E9E", icon: "sync-outline", label: "..." };
+    }
+    if (isOnline && modeLabel === "MANUAL") {
+      return { bg: "#4CAF50", icon: "hand-left-outline", label: "MANUAL" };
+    }
+    if (isOnline && modeLabel === "AUTO") {
+      return { bg: "#FF9800", icon: "sync-outline", label: "AUTO" };
+    }
+    return { bg: "#9E9E9E", icon: "wifi-outline", label: "NO DATA" };
+  }, [isNotConnected, isLoading, isOnline, modeLabel]);
+
+  const modePill = getModePillStyle();
+
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <ScrollView
-      contentContainerStyle={{ paddingTop: headerHeight, paddingBottom: 80 }}
-      onScroll={Animated.event(
-        [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-        { useNativeDriver: false }
-      )}
-      scrollEventThrottle={16}
-    >
+        ref={scrollRef}
+        contentContainerStyle={{ paddingTop: headerHeight, paddingBottom: 80 }}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false }
+        )}
+        scrollEventThrottle={16}
+      >
         {/* ── Header ── */}
         <View style={styles.header}>
           <View style={styles.headerLeft}>
             <Text style={[styles.title, { color: theme.colors.text }]}>System Control</Text>
-            {/* <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
-              {selectedDeviceName || "No Device"}
-              {modeLabel ? ` · ${modeLabel}` : ""}
-            </Text> */}
           </View>
+          {/* ✅ FIX: Mode pill shows stable status - no flickering */}
           <TouchableOpacity
-            style={[styles.modePill, {
-              backgroundColor: isNotConnected ? "#F44336" : isLive ? (modeLabel === "MANUAL" ? "#4CAF50" : "#FF9800") : "#9E9E9E",
-            }]}
+            style={[styles.modePill, { backgroundColor: modePill.bg }]}
             onPress={() => router.push("/(main)/settings")}
             activeOpacity={0.7}
           >
-            <Ionicons name={isNotConnected ? "wifi-outline" : modeLabel === "MANUAL" ? "hand-left-outline" : "sync-outline"} size={12} color="#FFF" />
-            <Text style={styles.modePillText}>
-              {isNotConnected ? "OFFLINE" : modeLabel ? modeLabel : "NO DATA"}
-            </Text>
+            <Ionicons name={modePill.icon} size={12} color="#FFF" />
+            <Text style={styles.modePillText}>{modePill.label}</Text>
             <Ionicons name="chevron-forward" size={10} color="#FFF" opacity={0.7} />
           </TouchableOpacity>
         </View>
@@ -493,6 +533,13 @@ export default function SystemControl() {
             <Text style={[styles.bannerText, { color: "#F44336" }]}>Not connected. Check your connection.</Text>
           </View>
         )}
+        {isOffline && !isNotConnected && (
+          <View style={[styles.banner, { backgroundColor: "#FF980012" }]}>
+            <Ionicons name="alert-circle-outline" size={15} color="#FF9800" />
+            <Text style={[styles.bannerText, { color: "#FF9800" }]}>Device offline. Waiting for connection...</Text>
+          </View>
+        )}
+        {/* ✅ REMOVED the "Connecting..." banner - show nothing while loading */}
 
         {/* ── Dimming Card ── */}
         <DimmingCard
@@ -571,19 +618,6 @@ export default function SystemControl() {
             ))}
           </View>
         ))}
-
-        {/* ── Footer ── */}
-        {/* <View style={[styles.footer, { backgroundColor: cardBg, borderColor: borderC }]}>
-          <Text style={[styles.footerText, { color: theme.colors.textSecondary }]}>
-            {selectedDeviceName || "No Device"}
-          </Text>
-          {modeLabel && isLive && (
-            <View style={styles.footerStatus}>
-              <View style={[styles.footerDot, { backgroundColor: modeLabel === "MANUAL" ? "#4CAF50" : "#FF9800" }]} />
-              <Text style={[styles.footerLabel, { color: theme.colors.textSecondary }]}>{modeLabel}</Text>
-            </View>
-          )}
-        </View> */}
       </ScrollView>
     </View>
   );
@@ -591,7 +625,7 @@ export default function SystemControl() {
 
 // ── Styles ──
 const styles = StyleSheet.create({
-  container: { flex: 1, padding:10, paddingBottom:0, },
+  container: { flex: 1, padding: 10, paddingBottom: 0 },
   scrollContent: { padding: 16, paddingTop: Platform.OS === "ios" ? 8 : 16 },
 
   header: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 14 },
@@ -677,7 +711,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     textAlign: "center",
   },
-  timingInputPreview: { fontSize: 10, fontWeight: "700", textAlign: "right",  },
+  timingInputPreview: { fontSize: 10, fontWeight: "700", textAlign: "right" },
 
   // Footer
   footer: {

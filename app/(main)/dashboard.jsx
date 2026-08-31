@@ -4,7 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
 import { router } from "expo-router";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Animated,
@@ -285,7 +285,6 @@ export default function Dashboard() {
   const {
     getSelectedDeviceSensorData,
     getSelectedDeviceActuatorStatus,
-    getSelectedDeviceOnlineStatus,
     getSelectedDeviceName,
     selectedDeviceId,
     selectedExternalKey,
@@ -297,6 +296,9 @@ export default function Dashboard() {
     connectionState,
     externalKey,
     availableDevices,
+    // ✅ Directly access context values - SAME as layout
+    deviceOnlineStatus,
+    deviceInitialLoadComplete,
   } = useMqtt();
 
   const { addAlert } = useAlerts();
@@ -313,6 +315,44 @@ export default function Dashboard() {
   } = useSystemMode();
 
   /* ============================================================
+     ✅ FIX: Directly access context values - SAME as layout
+     This ensures consistent status across all pages
+  ============================================================ */
+  // Get device key once
+  const deviceKey = useMemo(() => selectedExternalKey || externalKey, [selectedExternalKey, externalKey]);
+
+  // ✅ Directly read from context - just like layout
+  const isDeviceOnline = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceOnlineStatus[deviceKey] === true;
+  }, [deviceKey, deviceOnlineStatus]);
+
+  const isInitialLoadComplete = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceInitialLoadComplete[deviceKey] === true;
+  }, [deviceKey, deviceInitialLoadComplete]);
+
+  // ✅ Same status derivation as layout
+  const isLoading = useMemo(() => {
+    if (!deviceKey) return false;
+    // If initial load is not complete, we're loading
+    return !isInitialLoadComplete;
+  }, [deviceKey, isInitialLoadComplete]);
+
+  // ✅ Device is offline ONLY if initial load is complete AND not online
+  const isDeviceOffline = useMemo(() => {
+    return isInitialLoadComplete && !isDeviceOnline;
+  }, [isInitialLoadComplete, isDeviceOnline]);
+
+  // ✅ Device is in waiting state (connecting, but no status yet)
+  const isDeviceWaiting = useMemo(() => {
+    return (!isInitialLoadComplete && !isLoading) || 
+      connectionState === "connecting" || 
+      connectionState === "waiting" || 
+      connectionState === "idle";
+  }, [isInitialLoadComplete, isLoading, connectionState]);
+
+  /* ============================================================
      CACHE STATE
   ============================================================ */
   const [cachedSensorData, setCachedSensorData] = useState(null);
@@ -321,7 +361,6 @@ export default function Dashboard() {
 
   const liveSensorData = getSelectedDeviceSensorData();
   const liveActuatorStatus = getSelectedDeviceActuatorStatus();
-  const isDeviceOnlineFromContext = getSelectedDeviceOnlineStatus();
   const selectedDeviceName = getSelectedDeviceName();
 
   const cacheDeviceKey = selectedDeviceId || selectedExternalKey;
@@ -447,16 +486,6 @@ export default function Dashboard() {
   );
 
   const hasData = hasReceivedData || isLiveData || hasCachedData;
-
-  const isDeviceOnline = isDeviceOnlineFromContext && connectionState === "online";
-  const isDeviceWaiting =
-    connectionState === "connecting" ||
-    connectionState === "waiting" ||
-    connectionState === "idle";
-  const isDeviceOffline =
-    connectionState === "offline" ||
-    connectionState === "disconnected" ||
-    connectionState === "error";
 
   const canPublish =
     isConnected && isDeviceOnline && isManualMode && !isModeSwitching && !isPublishing;
@@ -740,9 +769,10 @@ export default function Dashboard() {
      NORMAL DASHBOARD
   ============================================================ */
 
-    const { scrollY } = useScroll();
+  const { scrollY } = useScroll();
   return (
     <ScrollView
+      ref={scrollRef}
       contentContainerStyle={{ paddingTop: headerHeight, paddingBottom: 80 }}
       onScroll={Animated.event(
         [{ nativeEvent: { contentOffset: { y: scrollY } } }],
@@ -876,20 +906,19 @@ export default function Dashboard() {
         {SENSOR_CONFIG.map((sensor, index) => (
           <React.Fragment key={sensor.id}>
             <SensorTile
-            key={sensor.id}
-            sensor={sensor}
-            sensorData={sensorData}
-            isDeviceOnline={isDeviceOnline}
-            isDeviceWaiting={isDeviceWaiting}
-            theme={theme}
-            onPress={() => {
-              router.push({
-                pathname: "/(main)/sensor/[type]",
-                params: { type: sensor.id },
-              });
-            }}
-          />
-      {index === 7 && <ValveCard actuatorStatus={actuatorStatus} theme={theme} />}
+              sensor={sensor}
+              sensorData={sensorData}
+              isDeviceOnline={isDeviceOnline}
+              isDeviceWaiting={isDeviceWaiting}
+              theme={theme}
+              onPress={() => {
+                router.push({
+                  pathname: "/(main)/sensor/[type]",
+                  params: { type: sensor.id },
+                });
+              }}
+            />
+            {index === 7 && <ValveCard actuatorStatus={actuatorStatus} theme={theme} />}
           </React.Fragment>
         ))}
       </View>
