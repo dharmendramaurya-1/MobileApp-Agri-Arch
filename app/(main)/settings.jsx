@@ -176,48 +176,51 @@ export default function ConfigScreen() {
   // ✅ Get device key
   const deviceKey = externalKey;
 
-  // ✅ SIMPLIFIED: Just check if device is online - stable value
+  // ✅ STABLE - Device online status (only changes when definitive)
   const isDeviceOnline = useMemo(() => {
     if (!deviceKey) return false;
     return deviceOnlineStatus[deviceKey] === true;
   }, [deviceKey, deviceOnlineStatus]);
 
-  // ✅ SIMPLIFIED: Check if initial load is complete - stable value
+  // ✅ STABLE - Initial load complete (only changes once)
   const isInitialLoadComplete = useMemo(() => {
     if (!deviceKey) return false;
     return deviceInitialLoadComplete[deviceKey] === true;
   }, [deviceKey, deviceInitialLoadComplete]);
 
-  // ✅ SIMPLIFIED: Device is offline only if initial load is complete AND not online
+  // ✅ STABLE - Device is offline (only when confirmed)
   const isDeviceOffline = useMemo(() => {
     return isInitialLoadComplete && !isDeviceOnline;
   }, [isInitialLoadComplete, isDeviceOnline]);
 
-  // ✅ SIMPLIFIED: Get status - ONLY show Online or Offline, NOTHING during loading
-  const getStatusInfo = () => {
+  // ✅ STABLE - Combined device status (single source of truth)
+  const deviceStatus = useMemo(() => {
     // If not connected, show nothing
     if (!isConnected) {
-      return null;
+      return { type: 'unknown' };
     }
     
     // ✅ When loading or initial load not complete, show NOTHING
     if (!isInitialLoadComplete) {
-      return null;
+      return { type: 'loading' };
     }
     
-    // Only show status when we have a definitive state
+    // ✅ Only show status when we have a definitive state
     if (isDeviceOnline) {
-      return { text: '● Online', color: '#4CAF50' };
+      return { type: 'online', text: '● Online', color: '#4CAF50' };
     }
     
     if (isDeviceOffline) {
-      return { text: '● Offline', color: '#f44336' };
+      return { type: 'offline', text: '● Offline', color: '#f44336' };
     }
     
-    return null;
-  };
+    return { type: 'unknown' };
+  }, [isConnected, isInitialLoadComplete, isDeviceOnline, isDeviceOffline]);
 
-  const statusInfo = getStatusInfo();
+  // ✅ STABLE - Is device ready for actions (online AND loaded)
+  const isDeviceReady = useMemo(() => {
+    return isConnected && isInitialLoadComplete && isDeviceOnline;
+  }, [isConnected, isInitialLoadComplete, isDeviceOnline]);
 
   // Load device config from context
   useEffect(() => {
@@ -247,7 +250,7 @@ export default function ConfigScreen() {
     return errors;
   };
 
-  // ── Auto-publish on auto_mode toggle — wait for device response ──
+  // ── Auto-publish on auto_mode toggle ──
   const handleAutoModePublish = async (autoModeValue) => {
     if (!isConnected) return;
     if (!externalKey) return;
@@ -262,7 +265,7 @@ export default function ConfigScreen() {
       };
       const success = await publishConfig(externalKey, configToSend);
       if (success) {
-        console.log(`✅ Auto mode ${autoModeValue ? 'ON' : 'OFF'} published — waiting for device response...`);
+        console.log(`✅ Auto mode ${autoModeValue ? 'ON' : 'OFF'} published`);
       } else {
         setConfig((c) => ({ ...c, auto_mode: !autoModeValue }));
       }
@@ -274,7 +277,7 @@ export default function ConfigScreen() {
     }
   };
 
-  // ── Publish configuration using MQTT context ──
+  // ── Publish configuration ──
   const handlePublish = async () => {
     const errors = validateConfig();
     if (errors.length > 0) {
@@ -304,12 +307,12 @@ export default function ConfigScreen() {
     }
 
     // ✅ Check if device is actually online
-    if (!isDeviceOnline) {
+    if (!isDeviceReady) {
       Alert.alert(
-        "Device Offline",
-        !isInitialLoadComplete
-          ? "Device is still connecting. Please wait for the device to come online before publishing configuration."
-          : "Device is offline. Please make sure the device is connected and try again."
+        "Device Not Ready",
+        isDeviceOffline
+          ? "Device is offline. Please make sure the device is connected and try again."
+          : "Device is still connecting. Please wait for the device to come online."
       );
       return;
     }
@@ -357,6 +360,9 @@ export default function ConfigScreen() {
     );
   }
 
+  // ✅ Determine what to show in status badge
+  const showStatusBadge = deviceStatus.type === 'online' || deviceStatus.type === 'offline';
+
   return (
     <ScrollView
       ref={scrollRef}
@@ -380,14 +386,14 @@ export default function ConfigScreen() {
             </Text>
           )}
         </View>
-        {/* ✅ FIX: Show status ONLY when not loading and we have a definitive state */}
-        {statusInfo && (
+        {/* ✅ Show status ONLY when we have a definitive state */}
+        {showStatusBadge && (
           <View style={[
             styles.statusBadge,
-            { backgroundColor: statusInfo.color }
+            { backgroundColor: deviceStatus.color }
           ]}>
             <Text style={[styles.statusText, { color: '#fff' }]}>
-              {statusInfo.text}
+              {deviceStatus.text}
             </Text>
           </View>
         )}
@@ -406,9 +412,12 @@ export default function ConfigScreen() {
           <Text style={[styles.deviceId, { color: theme.colors.text }]}>
             Device: {externalKey}
           </Text>
-          {/* ✅ Only show dot when online, nothing when loading/offline */}
-          {isDeviceOnline && isInitialLoadComplete && (
+          {/* ✅ Only show dot when online */}
+          {deviceStatus.type === 'online' && (
             <View style={[styles.onlineDot, { backgroundColor: '#4CAF50' }]} />
+          )}
+          {deviceStatus.type === 'offline' && (
+            <View style={[styles.onlineDot, { backgroundColor: '#f44336' }]} />
           )}
         </View>
       )}
@@ -457,13 +466,13 @@ export default function ConfigScreen() {
             </Text>
             <Text style={[styles.requiredBadge, { color: '#F44336' }]}>*</Text>
           </View>
-          {/* ✅ FIX: Disable switch when device is offline or loading */}
+          {/* ✅ Use stable isDeviceReady state */}
           <Switch
             value={config.auto_mode}
             onValueChange={(v) => {
               handleAutoModePublish(v);
             }}
-            disabled={publishing || !isConnected || !isDeviceOnline}
+            disabled={publishing || !isDeviceReady}
             {...switchColors}
           />
         </View>
@@ -519,15 +528,15 @@ export default function ConfigScreen() {
           )}
         </View>
 
-        {/* ✅ FIX: Publish button - only enabled when device is online and initial load complete */}
+        {/* ✅ Publish button - uses stable isDeviceReady state */}
         <Pressable
           onPress={handlePublish}
-          disabled={publishing || !isConnected || !isDeviceOnline || !isInitialLoadComplete}
+          disabled={publishing || !isDeviceReady}
           style={[
             styles.publishButton,
             { 
-              backgroundColor: (isConnected && isDeviceOnline && isInitialLoadComplete) ? theme.colors.primary : '#888',
-              opacity: publishing || !isConnected || !isDeviceOnline || !isInitialLoadComplete ? 0.6 : 1 
+              backgroundColor: isDeviceReady ? theme.colors.primary : '#888',
+              opacity: publishing || !isDeviceReady ? 0.6 : 1 
             },
           ]}
         >
@@ -537,13 +546,13 @@ export default function ConfigScreen() {
           </Text>
         </Pressable>
 
-        {/* ✅ FIX: Show warning ONLY when device is definitely offline */}
-        {isConnected && isDeviceOffline && (
+        {/* ✅ Show warning ONLY when device is definitely offline */}
+        {deviceStatus.type === 'offline' && (
           <Text style={[styles.warningText, { color: '#f44336' }]}>
             ⚠️ Device is offline. Please wait for device to connect.
           </Text>
         )}
-        {/* ✅ REMOVED: "Not connected" and "Connecting..." warnings - show nothing */}
+        {/* ✅ Show nothing for connecting/loading states */}
       </View>
 
       {/* Notifications Section */}
