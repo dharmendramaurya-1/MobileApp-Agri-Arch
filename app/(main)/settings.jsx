@@ -158,6 +158,7 @@ export default function ConfigScreen() {
     deviceOnlineStatus,
     deviceInitialLoadComplete,
     connectionState,
+    addAlert,
   } = useMqtt();
   
   const deviceConfig = getSelectedDeviceConfig();
@@ -170,6 +171,7 @@ export default function ConfigScreen() {
   });
   const [publishing, setPublishing] = useState(false);
   const [showError, setShowError] = useState(false);
+  const [publishError, setPublishError] = useState(null);
 
   // ── App resume state tracking ──
   const [isResuming, setIsResuming] = useState(false);
@@ -320,6 +322,21 @@ export default function ConfigScreen() {
     return errors;
   };
 
+  // ── Helper function to handle publish result ──
+  const handlePublishResult = (result, action) => {
+    // Check if result is a boolean (old format) or object (new format)
+    const isSuccess = typeof result === 'boolean' ? result : result?.success;
+    const errorMsg = typeof result === 'object' ? result?.error : null;
+    
+    if (isSuccess) {
+      setPublishError(null);
+      return { success: true };
+    } else {
+      setPublishError(errorMsg || 'Unknown error occurred');
+      return { success: false, error: errorMsg || 'Unknown error occurred' };
+    }
+  };
+
   // ── Auto-publish on auto_mode toggle ──
   const handleAutoModePublish = async (autoModeValue) => {
     if (!isConnected) {
@@ -334,7 +351,6 @@ export default function ConfigScreen() {
       Alert.alert("Missing Values", "Please set Report and Sampling intervals first.");
       return;
     }
-    // ✅ Check if device is ready
     if (!isDeviceReady) {
       Alert.alert(
         "Device Not Ready",
@@ -348,24 +364,44 @@ export default function ConfigScreen() {
     }
 
     setPublishing(true);
+    setPublishError(null);
+    
     try {
       const configToSend = {
         report_interval: config.report_interval,
         sampling_interval: config.sampling_interval,
         auto_mode: autoModeValue,
       };
-      const success = await publishConfig(externalKey, configToSend);
+
+      console.log('📤 Publishing auto mode:', {
+        deviceKey: externalKey,
+        config: configToSend,
+        isConnected,
+        isDeviceReady,
+      });
+
+      const result = await publishConfig(externalKey, configToSend);
+      console.log('📥 Auto mode publish result:', result);
+      
+      const { success, error } = handlePublishResult(result, 'auto mode');
+      
       if (success) {
         console.log(`✅ Auto mode ${autoModeValue ? 'ON' : 'OFF'} published`);
         addAlert?.("success", `Auto mode ${autoModeValue ? 'ON' : 'OFF'}`, "Configuration updated successfully");
       } else {
         setConfig((c) => ({ ...c, auto_mode: !autoModeValue }));
-        Alert.alert("Error", "Failed to publish auto mode. Please try again.");
+        Alert.alert(
+          "Publish Failed", 
+          `Failed to update auto mode: ${error}\nPlease try again.`
+        );
       }
     } catch (error) {
       console.error('Auto mode publish error:', error);
       setConfig((c) => ({ ...c, auto_mode: !autoModeValue }));
-      Alert.alert("Error", "Failed to publish auto mode. Please try again.");
+      Alert.alert(
+        "Error", 
+        error.message || "Failed to publish auto mode. Please try again."
+      );
     } finally {
       setPublishing(false);
     }
@@ -400,7 +436,6 @@ export default function ConfigScreen() {
       return;
     }
 
-    // ✅ Check if device is actually ready
     if (!isDeviceReady) {
       Alert.alert(
         "Device Not Ready",
@@ -417,6 +452,8 @@ export default function ConfigScreen() {
 
     setPublishing(true);
     setShowError(false);
+    setPublishError(null);
+    
     try {
       const configToSend = {
         report_interval: config.report_interval,
@@ -424,7 +461,19 @@ export default function ConfigScreen() {
         auto_mode: config.auto_mode,
       };
 
-      const success = await publishConfig(externalKey, configToSend);
+      console.log('📤 Publishing config:', {
+        deviceKey: externalKey,
+        config: configToSend,
+        isConnected,
+        isDeviceReady,
+        connectionState,
+        isDeviceOnline,
+      });
+
+      const result = await publishConfig(externalKey, configToSend);
+      console.log('📥 Publish result:', result);
+      
+      const { success, error } = handlePublishResult(result, 'config');
 
       if (success) {
         const summary =
@@ -434,12 +483,24 @@ export default function ConfigScreen() {
           `✅ Configuration sent to: ${selectedDeviceName || externalKey}`;
 
         Alert.alert("✅ Configuration Published", summary);
+        setPublishError(null);
       } else {
-        Alert.alert("❌ Publish Failed", "Could not publish configuration. Please try again.");
+        Alert.alert(
+          "❌ Publish Failed", 
+          `${error}\n\nPlease check:\n• Device is online\n• Connection is stable\n• Try again in a moment`
+        );
       }
     } catch (error) {
-      console.error("Publish error:", error);
-      Alert.alert("Error", String(error));
+      console.error("Publish error details:", {
+        message: error.message,
+        stack: error.stack,
+        config: configToSend,
+      });
+      
+      Alert.alert(
+        "❌ Publish Error", 
+        error.message || "An unexpected error occurred. Please try again."
+      );
     } finally {
       setPublishing(false);
     }
@@ -486,7 +547,6 @@ export default function ConfigScreen() {
             </Text>
           )}
         </View>
-        {/* ✅ Show status ONLY when we have a definitive state */}
         {showStatusBadge && (
           <View style={[
             styles.statusBadge,
@@ -512,7 +572,6 @@ export default function ConfigScreen() {
           <Text style={[styles.deviceId, { color: theme.colors.text }]}>
             Device: {externalKey}
           </Text>
-          {/* ✅ Only show dot when online or offline (definitive states) */}
           {showDeviceDot && (
             <View style={[
               styles.onlineDot, 
@@ -566,7 +625,6 @@ export default function ConfigScreen() {
             </Text>
             <Text style={[styles.requiredBadge, { color: '#F44336' }]}>*</Text>
           </View>
-          {/* ✅ Use stable isDeviceReady state */}
           <Switch
             value={config.auto_mode}
             onValueChange={(v) => {
@@ -626,6 +684,11 @@ export default function ConfigScreen() {
               ⚠️ Please set all required fields before publishing.
             </Text>
           )}
+          {publishError && (
+            <Text style={[styles.errorText, { color: '#F44336' }]}>
+              ❌ Error: {publishError}
+            </Text>
+          )}
         </View>
 
         {/* ── Publish Button ── */}
@@ -657,7 +720,6 @@ export default function ConfigScreen() {
             ⏳ App is resuming. Please wait a moment...
           </Text>
         )}
-        {/* ✅ Show NOTHING for connecting/loading states */}
       </View>
 
       {/* ── Notifications Section ── */}
