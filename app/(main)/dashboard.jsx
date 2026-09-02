@@ -252,7 +252,7 @@ function SensorTile({
 
 export default function Dashboard() {
   const insets = useSafeAreaInsets();
-  const { onScroll, headerHeight } = useScroll();
+  const { onScroll, headerHeight, scrollY } = useScroll();
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
 
@@ -638,7 +638,7 @@ export default function Dashboard() {
   const lastUpdatedLabel = formattedTime
     ? isDeviceOnline
       ? ` ${formattedTime}`
-      : `Last known: ${formattedTime}`
+      : ` ${formattedTime}`
     : null;
 
   const sensorCount = SENSOR_CONFIG.length;
@@ -693,12 +693,14 @@ export default function Dashboard() {
             >
               <Ionicons name="hardware-chip-outline" size={56} color={theme.colors.primary} />
             </View>
-            <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
+          <View>
+              <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
               No Devices Connected
             </Text>
             <Text style={[styles.emptyDesc, { color: theme.colors.textSecondary }]}>
               Add your first AgriArch device to start monitoring your farm in real time.
             </Text>
+          </View>
             <TouchableOpacity
               onPress={() => router.push("/(main)/devices")}
               style={[styles.emptyAddBtn, { shadowColor: theme.colors.primaryDark }]}
@@ -730,21 +732,25 @@ export default function Dashboard() {
               <View style={[styles.noDeviceIconWrap, { backgroundColor: "#F4433615" }]}>
                 <Ionicons name="hardware-chip-outline" size={40} color="#F44336" />
               </View>
-              <Text style={[styles.noDeviceTitle, { color: theme.colors.text }]}>
+             <View>
+               <Text style={[styles.noDeviceTitle, { color: theme.colors.text }]}>
                 No Devices Found
               </Text>
               <Text style={[styles.noDeviceDesc, { color: theme.colors.textSecondary }]}>
                 You don't have any devices in your list. Add your first device to start monitoring your farm.
               </Text>
+             </View>
               <View style={styles.noDeviceButtons}>
                 <TouchableOpacity
                   style={[styles.noDeviceCancelBtn, { backgroundColor: `${theme.colors.textSecondary}14` }]}
                   onPress={() => setShowNoDevicePopup(false)}
                   activeOpacity={0.8}
                 >
-                  <Text style={[styles.noDeviceCancelText, { color: theme.colors.text }]}>
+                 <View>
+                   <Text style={[styles.noDeviceCancelText, { color: theme.colors.text }]}>
                     Later
                   </Text>
+                 </View>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.noDeviceYesBtn} onPress={handleNoDevicePopupYes} activeOpacity={0.85}>
                   <LinearGradient
@@ -769,7 +775,6 @@ export default function Dashboard() {
      NORMAL DASHBOARD
   ============================================================ */
 
-  const { scrollY } = useScroll();
   return (
     <ScrollView
       ref={scrollRef}

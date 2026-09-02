@@ -941,6 +941,7 @@ export default function AddCrops() {
       onScroll={onScroll}
       scrollEventThrottle={16}
       keyExtractor={(item, index) => `${item}-${index}`}
+      style={{ flex: 1 }}
       ListHeaderComponent={renderWizardHeader("crop")}
       renderItem={({ item }) => {
         const isSelected = selectedCropName === item;
@@ -1001,6 +1002,7 @@ export default function AddCrops() {
         onScroll={onScroll}
         scrollEventThrottle={16}
         keyExtractor={(item, index) => `${item}-${index}`}
+        style={{ flex: 1 }}
         ListHeaderComponent={renderWizardHeader("variety")}
         renderItem={({ item }) => (
           <TouchableOpacity
@@ -1051,6 +1053,7 @@ export default function AddCrops() {
         onScroll={onScroll}
         scrollEventThrottle={16}
         keyExtractor={(item) => String(item.parameter_id)}
+        style={{ flex: 1 }}
         ListHeaderComponent={renderWizardHeader("stage")}
         renderItem={({ item }) => (
           <TouchableOpacity
@@ -1437,12 +1440,8 @@ export default function AddCrops() {
   // MAIN RENDER
   // ============================================
   return (
-    <SafeAreaView
-      style={[
-        styles.container,
-        { backgroundColor: theme.colors.background },
-      ]}
-      edges={["bottom"]}
+    <View style={[styles.container, { backgroundColor: theme.colors.background }]}
+      
     >
       <View style={styles.stepBody}>
         <Animated.View
@@ -1501,7 +1500,7 @@ export default function AddCrops() {
         customSettings={customSettings}
         theme={theme}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -1509,9 +1508,10 @@ export default function AddCrops() {
 // STYLES
 // ============================================
 const styles = StyleSheet.create({
-  container: { flex: 1 },
-  centerContainer: { justifyContent: "center", alignItems: "center", padding: 20 },
+  container: { flex: 1, backgroundColor:"red", },
+  centerContainer: { justifyContent: "center", alignItems: "center", padding: 20,  },
   header: {
+    
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -1580,7 +1580,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     zIndex: 10,
   },
-  listContent: { paddingHorizontal: 16, paddingBottom: 16 },
+  listContent: { paddingHorizontal: 16 },
   detailsScrollContent: {
     paddingHorizontal: 16,
     paddingBottom: 40,
