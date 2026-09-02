@@ -24,7 +24,7 @@ import {
 
 
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AlertBadge } from "../../components/AlertBadge";
 import { AlertList } from "../../components/AlertList";
 import Logo from "../../components/Logo";
@@ -75,50 +75,12 @@ function CustomHeader({ navigation, theme }) {
     return deviceOnlineStatus[deviceKey] === true;
   }, [deviceKey, deviceOnlineStatus]);
 
-  const isInitialLoadComplete = useMemo(() => {
-    if (!deviceKey) return false;
-    return deviceInitialLoadComplete[deviceKey] === true;
-  }, [deviceKey, deviceInitialLoadComplete]);
-
-  // ✅ Same status derivation as dashboard
-  const isLoading = useMemo(() => {
-    if (!deviceKey) return false;
-    return !isInitialLoadComplete;
-  }, [deviceKey, isInitialLoadComplete]);
-
-  // ✅ Device is offline ONLY if initial load is complete AND not online
-  const isOffline = useMemo(() => {
-    return isInitialLoadComplete && !isDeviceOnline;
-  }, [isInitialLoadComplete, isDeviceOnline]);
-
-  // ✅ Device is in waiting state (connecting, but no status yet)
-  const isWaiting = useMemo(() => {
-    return (!isInitialLoadComplete && !isLoading) || 
-      connectionState === "connecting" || 
-      connectionState === "waiting" || 
-      connectionState === "idle";
-  }, [isInitialLoadComplete, isLoading, connectionState]);
-
-  // ✅ Get status display info - CLEAR STATES
+  // ✅ Get status display - only Online or Offline
   const getStatusDisplay = () => {
-    // ✅ When loading (actively fetching), show nothing
-    if (isLoading) {
-      return null;
-    }
-    // ✅ When waiting (initial connection), show nothing
-    if (isWaiting) {
-      return null;
-    }
-    // ✅ When online, show Online
     if (isDeviceOnline) {
-      return { text: 'Online', color: '#4CAF50' };
+      return { text: 'Online', color: '#f7f8f7' };
     }
-    // ✅ When offline (confirmed), show Offline
-    if (isOffline) {
-      return { text: 'Offline', color: '#f44336' };
-    }
-    // ✅ Default: show nothing for unknown states
-    return null;
+    return { text: 'Offline', color: '#cfcece' };
   };
 
   const statusDisplay = getStatusDisplay();
@@ -294,7 +256,7 @@ function CustomHeader({ navigation, theme }) {
             }
           }}
         >
-          <View style={[styles.heroImage, { backgroundColor: "#2E7D32" }]} />
+          <View style={[styles.heroImage, { backgroundColor: "#2E7D32", }]} />
           <View style={styles.heroContent}>
             {/* ── Device Name + Time ── */}
             <View style={styles.weatherTimeRow}>
@@ -343,17 +305,10 @@ function CustomHeader({ navigation, theme }) {
                 <Ionicons name="radio-outline" size={14} color="#FFF" />
                 <View>
                   <Text style={styles.cropInfoLabel}>Status</Text>
-                  {/* ✅ ONLY show Online or Offline - NOTHING while loading/waiting */}
-                  {statusDisplay ? (
-                    <Text style={[styles.cropInfoValue, { color: statusDisplay.color }]}>
-                      {statusDisplay.text}
-                    </Text>
-                  ) : (
-                    // ✅ Show nothing (blank) while loading/waiting - just an empty space
-                    <Text style={[styles.cropInfoValue, { color: 'transparent' }]}>
-                      —
-                    </Text>
-                  )}
+                  {/* ✅ Show Online / Offline / Connecting */}
+                  <Text style={[styles.cropInfoValue, { color: statusDisplay.color }]}>
+                    {statusDisplay.text}
+                  </Text>
                 </View>
               </View>
             </View>
@@ -400,43 +355,12 @@ function CustomDrawerContent({ navigation }) {
     return deviceOnlineStatus[deviceKey] === true;
   }, [deviceKey, deviceOnlineStatus]);
 
-  const isInitialLoadComplete = useMemo(() => {
-    if (!deviceKey) return false;
-    return deviceInitialLoadComplete[deviceKey] === true;
-  }, [deviceKey, deviceInitialLoadComplete]);
-
-  // ✅ Same status derivation as dashboard
-  const isLoading = useMemo(() => {
-    if (!deviceKey) return false;
-    return !isInitialLoadComplete;
-  }, [deviceKey, isInitialLoadComplete]);
-
-  // ✅ Device is offline ONLY if initial load is complete AND not online
-  const isOffline = useMemo(() => {
-    return isInitialLoadComplete && !isDeviceOnline;
-  }, [isInitialLoadComplete, isDeviceOnline]);
-
-  // ✅ Device is in waiting state (connecting, but no status yet)
-  const isWaiting = useMemo(() => {
-    return (!isInitialLoadComplete && !isLoading) || 
-      connectionState === "connecting" || 
-      connectionState === "waiting" || 
-      connectionState === "idle";
-  }, [isInitialLoadComplete, isLoading, connectionState]);
-
-  // ✅ Get status display for drawer - ONLY show Active or Offline, NOTHING while loading/waiting
+  // ✅ Get status display for drawer - only Online or Offline
   const getDrawerStatusDisplay = () => {
-    // ✅ When loading or waiting, show nothing
-    if (isLoading || isWaiting) {
-      return null;
-    }
     if (isDeviceOnline) {
-      return { text: '🟢 Active', dotColor: '#4CAF50' };
+      return { text: 'Active', color: '#4CAF50', dotColor: '#4CAF50' };
     }
-    if (isOffline) {
-      return { text: '🔴 Offline', dotColor: '#f44336' };
-    }
-    return null;
+    return { text: 'Offline', color: '#F44336', dotColor: '#F44336' };
   };
 
   const drawerStatus = getDrawerStatusDisplay();
@@ -492,118 +416,129 @@ function CustomDrawerContent({ navigation }) {
     },
   ];
 
+  const insets = useSafeAreaInsets();
+  const currentPath = usePathname();
+
   return (
-    <SafeAreaView
+    <View
       style={[
         styles.drawerContainer,
         { backgroundColor: theme.colors.background },
       ]}
     >
+      {/* Top: Safe area + Logo + Close Button row */}
+      <View style={{ paddingTop: insets.top }} />
+
+      <View style={styles.drawerCloseBar}>
+        <View style={styles.drawerLogoContainer}>
+          <View
+            style={[
+              styles.drawerLogoCircle,
+              { backgroundColor: `${theme.colors.primary}18` },
+            ]}
+          >
+            <Logo showText={false} size={44} />
+          </View>
+
+          <MaskedView
+            maskElement={<Text style={styles.drawerBrandText}>AgriArch</Text>}
+          >
+            <LinearGradient
+              colors={["#8BC34A", "#1B5E20"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+            >
+              <Text style={[styles.drawerBrandText, { opacity: 0 }]}>
+                AgriArch
+              </Text>
+            </LinearGradient>
+          </MaskedView>
+        </View>
+
+        <TouchableOpacity
+          style={[styles.drawerCloseButton, { backgroundColor: `${theme.colors.textSecondary}18` }]}
+          onPress={() => navigation.closeDrawer()}
+          activeOpacity={0.7}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons name="close" size={18} color={theme.colors.textSecondary || '#666'} />
+        </TouchableOpacity>
+      </View>
+
+      <View style={[styles.drawerHeaderDivider, { backgroundColor: `${theme.colors.textSecondary}20` }]} />
+
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        <View
-          style={[
-            styles.drawerHeader,
-            { borderBottomColor: theme.colors.border },
-          ]}
-        >
-          <View style={styles.drawerLogoContainer}>
-            <View
-              style={[
-                styles.drawerLogoCircle,
-                { backgroundColor: `${theme.colors.primary}90` },
-              ]}
-            >
-              <Logo showText={false} size={60} />
+        {/* Selected device info */}
+        {selectedDeviceName && (
+          <View style={[styles.drawerDeviceInfo, { backgroundColor: `${theme.colors.textSecondary}0A`, marginHorizontal: 4 }]}>
+            <View style={styles.drawerDeviceStatus}>
+              <View style={[styles.drawerStatusDot, { backgroundColor: drawerStatus.dotColor }]} />
+              <Text style={[styles.drawerDeviceName, { color: theme.colors.text }]}>
+                {selectedDeviceName}
+              </Text>
             </View>
-
-            <MaskedView
-              maskElement={<Text style={styles.drawerBrandText}>AgriArch</Text>}
-            >
-              <LinearGradient
-                colors={["#8BC34A", "#1B5E20"]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-              >
-                <Text style={[styles.drawerBrandText, { opacity: 0 }]}>
-                  AgriArch
-                </Text>
-              </LinearGradient>
-            </MaskedView>
+            <Text style={[styles.drawerDeviceStatusText, { color: drawerStatus.color }]}>
+              {drawerStatus.text}
+            </Text>
           </View>
-
-          {/* ✅ Show selected device in drawer with correct status */}
-          {selectedDeviceName && (
-            <View style={styles.drawerDeviceInfo}>
-              <View style={styles.drawerDeviceStatus}>
-                {/* ✅ Show status dot ONLY when not loading/waiting */}
-                {!isLoading && !isWaiting && drawerStatus && (
-                  <View style={[styles.drawerStatusDot, { backgroundColor: drawerStatus.dotColor }]} />
-                )}
-                {(isLoading || isWaiting) && (
-                  <View style={[styles.drawerStatusDot, { backgroundColor: '#9E9E9E' }]} />
-                )}
-                <Text style={[styles.drawerDeviceName, { color: theme.colors.text }]}>
-                  {selectedDeviceName}
-                </Text>
-              </View>
-              {/* ✅ Show status text ONLY when not loading/waiting */}
-              {!isLoading && !isWaiting && drawerStatus && (
-                <Text style={[styles.drawerDeviceStatusText, { color: theme.colors.textSecondary }]}>
-                  {drawerStatus.text}
-                </Text>
-              )}
-              {(isLoading || isWaiting) && (
-                <Text style={[styles.drawerDeviceStatusText, { color: theme.colors.textSecondary }]}>
-                  — 
-                </Text>
-              )}
-            </View>
-          )}
-        </View>
+        )}
 
         <View style={styles.drawerMenu}>
           {menuItems.map((section, idx) => (
-            <View key={idx}>
+            <View key={idx} style={{ marginTop: idx > 0 ? 8 : 0 }}>
               <Text
                 style={[
                   styles.drawerSectionTitle,
-                  { color: theme.colors.textSecondary },
+                  { color: theme.colors.textSecondary || '#999' },
                 ]}
               >
                 {section.section}
               </Text>
-              {section.items.map((item, itemIdx) => (
-                <TouchableOpacity
-                  key={itemIdx}
-                  style={styles.drawerItem}
-                  onPress={() => navigateTo(item.route)}
-                  activeOpacity={0.7}
-                >
-                  <View
-                    style={[
-                      styles.drawerIconWrapper,
-                      { backgroundColor: `${theme.colors.primary}15` },
-                    ]}
+              {section.items.map((item, itemIdx) => {
+                const isActive = currentPath?.includes(item.route.replace('/(main)/', ''));
+                return (
+                  <TouchableOpacity
+                    key={itemIdx}
+                    style={[styles.drawerItem, isActive && { backgroundColor: `${theme.colors.primary}12` }]}
+                    onPress={() => navigateTo(item.route)}
+                    activeOpacity={0.65}
                   >
-                    <Ionicons
-                      name={item.icon}
-                      size={16}
-                      color={theme.colors.primary}
-                    />
-                  </View>
-                  <Text
-                    style={[
-                      styles.drawerItemText,
-                      { color: theme.colors.text },
-                    ]}
-                  >
-                    {item.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+                    <View
+                      style={[
+                        styles.drawerIconWrapper,
+                        {
+                          backgroundColor: isActive
+                            ? `${theme.colors.primary}20`
+                            : `${theme.colors.textSecondary || '#999'}0D`,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name={item.icon}
+                        size={16}
+                        color={isActive ? theme.colors.primary : (theme.colors.textSecondary || '#999')}
+                      />
+                    </View>
+                    <Text
+                      style={[
+                        styles.drawerItemText,
+                        {
+                          color: isActive ? theme.colors.primary : theme.colors.text,
+                          fontWeight: isActive ? '600' : '500',
+                        },
+                      ]}
+                    >
+                      {item.name}
+                    </Text>
+                    {isActive && (
+                      <View style={[styles.drawerActiveIndicator, { backgroundColor: theme.colors.primary }]} />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           ))}
         </View>
@@ -612,50 +547,45 @@ function CustomDrawerContent({ navigation }) {
           <View
             style={[
               styles.footerDivider,
-              { backgroundColor: theme.colors.border },
+              { backgroundColor: `${theme.colors.textSecondary || '#999'}15` },
             ]}
           />
           <TouchableOpacity
             style={styles.drawerItem}
             onPress={() => navigateTo("/(main)/settings")}
-            activeOpacity={0.7}
+            activeOpacity={0.65}
           >
             <View
               style={[
                 styles.drawerIconWrapper,
-                { backgroundColor: `${theme.colors.primary}15` },
+                { backgroundColor: `${theme.colors.textSecondary || '#999'}0D` },
               ]}
             >
               <Ionicons
                 name="settings-outline"
                 size={16}
-                color={theme.colors.primary}
+                color={theme.colors.textSecondary || '#999'}
               />
             </View>
-            <Text style={[styles.drawerItemText, { color: theme.colors.text }]}>
-              Settings
-            </Text>
+            <Text style={[styles.drawerItemText, { color: theme.colors.text }]}>Settings</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={styles.logoutButton}
+            style={[styles.drawerItem, { marginTop: 4 }]}
             onPress={handleLogout}
-            activeOpacity={0.7}
+            activeOpacity={0.65}
           >
             <View
-              style={[
-                styles.drawerIconWrapper,
-                { backgroundColor: "#F4433615" },
-              ]}
+              style={[styles.drawerIconWrapper, { backgroundColor: '#F4433612' }]}
             >
-              <Ionicons name="log-out-outline" size={20} color="#F44336" />
+              <Ionicons name="log-out-outline" size={16} color="#F44336" />
             </View>
             <Text style={styles.logoutText}>Logout</Text>
           </TouchableOpacity>
         </View>
 
-        <View style={{ height: height * 0.06 }} />
+        <View style={{ height: 20 }} />
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -797,63 +727,73 @@ function MainDrawer({ theme }) {
 
   return (
     <View style={{ flex: 1 }}>
-    <Drawer
-        screenOptions={{
-          drawerPosition: "left",
-          drawerStyle: {
-            width: width * 0.7,
-            maxWidth: 280,
-            backgroundColor: theme.colors.background,
-          },
-          headerShown: true,
-          headerTransparent: true,
-          header: ({ navigation }) => (
-            <ErrorBoundary>
-              <CustomHeader
-                navigation={navigation}
-                theme={theme}
-              />
-            </ErrorBoundary>
-          ),
-        }}
-        drawerContent={(props) => <CustomDrawerContent {...props} />}
-      >
-        {/* ── MAIN SCREENS ── */}
-        <Drawer.Screen name="dashboard" options={{ title: "Dashboard" }} />
-        <Drawer.Screen name="devices" options={{ title: "Devices" }} />
-        <Drawer.Screen name="system-control" options={{ title: "System Control" }} />
-        <Drawer.Screen name="add_crops" options={{ title: "Add Crops" }} />
-        <Drawer.Screen name="profile" options={{ title: "Profile" }} />
-        
-        {/* ── SETTINGS ── */}
-        <Drawer.Screen name="settings" options={{ title: "Settings" }} />
-        
-        {/* ── HISTORY ── */}
-        <Drawer.Screen name="pump-history" options={{ title: "Pump History" }} />
-        <Drawer.Screen name="sensor-history" options={{ title: "Sensor History" }} />
-        
-        {/* ── SENSOR TABS (all sensors overview) ── */}
-        <Drawer.Screen name="sensor-tabs" options={{ title: "Environmental Sensors" }} />
-        
-        {/* ── ENVIRONMENT SENSORS ── */}
-        <Drawer.Screen name="ambient-temperature" options={{ title: "Ambient Temperature" }} />
-        <Drawer.Screen name="ambient-humidity" options={{ title: "Ambient Humidity" }} />
-        <Drawer.Screen name="light-level" options={{ title: "Light Level" }} />
-        <Drawer.Screen name="co2" options={{ title: "CO₂ Level" }} />
-        
-        {/* ── WATER & SOIL SENSORS ── */}
-        <Drawer.Screen name="water-temperature" options={{ title: "Water Temperature" }} />
-        <Drawer.Screen name="water-level" options={{ title: "Water Level" }} />
-        <Drawer.Screen name="ec-value" options={{ title: "EC Value" }} />
-        <Drawer.Screen name="ph-level" options={{ title: "pH Level" }} />
-        
-        {/* ── INDIVIDUAL SENSOR DETAILS ── */}
-        <Drawer.Screen name="sensor/[id]" options={{ title: "Sensor Details" }} />
-        <Drawer.Screen name="sensor/ambient-temperature" options={{ title: "Temperature Details" }} />
-        <Drawer.Screen name="sensor/ambient-humidity" options={{ title: "Humidity Details" }} />
-        <Drawer.Screen name="sensor/ph-level" options={{ title: "pH Details" }} />
-        <Drawer.Screen name="sensor/ec-value" options={{ title: "EC Details" }} />
-      </Drawer>
+      <View style={{ flex: 1, zIndex: 1 }}>
+        <Drawer
+          screenOptions={{
+            drawerPosition: "left",
+            drawerStyle: {
+              width: width * 0.72,
+              maxWidth: 290,
+              backgroundColor: theme.colors.background,
+              borderTopRightRadius: 20,
+              borderBottomRightRadius: 20,
+              shadowColor: '#000',
+              shadowOffset: { width: 2, height: 0 },
+              shadowOpacity: 0.25,
+              shadowRadius: 12,
+              elevation: 30,
+            },
+            overlayColor: 'rgba(0,0,0,0.5)',
+            headerShown: true,
+            headerTransparent: true,
+            header: ({ navigation }) => (
+              <ErrorBoundary>
+                <CustomHeader
+                  navigation={navigation}
+                  theme={theme}
+                />
+              </ErrorBoundary>
+            ),
+          }}
+          drawerContent={(props) => <CustomDrawerContent {...props} />}
+        >
+          {/* ── MAIN SCREENS ── */}
+          <Drawer.Screen name="dashboard" options={{ title: "Dashboard" }} />
+          <Drawer.Screen name="devices" options={{ title: "Devices" }} />
+          <Drawer.Screen name="system-control" options={{ title: "System Control" }} />
+          <Drawer.Screen name="add_crops" options={{ title: "Add Crops" }} />
+          <Drawer.Screen name="profile" options={{ title: "Profile" }} />
+          
+          {/* ── SETTINGS ── */}
+          <Drawer.Screen name="settings" options={{ title: "Settings" }} />
+          
+          {/* ── HISTORY ── */}
+          <Drawer.Screen name="pump-history" options={{ title: "Pump History" }} />
+          <Drawer.Screen name="sensor-history" options={{ title: "Sensor History" }} />
+          
+          {/* ── SENSOR TABS (all sensors overview) ── */}
+          <Drawer.Screen name="sensor-tabs" options={{ title: "Environmental Sensors" }} />
+          
+          {/* ── ENVIRONMENT SENSORS ── */}
+          <Drawer.Screen name="ambient-temperature" options={{ title: "Ambient Temperature" }} />
+          <Drawer.Screen name="ambient-humidity" options={{ title: "Ambient Humidity" }} />
+          <Drawer.Screen name="light-level" options={{ title: "Light Level" }} />
+          <Drawer.Screen name="co2" options={{ title: "CO₂ Level" }} />
+          
+          {/* ── WATER & SOIL SENSORS ── */}
+          <Drawer.Screen name="water-temperature" options={{ title: "Water Temperature" }} />
+          <Drawer.Screen name="water-level" options={{ title: "Water Level" }} />
+          <Drawer.Screen name="ec-value" options={{ title: "EC Value" }} />
+          <Drawer.Screen name="ph-level" options={{ title: "pH Level" }} />
+          
+          {/* ── INDIVIDUAL SENSOR DETAILS ── */}
+          <Drawer.Screen name="sensor/[id]" options={{ title: "Sensor Details" }} />
+          <Drawer.Screen name="sensor/ambient-temperature" options={{ title: "Temperature Details" }} />
+          <Drawer.Screen name="sensor/ambient-humidity" options={{ title: "Humidity Details" }} />
+          <Drawer.Screen name="sensor/ph-level" options={{ title: "pH Details" }} />
+          <Drawer.Screen name="sensor/ec-value" options={{ title: "EC Details" }} />
+        </Drawer>
+      </View>
       <DrawerBottomBar theme={theme} />
     </View>
   );
@@ -889,8 +829,8 @@ const styles = StyleSheet.create({
     position: "relative",
     width: "100%",
     zIndex: 1,
-    borderBottomLeftRadius: 26,
-    borderBottomRightRadius: 26,
+    borderBottomLeftRadius: 27,
+    borderBottomRightRadius: 27,
     shadowColor: "#1B5E20",
     shadowOffset: { width: 0, height: 5 },
     shadowOpacity: 0.28,
@@ -901,10 +841,11 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
     position: "absolute",
-    borderBottomLeftRadius: 26,
-    borderBottomRightRadius: 26,
+    borderBottomLeftRadius: 27,
+    borderBottomRightRadius: 27,
+    // paddingBottom: 30,
   },
-  heroContent: { padding: 12, paddingTop: 8, paddingBottom: 12 },
+  heroContent: { padding: 12, paddingTop: 8, paddingBottom: 12, },
   weatherTimeRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -988,40 +929,55 @@ const styles = StyleSheet.create({
 
   // ── Drawer styles ──
   drawerContainer: { flex: 1 },
-  scrollContent: { flexGrow: 1 },
-  drawerHeader: {
-    paddingTop: 32,
-    paddingBottom: 16,
+  scrollContent: { flexGrow: 1, paddingHorizontal: 12, paddingBottom: 20 },
+  drawerCloseBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    borderBottomWidth: 1,
+    paddingVertical: 8,
+  },
+  drawerCloseButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  drawerHeaderDivider: {
+    height: 1,
+    marginHorizontal: 16,
+  },
+  drawerHeader: {
+    paddingTop: 8,
+    paddingBottom: 12,
+    paddingHorizontal: 4,
     marginBottom: 4,
   },
   drawerLogoContainer: {
     flexDirection: "row",
     alignItems: "center",
-    marginLeft: 8,
-    gap: 18,
+    gap: 12,
     flexWrap: "nowrap",
   },
   drawerLogoCircle: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     justifyContent: "center",
     alignItems: "center",
     overflow: "hidden",
   },
   drawerBrandText: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: "800",
     letterSpacing: 0.5,
   },
   drawerDeviceInfo: {
     marginTop: 12,
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.05)',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderRadius: 12,
   },
   drawerDeviceStatus: {
     flexDirection: "row",
@@ -1029,8 +985,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   drawerStatusDot: {
-    width: 10,
-    height: 10,
+    width: 9,
+    height: 9,
     borderRadius: 5,
   },
   drawerDeviceName: {
@@ -1039,44 +995,51 @@ const styles = StyleSheet.create({
   },
   drawerDeviceStatusText: {
     fontSize: 12,
-    marginTop: 2,
-    marginLeft: 18,
+    marginTop: 3,
+    marginLeft: 17,
   },
-  drawerMenu: { paddingHorizontal: 12, paddingBottom: 16 },
+  drawerMenu: { paddingHorizontal: 12, paddingBottom: 12 },
   drawerSectionTitle: {
     fontSize: 10,
-    fontWeight: "600",
-    marginTop: 12,
-    marginBottom: 6,
+    fontWeight: "700",
+    marginTop: 16,
+    marginBottom: 8,
     marginLeft: 8,
-    letterSpacing: 0.5,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
   drawerItem: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    borderRadius: 8,
-    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    gap: 12,
+    marginBottom: 2,
   },
   drawerIconWrapper: {
-    width: 30,
-    height: 30,
-    borderRadius: 8,
+    width: 32,
+    height: 32,
+    borderRadius: 10,
     justifyContent: "center",
     alignItems: "center",
   },
-  drawerItemText: { fontSize: 13, fontWeight: "500" },
-  footerSection: { marginTop: 20, paddingHorizontal: 12 },
-  footerDivider: { height: 1, marginVertical: 12 },
+  drawerItemText: { fontSize: 13, fontWeight: "500", flex: 1 },
+  drawerActiveIndicator: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginLeft: 'auto',
+  },
+  footerSection: { marginTop: 12, paddingHorizontal: 12 },
+  footerDivider: { height: 1, marginVertical: 8 },
   logoutButton: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    borderRadius: 8,
-    gap: 10,
-    marginBottom: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    gap: 12,
   },
   logoutText: { fontSize: 13, fontWeight: "600", color: "#F44336" },
   // ── Bottom Tab Bar ──
@@ -1097,7 +1060,8 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: -3 },
     shadowOpacity: 0.08,
     shadowRadius: 10,
-    elevation: 15,
+    elevation: 5,
+    zIndex: 1,
   },
   bottomTabItem: {
     flex: 1,

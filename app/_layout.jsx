@@ -9,6 +9,7 @@ import { AlertProvider } from "../src/context/AlertContext"; // ✅ UNCOMMENT YE
 import { AuthProvider, useAuth } from "../src/context/AuthContext";
 import { HistoricalDataProvider } from "../src/context/HistoricalDataContext";
 import { MqttProvider } from "../src/context/MqttContext";
+import { NetworkProvider } from "../src/context/NetworkContext"; // ✅ Import
 import { SystemModeProvider } from "../src/context/SystemModeContext";
 import { ThemeProvider, useTheme } from "../src/context/ThemContext";
 
@@ -156,13 +157,15 @@ function RootNav() {
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
+
       <SafeAreaProvider>
         <ThemeProvider>
+                      <NetworkProvider>  {/* ✅ Wrap at the highest level */}
+
           <AuthProvider>
             <MqttProvider>
               <SystemModeProvider>
                 
-                {/* ✅ AlertProvider KO UNCOMMENT KARO */}
                 <AlertProvider>
                   <HistoricalDataProvider>
                     <RootNav />
@@ -172,8 +175,11 @@ export default function RootLayout() {
               </SystemModeProvider>
             </MqttProvider>
           </AuthProvider>
+                      </NetworkProvider>
+
         </ThemeProvider>
       </SafeAreaProvider>
+
     </GestureHandlerRootView>
   );
 }

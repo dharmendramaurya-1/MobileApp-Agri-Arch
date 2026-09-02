@@ -14,86 +14,29 @@ let callbackIds = 0;
 let isAppInBackground = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
-let isReconnectingOnForeground = false;
 let isMqttPersistent = false;
 
 // ── Track App State ──────────────────────────────────────────────────────────
 if (typeof AppState !== 'undefined') {
   AppState.addEventListener('change', (nextAppState) => {
-    const wasBackground = isAppInBackground;
     isAppInBackground = nextAppState === 'background' || nextAppState === 'inactive';
     console.log(`📱 App state: ${nextAppState}, isBackground: ${isAppInBackground}`);
 
-    // ✅ When app comes back to foreground, ALWAYS force a fresh reconnect.
-    // IMPORTANT: client.connected cannot be trusted here. When the app is
-    // backgrounded, the JS thread is suspended and the OS can silently kill
-    // the underlying socket without ever firing a 'close'/'offline' event.
-    // That leaves client.connected == true even though the connection is
-    // actually dead ("zombie" connection). So we don't branch on it — we
-    // just tear down and reconnect every time we come to foreground.
-    if (wasBackground && !isAppInBackground) {
-      console.log('🔄 App came to FOREGROUND - forcing fresh MQTT connection');
-      reconnectAttempts = 0;
-      setTimeout(() => {
-        forceReconnectOnForeground();
-      }, 300);
+    // ✅ MQTT will auto-reconnect if needed via reconnectPeriod: 3000
+    // No manual reconnect needed on foreground
+    if (!isAppInBackground) {
+      console.log('🔄 App came to FOREGROUND');
+      if (client && client.connected) {
+        console.log('✅ MQTT connection is healthy');
+        connectionCallbacks.forEach(cb => {
+          try { cb(true); } catch (e) {}
+        });
+      }
     }
   });
 }
 
-// ── Force reconnect on foreground ──
-const forceReconnectOnForeground = async () => {
-  if (isReconnectingOnForeground) {
-    console.log('⏳ Already reconnecting on foreground, skipping...');
-    return;
-  }
-
-  isReconnectingOnForeground = true;
-  console.log('🔄 Force reconnecting on foreground...');
-
-  try {
-    // Always tear down the existing client, even if it *looks* connected.
-    // Reconnecting a genuinely-live connection is cheap and safe; trusting
-    // a possibly-zombie connection is what causes the "breaks after
-    // minimize" symptom.
-    if (client) {
-      console.log('🧹 Cleaning up old client...');
-      try {
-        client.removeAllListeners();
-        client.end(true);
-      } catch (e) {}
-      client = null;
-    }
-
-    isConnecting = false;
-
-    console.log('🔌 Getting fresh MQTT connection...');
-    await getMqttClient();
-
-    console.log('✅ Foreground reconnection kicked off');
-  } catch (error) {
-    console.error('❌ Foreground reconnection failed:', error);
-    connectionCallbacks.forEach(cb => {
-      try { cb(false); } catch (e) {}
-    });
-  } finally {
-    isReconnectingOnForeground = false; 
-  }
-};
-
-// ── Stable client ID (real per-device identifier) ────────────────────────
-// clean: false only gives you a persistent session (queued QoS1 messages,
-// subscriptions retained) if the broker sees the SAME client ID reconnect.
-// A real hardware MAC address is NOT obtainable on modern iOS/Android
-// (both return a dummy 02:00:00:00:00:00 for privacy reasons since
-// iOS 7 / Android 6) — so we use the OS-provided stable device identifier
-// instead, which is the correct replacement for that use case:
-//   iOS     -> identifierForVendor (via getIosIdForVendorAsync)
-//   Android -> ANDROID_ID           (via getAndroidId)
-// These are already persisted by the OS itself, so we don't need to store
-// them in AsyncStorage — just cache in memory to avoid re-calling the
-// native API on every reconnect within the same app session.
-// Requires: npx expo install expo-application
+// ── Stable client ID ────────────────────────────────────────────────────────
 let cachedClientId = null;
 
 const getStableClientId = async () => {
@@ -106,25 +49,22 @@ const getStableClientId = async () => {
     if (Platform.OS === "ios") {
       deviceId = await Application.getIosIdForVendorAsync();
     } else if (Platform.OS === "android") {
-      deviceId = Application.getAndroidId(); // synchronous on Android
+      deviceId = Application.getAndroidId();
     }
 
-    // Prefix so it's a valid/readable MQTT clientId and namespaced per app,
-    // in case the same broker also serves other apps.
     cachedClientId = deviceId
       ? `expo_${Platform.OS}_${deviceId}`
-      : `expo_${Math.random().toString(16).slice(2, 8)}_${Date.now()}`; // fallback if native id unavailable (e.g. simulator edge cases)
+      : `expo_${Math.random().toString(16).slice(2, 8)}_${Date.now()}`;
 
     return cachedClientId;
   } catch (e) {
     console.error("❌ Error resolving device id for MQTT clientId:", e);
-    // Fallback: still connects, just won't be tied to the physical device
     cachedClientId = `expo_${Math.random().toString(16).slice(2, 8)}_${Date.now()}`;
     return cachedClientId;
   }
 };
 
-// ── Connection options for 24/7 persistence ──────────────────────────────
+// ── Connection options ──────────────────────────────────────────────────────
 const getConnectionOptions = async () => {
   let password = "";
 
@@ -146,19 +86,14 @@ const getConnectionOptions = async () => {
 
   const clientId = await getStableClientId();
 
-  // ✅ 24/7 PERSISTENT CONNECTION OPTIONS
   const options = {
     clientId,
     username: "external",
     password: password,
-    reconnectPeriod: 3000,              // ✅ Retry every 3s if disconnected
-    connectTimeout: 15000,              // ✅ 15s timeout for connection attempts
-    // ✅ keepalive MUST be non-zero. It's the mechanism mqtt.js uses to
-    // detect a dead socket (ping sent, pong expected). keepalive: 0
-    // disables that detection entirely, so a zombie connection from
-    // backgrounding never gets flagged as broken.
-    keepalive: 20,
-    clean: false,                       // ✅ Maintain session across reconnects (needs stable clientId above)
+    reconnectPeriod: 3000,              // ✅ Auto-reconnect if disconnected
+    connectTimeout: 15000,
+    keepalive: 20,                      // ✅ Keep connection alive
+    clean: false,                       // ✅ Maintain session
     protocolVersion: 4,
     rejectUnauthorized: false,
     reschedulePing: true,
@@ -169,15 +104,10 @@ const getConnectionOptions = async () => {
       qos: 0,
       retain: false
     },
-    ...(Platform.OS === 'android' && {
-      // Android specific options for better background handling
-    }),
   };
 
-  console.log("📋 Connection Options (24/7 Persistent):");
+  console.log("📋 Connection Options:");
   console.log("   Client ID:", options.clientId);
-  console.log("   Username:", options.username);
-  console.log("   Password:", options.password.substring(0, 4) + "...");
   console.log("   Keepalive:", options.keepalive, "s");
   console.log("   Clean Session:", options.clean, "(false = persistent)");
   console.log("   Reconnect Period:", options.reconnectPeriod, "ms");
@@ -202,25 +132,24 @@ export const onMqttConnectionChange = (callback) => {
 
 // ── Get or create MQTT client ──────────────────────────────────────────────
 export const getMqttClient = async () => {
-  if (isAppInBackground && client) {
-    console.log('⏸️ App in background - using existing client');
-    return client;
-  }
-
+  // ✅ If client is connected, return it (NO unnecessary reconnects)
   if (client && client.connected) {
-    console.log("✅ Using existing MQTT connection (24/7 persistent)");
+    console.log("✅ Using existing MQTT connection");
     return client;
   }
 
+  // ✅ If client exists but disconnected, clean it up
   if (client) {
-    console.log("🔄 Cleaning up old/disconnected MQTT client");
+    console.log("🔄 Cleaning up disconnected MQTT client");
     try {
       client.removeAllListeners();
       client.end(true);
     } catch (e) {}
     client = null;
+    isMqttPersistent = false;
   }
 
+  // ✅ If already connecting, wait
   if (isConnecting) {
     console.log("⏳ Connection already in progress, waiting...");
     let attempts = 0;
@@ -239,12 +168,12 @@ export const getMqttClient = async () => {
     const options = await getConnectionOptions();
     const wsUrl = `ws://${BASE_URL}/mqtt`;
 
-    console.log(`🔌 Connecting to MQTT (24/7 persistent): ${wsUrl}`);
+    console.log(`🔌 Connecting to MQTT: ${wsUrl}`);
 
     client = mqtt.connect(wsUrl, options);
 
     client.on("connect", () => {
-      console.log("✅ MQTT Connected successfully (24/7 persistent)");
+      console.log("✅ MQTT Connected successfully");
       isConnecting = false;
       reconnectAttempts = 0;
       isMqttPersistent = true;
@@ -370,9 +299,9 @@ export const disconnectMqtt = (force = false) => {
   });
 };
 
-// ── Reconnect MQTT ──────────────────────────────────────────────────────────
+// ── Reconnect MQTT (only when explicitly called) ────────────────────────────
 export const reconnectMqtt = async (newPassword) => {
-  console.log("🔄 Reconnecting MQTT (24/7 persistent)...");
+  console.log("🔄 Reconnecting MQTT (explicit)...");
 
   reconnectAttempts = 0;
   isMqttPersistent = false;
@@ -382,7 +311,7 @@ export const reconnectMqtt = async (newPassword) => {
   if (newPassword) {
     try {
       await AsyncStorage.setItem("external_key", newPassword);
-      console.log("✅ Updated external_key for MQTT:", newPassword.substring(0, 4) + "...");
+      console.log("✅ Updated external_key for MQTT");
     } catch (error) {
       console.error("❌ Error saving external_key:", error);
     }
@@ -432,7 +361,7 @@ export const getMqttStatus = () => {
 export const updateMqttPassword = async (newPassword) => {
   try {
     await AsyncStorage.setItem("external_key", newPassword);
-    console.log("✅ MQTT password updated in storage:", newPassword.substring(0, 4) + "...");
+    console.log("✅ MQTT password updated in storage");
     return true;
   } catch (error) {
     console.error("❌ Error updating MQTT password:", error);
@@ -442,18 +371,14 @@ export const updateMqttPassword = async (newPassword) => {
 
 // ── Publish with retry ──────────────────────────────────────────────────────
 export const publishWithRetry = async (topic, message, maxRetries = 3) => {
-  if (isAppInBackground) {
-    console.log('⏸️ Skipping publish (app in background)');
-    return false;
-  }
-
   let attempts = 0;
 
   while (attempts < maxRetries) {
     attempts++;
     try {
+      // ✅ Only reconnect if client is null or disconnected
       if (!client || !client.connected) {
-        console.log(`🔄 Attempt ${attempts}: Reconnecting MQTT...`);
+        console.log(`🔄 Attempt ${attempts}: Connecting MQTT...`);
         await getMqttClient();
         await new Promise(resolve => setTimeout(resolve, 1000));
       }

@@ -2,7 +2,7 @@
 // Add Device wizard + registered device list with checkbox selection
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -38,28 +38,57 @@ function DeviceCard({
   theme,
   isOnline,
   isDeviceLoading,
+  isDeviceWaiting,  // ✅ NEW: Waiting state (connecting but no status yet)
   canDelete = true,
 }) {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
 
-  // ── Determine status - show NOTHING while loading ──
-  const getStatusConfig = () => {
-    // ✅ When loading, show nothing - return null to hide status
+  // ── ✅ STATUS DISPLAY - SAME AS LAYOUT ──
+  // Shows NOTHING during loading/waiting, only shows Online or Offline
+  const getStatusDisplay = useCallback(() => {
+    // ✅ When loading (actively fetching), show nothing
     if (isDeviceLoading) {
-      return null; // Show nothing while connecting internally
+      return null;
     }
+    // ✅ When waiting (initial connection), show nothing
+    if (isDeviceWaiting) {
+      return null;
+    }
+    // ✅ When online, show Online
     if (isOnline === true) {
-      return { color: "#4CAF50", bg: "rgba(76,175,80,0.12)", label: "Online" };
+      return { text: 'Online', color: '#4CAF50', bg: 'rgba(76,175,80,0.12)' };
     }
-    return { color: "#F44336", bg: "rgba(244,67,54,0.10)", label: "Offline" };
-  };
+    // ✅ When offline (confirmed), show Offline
+    if (isOnline === false) {
+      return { text: 'Offline', color: '#f44336', bg: 'rgba(244,67,54,0.10)' };
+    }
+    // ✅ Default: show nothing for unknown states
+    return null;
+  }, [isDeviceLoading, isDeviceWaiting, isOnline]);
 
-  const statusConfig = getStatusConfig();
+  const statusDisplay = getStatusDisplay();
+
+  // ── ✅ Get status dot color - hidden when loading/waiting ──
+  const getStatusDotColor = useCallback(() => {
+    if (isDeviceLoading || isDeviceWaiting) return 'transparent';
+    if (isOnline === true) return '#4CAF50';
+    return '#F44336';
+  }, [isDeviceLoading, isDeviceWaiting, isOnline]);
+
+  // ── ✅ Get status label - hidden when loading/waiting ──
+  const getStatusLabel = useCallback(() => {
+    if (isDeviceLoading || isDeviceWaiting) return '';
+    if (isOnline === true) return 'Online';
+    return 'Offline';
+  }, [isDeviceLoading, isDeviceWaiting, isOnline]);
+
+  const statusDotColor = getStatusDotColor();
+  const statusLabel = getStatusLabel();
 
   const handleSelect = () => {
     // ✅ Only allow selection when device is online
-    if (isDeviceLoading) {
+    if (isDeviceLoading || isDeviceWaiting) {
       Alert.alert(
         "⏳ Connecting",
         `${device.name || "Device"} is still connecting. Please wait...`,
@@ -94,39 +123,32 @@ function DeviceCard({
     ? `${typeLabel} · ${keyOrId.length > 16 ? keyOrId.slice(0, 16) + "…" : keyOrId}`
     : `${typeLabel} · ID ${device.id?.slice(0, 8) || "—"}`;
 
-  const getCardBorderColor = () => {
+  // ── ✅ Get card border color - neutral when loading/waiting ──
+  const getCardBorderColor = useCallback(() => {
     if (isSelected) return theme.colors.primary;
-    if (isDeviceLoading) return theme.colors.border; // Border color when loading - show nothing
+    if (isDeviceLoading || isDeviceWaiting) return theme.colors.border;
     if (isOnline === true) return "#4CAF50";
     return "#F4433644";
-  };
+  }, [isSelected, isDeviceLoading, isDeviceWaiting, isOnline, theme.colors.primary, theme.colors.border]);
 
-  const cardOpacity = isDeviceLoading ? 1 : (isOnline === false ? 0.7 : 1);
+  const cardOpacity = (isDeviceLoading || isDeviceWaiting) ? 1 : (isOnline === false ? 0.7 : 1);
 
-  // ✅ Get status dot color - hidden when loading
-  const getStatusDotColor = () => {
-    if (isDeviceLoading) return 'transparent'; // Hidden when loading
+  // ── ✅ Get icon color - neutral when loading/waiting ──
+  const getIconColor = useCallback(() => {
+    if (isDeviceLoading || isDeviceWaiting) return theme.colors.textSecondary;
     if (isOnline === true) return '#4CAF50';
     return '#F44336';
-  };
+  }, [isDeviceLoading, isDeviceWaiting, isOnline, theme.colors.textSecondary]);
 
-  const statusDotColor = getStatusDotColor();
-
-  // ✅ Get status label - hidden when loading
-  const getStatusLabel = () => {
-    if (isDeviceLoading) return ''; // Empty when loading - show nothing
-    if (isOnline === true) return 'Online';
-    return 'Offline';
-  };
-
-  const statusLabel = getStatusLabel();
-
-  // ✅ Get status badge background - transparent when loading
-  const getStatusBadgeBg = () => {
-    if (isDeviceLoading) return 'transparent';
+  // ── ✅ Get icon background - transparent when loading/waiting ──
+  const getIconBg = useCallback(() => {
+    if (isDeviceLoading || isDeviceWaiting) return 'transparent';
     if (isOnline === true) return 'rgba(76,175,80,0.12)';
     return 'rgba(244,67,54,0.10)';
-  };
+  }, [isDeviceLoading, isDeviceWaiting, isOnline]);
+
+  const iconColor = getIconColor();
+  const iconBg = getIconBg();
 
   return (
     <>
@@ -139,8 +161,8 @@ function DeviceCard({
             borderColor: getCardBorderColor(),
             borderLeftColor: isSelected
               ? theme.colors.primary
-              : isDeviceLoading
-              ? theme.colors.border // No special color when loading
+              : (isDeviceLoading || isDeviceWaiting)
+              ? theme.colors.border
               : isOnline === true
               ? "#4CAF50"
               : theme.colors.border,
@@ -173,8 +195,8 @@ function DeviceCard({
             style={[
               styles.iconChip,
               {
-                backgroundColor: isDeviceLoading ? 'transparent' : (isOnline === true ? 'rgba(76,175,80,0.12)' : 'rgba(244,67,54,0.10)'),
-                borderColor: isDeviceLoading ? theme.colors.border : (isOnline === true ? '#4CAF5033' : '#F4433633'),
+                backgroundColor: iconBg,
+                borderColor: (isDeviceLoading || isDeviceWaiting) ? theme.colors.border : (isOnline === true ? '#4CAF5033' : '#F4433633'),
               },
             ]}
           >
@@ -185,7 +207,7 @@ function DeviceCard({
                   : "sensor-outline"
               }
               size={20}
-              color={isDeviceLoading ? theme.colors.textSecondary : (isOnline === true ? '#4CAF50' : '#F44336')}
+              color={iconColor}
             />
           </View>
 
@@ -206,13 +228,15 @@ function DeviceCard({
             </Text>
           </View>
 
-          {/* ✅ Status Badge - Show NOTHING when loading */}
-          <View style={[styles.statusBadge, { backgroundColor: getStatusBadgeBg() }]}>
-            <View style={[styles.statusDot, { backgroundColor: statusDotColor }]} />
-            <Text style={[styles.statusBadgeText, { color: statusDotColor }]}>
-              {statusLabel}
-            </Text>
-          </View>
+          {/* ✅ Status Badge - Show NOTHING when loading/waiting (SAME AS LAYOUT) */}
+          {statusDisplay && (
+            <View style={[styles.statusBadge, { backgroundColor: statusDisplay.bg }]}>
+              <View style={[styles.statusDot, { backgroundColor: statusDotColor }]} />
+              <Text style={[styles.statusBadgeText, { color: statusDisplay.color }]}>
+                {statusDisplay.text}
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.cardFooter}>
@@ -335,19 +359,20 @@ export default function Devices() {
   const { onScroll, headerHeight } = useScroll();
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
+  
   const {
+    // ✅ Direct context access - SAME AS LAYOUT
     deviceOnlineStatus,
-    deviceInitialLoadStatus,
     deviceInitialLoadComplete,
+    deviceInitialLoadStatus,
+    connectionState,
     quickStatusCheck,
     checkSingleDeviceStatus,
     selectDevice,
     selectedDeviceId,
     selectedExternalKey,
     clearSelectedDevice,
-    getSelectedDeviceOnlineStatus,
-    // ✅ Use these for sync status
-    getDeviceStatusSync,
+    isConnected,
   } = useMqtt();
 
   const { deleteThing } = useAuth();
@@ -359,19 +384,36 @@ export default function Devices() {
   const [refreshing, setRefreshing] = useState(false);
   const isDeletingRef = useRef(false);
 
-  // ── Helper: Get device status using sync method ──
-  const getDeviceStatus = (device) => {
-    const key = device?.external_key || device?.id;
-    if (!key) return { isOnline: false, isLoading: false };
-    
-    // ✅ Use getDeviceStatusSync - PURELY SYNC, NO REQUESTS
-    const sync = getDeviceStatusSync(key);
-    
-    const isLoading = !sync.isInitialLoadComplete && sync.isLoading === true;
-    const isOnline = sync.isOnline === true;
-    
-    return { isOnline, isLoading };
-  };
+  // ── ✅ STABLE STATUS DERIVATION (SAME AS LAYOUT) ──
+  const deviceStatusMap = useMemo(() => {
+    const map = {};
+    registeredDevices.forEach((device) => {
+      const key = device?.external_key || device?.id;
+      if (!key) {
+        map[device.id] = { isOnline: false, isLoading: false, isWaiting: false };
+        return;
+      }
+      
+      // ✅ Directly read from context - same as Layout
+      const isOnline = deviceOnlineStatus[key] === true;
+      const isLoadComplete = deviceInitialLoadComplete[key] === true;
+      const isLoading = !isLoadComplete && deviceInitialLoadStatus[key] === true;
+      
+      // ✅ Waiting state - same as Layout
+      const isWaiting = (!isLoadComplete && !isLoading) ||
+        connectionState === "connecting" ||
+        connectionState === "waiting" ||
+        connectionState === "idle";
+      
+      map[device.id] = { isOnline, isLoading, isWaiting };
+    });
+    return map;
+  }, [registeredDevices, deviceOnlineStatus, deviceInitialLoadComplete, deviceInitialLoadStatus, connectionState]);
+
+  // ── ✅ Helper: Get device status from the map ──
+  const getDeviceStatus = useCallback((device) => {
+    return deviceStatusMap[device.id] || { isOnline: false, isLoading: false, isWaiting: false };
+  }, [deviceStatusMap]);
 
   // ── Load registered devices ──
   const loadDevices = async () => {
@@ -423,26 +465,22 @@ export default function Devices() {
     loadDevices();
   }, []);
 
-  // ── Auto-switch: when selected device goes offline, pick next online device ──
+  // ── ✅ Auto-switch: when selected device goes offline, pick next online device ──
   useEffect(() => {
     if (!selectedDevice || !registeredDevices.length || isDeletingRef.current) return;
 
     const key = selectedDevice.external_key || selectedDevice.id;
     if (!key) return;
 
-    // ✅ Use sync status
-    const sync = getDeviceStatusSync(key);
-    const isOnline = sync.isOnline === true;
-    const isLoading = !sync.isInitialLoadComplete && sync.isLoading === true;
+    const isOnline = deviceOnlineStatus[key] === true;
+    const isLoadComplete = deviceInitialLoadComplete[key] === true;
+    const isLoading = !isLoadComplete && deviceInitialLoadStatus[key] === true;
 
-    // ✅ Only auto-switch if device is truly offline (not loading)
     if (!isOnline && !isLoading) {
-      // Selected device is now offline — find next online device
       const nextOnline = registeredDevices.find((d) => {
         if (d.id === selectedDevice.id) return false;
         const dKey = d.external_key || d.id;
-        const dSync = getDeviceStatusSync(dKey);
-        return dSync.isOnline === true;
+        return deviceOnlineStatus[dKey] === true;
       });
 
       if (nextOnline) {
@@ -455,23 +493,19 @@ export default function Devices() {
         setSelectedDevice(null);
       }
     }
-  }, [deviceOnlineStatus, deviceInitialLoadStatus, deviceInitialLoadComplete]);
+  }, [deviceOnlineStatus, deviceInitialLoadComplete, deviceInitialLoadStatus]);
 
-  // ── Handle device selection (checkbox) ──
+  // ── Handle device selection ──
   const handleSelectDevice = async (device) => {
-    if (selectedDevice?.id === device.id) {
-      return;
-    }
+    if (selectedDevice?.id === device.id) return;
 
     const key = device.external_key || device.id;
     if (!key) return;
 
-    // ✅ Use sync status
-    const sync = getDeviceStatusSync(key);
-    const isOnline = sync.isOnline === true;
-    const isLoading = !sync.isInitialLoadComplete && sync.isLoading === true;
+    const isOnline = deviceOnlineStatus[key] === true;
+    const isLoadComplete = deviceInitialLoadComplete[key] === true;
+    const isLoading = !isLoadComplete && deviceInitialLoadStatus[key] === true;
 
-    // ✅ Check if device is loading
     if (isLoading) {
       Alert.alert(
         "⏳ Connecting",
@@ -506,21 +540,16 @@ export default function Devices() {
       const result = await deleteThing(device.id);
 
       if (result && result.success) {
-        // Remove from local state directly — do NOT call loadDevices() or quickStatusCheck()
-        // to avoid breaking MQTT connections for other devices
         const remaining = registeredDevices.filter((d) => d.id !== device.id);
         setRegisteredDevices(remaining);
 
         if (remaining.length === 0) {
-          // ✅ All devices deleted — clear all selected device state in MqttContext
           setSelectedDevice(null);
           await clearSelectedDevice();
         } else if (selectedDevice?.id === device.id) {
-          // If deleted device was selected, switch to next online device
           const nextOnline = remaining.find((d) => {
             const key = d.external_key || d.id;
-            const sync = getDeviceStatusSync(key);
-            return sync.isOnline === true;
+            return deviceOnlineStatus[key] === true;
           });
 
           if (nextOnline) {
@@ -559,9 +588,7 @@ export default function Devices() {
     setShowAddWizard(false);
     await loadDevices();
 
-    // Only auto-select the new device if it's online
     if (device?.id && device?.externalKey) {
-      // Check ONLY this new device — subscribe + get_stat + wait 2s
       const isOnline = await checkSingleDeviceStatus(device.externalKey);
 
       if (isOnline === true) {
@@ -572,7 +599,6 @@ export default function Devices() {
           console.error("Auto-connect to new device failed:", error);
         }
       }
-      // If offline, keep previous selection unchanged
     }
   };
 
@@ -634,12 +660,12 @@ export default function Devices() {
             </LinearGradient>
             <View>
               <Text style={[styles.emptyTitle, { color: theme.colors.text }]}>
-              No Devices Connected
-            </Text>
-            <Text style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}>
-              Add your first AgriArch sensor device to start monitoring your farm in real time.
-            </Text>
-              </View>
+                No Devices Connected
+              </Text>
+              <Text style={[styles.emptySubtitle, { color: theme.colors.textSecondary }]}>
+                Add your first AgriArch sensor device to start monitoring your farm in real time.
+              </Text>
+            </View>
             <TouchableOpacity
               style={[styles.emptyButton, { shadowColor: primaryDark }]}
               onPress={openAddWizard}
@@ -655,7 +681,7 @@ export default function Devices() {
                 <Ionicons name="add-circle" size={20} color="#FFF" />
                 <View>
                   <Text style={styles.emptyButtonText}>Add Your First Device</Text>
-                  </View>
+                </View>
               </LinearGradient>
             </TouchableOpacity>
           </View>
@@ -685,6 +711,7 @@ export default function Devices() {
               const status = getDeviceStatus(item);
               const isOnline = status.isOnline;
               const isDeviceLoading = status.isLoading;
+              const isDeviceWaiting = status.isWaiting;
 
               return (
                 <DeviceCard
@@ -696,12 +723,11 @@ export default function Devices() {
                   theme={theme}
                   isOnline={isOnline}
                   isDeviceLoading={isDeviceLoading}
+                  isDeviceWaiting={isDeviceWaiting}
                   canDelete={registeredDevices.length > 1 || !isSelected}
                 />
               );
             })}
-
-
           </>
         )}
       </ScrollView>
@@ -782,7 +808,6 @@ const styles = StyleSheet.create({
   },
   emptyButtonText: { color: "#FFF", fontSize: 16, fontWeight: "700" },
 
-  // Section Header
   sectionHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -819,7 +844,6 @@ const styles = StyleSheet.create({
   },
   selectionInfoText: { fontSize: 12, fontWeight: "600" },
 
-  // Device Card
   deviceCard: {
     borderRadius: 16,
     padding: 14,
@@ -844,7 +868,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
 
-  // Checkbox
   checkbox: {
     width: 24,
     height: 24,
@@ -855,7 +878,6 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
 
-  // Icon
   iconChip: {
     width: 40,
     height: 40,
@@ -866,7 +888,6 @@ const styles = StyleSheet.create({
     marginRight: 10,
   },
 
-  // Card Info
   cardInfo: { flex: 1 },
   nameRow: {
     flexDirection: "row",
@@ -880,7 +901,6 @@ const styles = StyleSheet.create({
     fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
   },
 
-  // Status Badge
   statusBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -893,7 +913,6 @@ const styles = StyleSheet.create({
   statusDot: { width: 7, height: 7, borderRadius: 4 },
   statusBadgeText: { fontSize: 10, fontWeight: "700" },
 
-  // Card Footer
   cardFooter: {
     flexDirection: "row",
     alignItems: "center",
@@ -913,20 +932,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   deleteBtnText: { fontSize: 11, fontWeight: "600" },
-
-  infoBanner: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    padding: 12,
-    borderRadius: 10,
-    marginTop: 8,
-  },
-  infoBannerText: {
-    fontSize: 12,
-    flex: 1,
-    lineHeight: 18,
-  },
 
   fab: {
     position: "absolute",

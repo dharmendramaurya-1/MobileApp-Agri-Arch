@@ -12,17 +12,17 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import LineChart from "../../components/LineChart";
+import { useMqtt } from "../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
-import { useMqtt } from "../../src/context/MqttContext";
 import {
-  fetchAllSensorHistorical,
   downsampleData,
+  fetchAllSensorHistorical,
 } from "../../src/services/senmlService";
 import { parseDeviceStatus } from "../../src/utils/deviceStatusParser";
-import LineChart from "../../components/LineChart";
 
-const { width } = Dimensions.get("window");
+const { width, height } = Dimensions.get("window"); // ✅ Added height
 const PAGE_SIZE = 10;
 const MAX_GRAPH_POINTS = 200;
 const MAX_TABLE_ROWS = 100;
@@ -49,14 +49,24 @@ interface PumpEvent {
 
 export default function PumpHistory() {
   const { theme } = useTheme();
+  // ✅ Safe theme fallback
+  const safeTheme = theme || {
+    colors: {
+      background: "#fff",
+      text: "#000",
+      textSecondary: "#666",
+      primary: "#007AFF",
+      surface: "#fff",
+      surfaceVariant: "#f5f5f5",
+      border: "#ddd",
+    },
+  };
+
   const { onScroll, headerHeight } = useScroll();
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
-  const {
-    getSelectedDeviceId,
-    getSelectedExternalKey,
-    availableDevices,
-  } = useMqtt();
+  const { getSelectedDeviceId, getSelectedExternalKey, availableDevices } =
+    useMqtt();
 
   const [timeRange, setTimeRange] = useState("7d");
   const [activeTab, setActiveTab] = useState<"table" | "graph">("table");
@@ -65,8 +75,12 @@ export default function PumpHistory() {
   const [currentPage, setCurrentPage] = useState(1);
   const [isTableLoading, setIsTableLoading] = useState(false);
   const [isGraphLoading, setIsGraphLoading] = useState(false);
-  const [selectedPump, setSelectedPump] = useState<"water" | "nutrient" | "both">("both");
+  const [selectedPump, setSelectedPump] = useState<
+    "water" | "nutrient" | "both"
+  >("both");
+  const [isPumpDropdownOpen, setIsPumpDropdownOpen] = useState(false);
   const [isZoomed, setIsZoomed] = useState(false);
+  const [error, setError] = useState<string | null>(null); // ✅ Added error state
 
   const getDevicePublisherAndKey = useCallback(() => {
     const selectedDevId = getSelectedDeviceId();
@@ -86,6 +100,7 @@ export default function PumpHistory() {
   const fetchAllData = useCallback(async () => {
     setIsTableLoading(true);
     setIsGraphLoading(true);
+    setError(null); // ✅ Clear previous errors
     try {
       const days = RANGE_DAYS[timeRange] || 7;
       const toMs = Date.now();
@@ -117,23 +132,31 @@ export default function PumpHistory() {
 
         setAllTableData(downsampleData(events, MAX_TABLE_ROWS));
 
-        // Build graph data: water pump = 1/0, nutrient pump = 1/0
+        // Build graph data
         const graphPoints = events.map((e) => ({
           time: e.time,
           value:
             selectedPump === "water"
-              ? e.waterPump ? 1 : 0
+              ? e.waterPump
+                ? 1
+                : 0
               : selectedPump === "nutrient"
-              ? e.nutrientPump ? 1 : 0
-              : (e.waterPump ? 1 : 0) + (e.nutrientPump ? 2 : 0),
+                ? e.nutrientPump
+                  ? 1
+                  : 0
+                : (e.waterPump ? 1 : 0) + (e.nutrientPump ? 2 : 0),
         }));
         setGraphData(downsampleData(graphPoints, MAX_GRAPH_POINTS));
       } else {
         setAllTableData([]);
         setGraphData([]);
+        if (!result.success) {
+          setError("Failed to fetch data"); // ✅ Set error
+        }
       }
     } catch (error) {
       console.error("Pump history fetch error:", error);
+      setError("Failed to load pump history data"); // ✅ Set error
       setAllTableData([]);
       setGraphData([]);
     } finally {
@@ -153,7 +176,7 @@ export default function PumpHistory() {
   const safePage = Math.min(currentPage, totalPages);
   const pageData = allTableData.slice(
     (safePage - 1) * PAGE_SIZE,
-    safePage * PAGE_SIZE
+    safePage * PAGE_SIZE,
   );
   const startIndex = tableTotal > 0 ? (safePage - 1) * PAGE_SIZE + 1 : 0;
   const endIndex = Math.min(safePage * PAGE_SIZE, tableTotal);
@@ -176,20 +199,18 @@ export default function PumpHistory() {
   const getStatusColor = (on: boolean) => (on ? "#4CAF50" : "#F44336");
   const getStatusLabel = (on: boolean) => (on ? "ON" : "OFF");
 
-  // Graph axis labels
+  // ✅ Fixed xLabels with safety checks
   const { xLabels, yLabels } = useMemo(() => {
     if (graphData.length < 2) return { xLabels: [], yLabels: [] };
     const yLabs =
       selectedPump === "both"
         ? ["OFF", "Water", "Nutrient", "Both"]
         : ["OFF", "ON"];
-    const indices = [
-      0,
-      Math.floor(graphData.length / 2),
-      graphData.length - 1,
-    ];
+    const indices = [0, Math.floor(graphData.length / 2), graphData.length - 1];
     const xLabs = indices.map((i) => {
-      const d = new Date(graphData[i].time);
+      const point = graphData[i];
+      if (!point) return "";
+      const d = new Date(point.time);
       return timeRange === "1h"
         ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
         : d.toLocaleDateString();
@@ -197,402 +218,489 @@ export default function PumpHistory() {
     return { xLabels: xLabs, yLabels: yLabs };
   }, [graphData, selectedPump, timeRange]);
 
+  // ✅ Fixed icon names
+  const getPumpIcon = (pump: string) => {
+    switch (pump) {
+      case "water":
+        return "water-outline";
+      case "nutrient":
+        return "leaf-outline";
+      default:
+        return "layers-outline";
+    }
+  };
+
   return (
     <>
-    <ScrollView
-      ref={scrollRef}
-      style={[styles.container, { backgroundColor: theme.colors.background }]}
-      contentContainerStyle={{ paddingTop: headerHeight }}
-      onScroll={onScroll}
-      scrollEventThrottle={16}
-    >
-      {/* ── HEADER ── */}
-      <View style={styles.header}>
-        <Text style={[styles.title, { color: theme.colors.text }]}>
-          Pump History
-        </Text>
-        <Text
-          style={[styles.subtitle, { color: theme.colors.textSecondary }]}
-        >
-          {RANGE_LABELS[timeRange]}
-        </Text>
-      </View>
-
-      {/* ── TIME RANGE FILTERS ── */}
-      <View style={styles.timeRangeContainer}>
-        {["1h", "1d", "7d", "30d"].map((range) => (
-          <TouchableOpacity
-            key={range}
-            style={[
-              styles.timeRangeButton,
-              timeRange === range && {
-                backgroundColor: theme.colors.primary,
-                borderColor: theme.colors.primary,
-              },
-            ]}
-            onPress={() => setTimeRange(range)}
+      <ScrollView
+        ref={scrollRef}
+        style={[
+          styles.container,
+          { backgroundColor: safeTheme.colors.background },
+        ]}
+        contentContainerStyle={{ paddingTop: headerHeight }}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+      >
+        {/* ── HEADER ── */}
+        <View style={styles.header}>
+          <Text style={[styles.title, { color: safeTheme.colors.text }]}>
+            Pump History
+          </Text>
+          <Text
+            style={[styles.subtitle, { color: safeTheme.colors.textSecondary }]}
           >
-            <Text
-              style={[
-                styles.timeRangeText,
-                {
-                  color:
-                    timeRange === range
-                      ? "#FFF"
-                      : theme.colors.textSecondary,
-                },
-              ]}
-            >
-              {range === "1h"
-                ? "1h"
-                : range === "1d"
-                ? "24h"
-                : range === "7d"
-                ? "7d"
-                : "30d"}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* ── PUMP SELECTOR ── */}
-      <View style={styles.pumpSelector}>
-        {(["water", "nutrient", "both"] as const).map((pump) => (
-          <TouchableOpacity
-            key={pump}
-            style={[
-              styles.pumpSelectorButton,
-              selectedPump === pump && {
-                backgroundColor:
-                  pump === "water"
-                    ? "#2196F320"
-                    : pump === "nutrient"
-                    ? "#4CAF5020"
-                    : theme.colors.primary + "20",
-                borderColor:
-                  pump === "water"
-                    ? "#2196F3"
-                    : pump === "nutrient"
-                    ? "#4CAF50"
-                    : theme.colors.primary,
-              },
-            ]}
-            onPress={() => setSelectedPump(pump)}
-          >
-            <Ionicons
-              name={
-                pump === "water"
-                  ? "water"
-                  : pump === "nutrient"
-                  ? "leaf"
-                  : "layers"
-              }
-              size={14}
-              color={
-                selectedPump === pump
-                  ? pump === "water"
-                    ? "#2196F3"
-                    : pump === "nutrient"
-                    ? "#4CAF50"
-                    : theme.colors.primary
-                  : theme.colors.textSecondary
-              }
-            />
-            <Text
-              style={[
-                styles.pumpSelectorText,
-                {
-                  color:
-                    selectedPump === pump
-                      ? theme.colors.text
-                      : theme.colors.textSecondary,
-                },
-              ]}
-            >
-              {pump === "water"
-                ? "Water"
-                : pump === "nutrient"
-                ? "Nutrient"
-                : "Both"}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* ── TAB SWITCHER ── */}
-      <View style={styles.tabSwitcherContainer}>
-        <View
-          style={[
-            styles.tabSwitcher,
-            { backgroundColor: theme.colors.surfaceVariant },
-          ]}
-        >
-          <TouchableOpacity
-            style={[
-              styles.tabButton,
-              activeTab === "table" && { backgroundColor: theme.colors.surface },
-            ]}
-            onPress={() => setActiveTab("table")}
-          >
-            <Ionicons
-              name="list-outline"
-              size={16}
-              color={
-                activeTab === "table"
-                  ? theme.colors.primary
-                  : theme.colors.textSecondary
-              }
-            />
-            <Text
-              style={[
-                styles.tabButtonText,
-                {
-                  color:
-                    activeTab === "table"
-                      ? theme.colors.primary
-                      : theme.colors.textSecondary,
-                  fontWeight: activeTab === "table" ? "700" : "500",
-                },
-              ]}
-            >
-              Table
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.tabButton,
-              activeTab === "graph" && { backgroundColor: theme.colors.surface },
-            ]}
-            onPress={() => setActiveTab("graph")}
-          >
-            <Ionicons
-              name="trending-up-outline"
-              size={16}
-              color={
-                activeTab === "graph"
-                  ? theme.colors.primary
-                  : theme.colors.textSecondary
-              }
-            />
-            <Text
-              style={[
-                styles.tabButtonText,
-                {
-                  color:
-                    activeTab === "graph"
-                      ? theme.colors.primary
-                      : theme.colors.textSecondary,
-                  fontWeight: activeTab === "graph" ? "700" : "500",
-                },
-              ]}
-            >
-              Graph
-            </Text>
-          </TouchableOpacity>
+            {RANGE_LABELS[timeRange]}
+          </Text>
         </View>
-      </View>
 
-      {/* ── CONTENT ── */}
-      <View style={styles.contentCard}>
-        {activeTab === "table" ? (
-          isTableLoading ? (
-            <View style={styles.placeholder}>
-              <ActivityIndicator size="large" color={theme.colors.primary} />
+        {/* ── ERROR DISPLAY ── */}
+        {error && (
+          <View style={styles.errorContainer}>
+            <Text style={[styles.errorText, { color: "#F44336" }]}>
+              {error}
+            </Text>
+            <TouchableOpacity onPress={fetchAllData} style={styles.retryButton}>
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* ── TIME RANGE FILTERS ── */}
+        <View style={styles.timeRangeContainer}>
+          {["1h", "1d", "7d", "30d"].map((range) => (
+            <TouchableOpacity
+              key={range}
+              style={[
+                styles.timeRangeButton,
+                timeRange === range && {
+                  backgroundColor: safeTheme.colors.primary,
+                  borderColor: safeTheme.colors.primary,
+                },
+              ]}
+              onPress={() => setTimeRange(range)}
+            >
               <Text
                 style={[
-                  styles.placeholderText,
-                  { color: theme.colors.textSecondary },
+                  styles.timeRangeText,
+                  {
+                    color:
+                      timeRange === range
+                        ? "#FFF"
+                        : safeTheme.colors.textSecondary,
+                  },
                 ]}
               >
-                Loading table…
+                {range === "1h"
+                  ? "1h"
+                  : range === "1d"
+                    ? "24h"
+                    : range === "7d"
+                      ? "7d"
+                      : "30d"}
               </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* ── PUMP SELECTOR DROPDOWN ── */}
+        <View style={styles.pumpDropdownContainer}>
+          <TouchableOpacity
+            style={[
+              styles.pumpDropdownButton,
+              {
+                backgroundColor: safeTheme.colors.surfaceVariant,
+                borderColor: "rgba(0,0,0,0.08)",
+              },
+            ]}
+            onPress={() => setIsPumpDropdownOpen(!isPumpDropdownOpen)}
+          >
+            <Ionicons
+              name={getPumpIcon(selectedPump)}
+              size={16}
+              color={
+                selectedPump === "water"
+                  ? "#2196F3"
+                  : selectedPump === "nutrient"
+                    ? "#4CAF50"
+                    : safeTheme.colors.primary
+              }
+            />
+            <Text
+              style={[styles.pumpDropdownText, { color: safeTheme.colors.text }]}
+            >
+              {selectedPump === "water"
+                ? "Water"
+                : selectedPump === "nutrient"
+                  ? "Nutrient"
+                  : "Both"}
+            </Text>
+            <Ionicons
+              name={isPumpDropdownOpen ? "chevron-up" : "chevron-down"}
+              size={16}
+              color={safeTheme.colors.textSecondary}
+            />
+          </TouchableOpacity>
+
+          {isPumpDropdownOpen && (
+            <View
+              style={[
+                styles.pumpDropdownMenu,
+                {
+                  backgroundColor: safeTheme.colors.surface || safeTheme.colors.background,
+                  borderColor: "rgba(0,0,0,0.1)",
+                },
+              ]}
+            >
+              {(["water", "nutrient", "both"] as const).map((pump) => (
+                <TouchableOpacity
+                  key={pump}
+                  style={[
+                    styles.pumpDropdownItem,
+                    selectedPump === pump && {
+                      backgroundColor:
+                        pump === "water"
+                          ? "#2196F310"
+                          : pump === "nutrient"
+                            ? "#4CAF5010"
+                            : safeTheme.colors.primary + "10",
+                    },
+                  ]}
+                  onPress={() => {
+                    setSelectedPump(pump);
+                    setIsPumpDropdownOpen(false);
+                  }}
+                >
+                  <Ionicons
+                    name={getPumpIcon(pump)}
+                    size={16}
+                    color={
+                      pump === "water"
+                        ? "#2196F3"
+                        : pump === "nutrient"
+                          ? "#4CAF50"
+                          : safeTheme.colors.primary
+                    }
+                  />
+                  <Text
+                    style={[
+                      styles.pumpDropdownItemText,
+                      { color: safeTheme.colors.text },
+                    ]}
+                  >
+                    {pump === "water"
+                      ? "Water"
+                      : pump === "nutrient"
+                        ? "Nutrient"
+                        : "Both"}
+                  </Text>
+                  {selectedPump === pump && (
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={18}
+                      color={
+                        pump === "water"
+                          ? "#2196F3"
+                          : pump === "nutrient"
+                            ? "#4CAF50"
+                            : safeTheme.colors.primary
+                      }
+                    />
+                  )}
+                </TouchableOpacity>
+              ))}
             </View>
-          ) : pageData.length > 0 ? (
-            <>
-              <View style={styles.tableHeader}>
+          )}
+        </View>
+
+        {/* ── TAB SWITCHER ── */}
+        <View style={styles.tabSwitcherContainer}>
+          <View
+            style={[
+              styles.tabSwitcher,
+              { backgroundColor: safeTheme.colors.surfaceVariant },
+            ]}
+          >
+            <TouchableOpacity
+              style={[
+                styles.tabButton,
+                activeTab === "table" && {
+                  backgroundColor: safeTheme.colors.surface,
+                },
+              ]}
+              onPress={() => setActiveTab("table")}
+            >
+              <Ionicons
+                name="list-outline"
+                size={16}
+                color={
+                  activeTab === "table"
+                    ? safeTheme.colors.primary
+                    : safeTheme.colors.textSecondary
+                }
+              />
+              <Text
+                style={[
+                  styles.tabButtonText,
+                  {
+                    color:
+                      activeTab === "table"
+                        ? safeTheme.colors.primary
+                        : safeTheme.colors.textSecondary,
+                    fontWeight: activeTab === "table" ? "700" : "500",
+                  },
+                ]}
+              >
+                Table
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.tabButton,
+                activeTab === "graph" && {
+                  backgroundColor: safeTheme.colors.surface,
+                },
+              ]}
+              onPress={() => setActiveTab("graph")}
+            >
+              <Ionicons
+                name="trending-up-outline"
+                size={16}
+                color={
+                  activeTab === "graph"
+                    ? safeTheme.colors.primary
+                    : safeTheme.colors.textSecondary
+                }
+              />
+              <Text
+                style={[
+                  styles.tabButtonText,
+                  {
+                    color:
+                      activeTab === "graph"
+                        ? safeTheme.colors.primary
+                        : safeTheme.colors.textSecondary,
+                    fontWeight: activeTab === "graph" ? "700" : "500",
+                  },
+                ]}
+              >
+                Graph
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* ── CONTENT ── */}
+        <View style={styles.contentCard}>
+          {activeTab === "table" ? (
+            isTableLoading ? (
+              <View style={styles.placeholder}>
+                <ActivityIndicator
+                  size="large"
+                  color={safeTheme.colors.primary}
+                />
                 <Text
                   style={[
-                    styles.tableHeaderCell,
-                    { color: theme.colors.textSecondary },
+                    styles.placeholderText,
+                    { color: safeTheme.colors.textSecondary },
                   ]}
                 >
-                  Date &amp; Time
+                  Loading table…
                 </Text>
-                {selectedPump === "water" || selectedPump === "both" ? (
-                  <Text
-                    style={[
-                      styles.tableHeaderCell,
-                      styles.tableHeaderCellRight,
-                      { color: theme.colors.textSecondary },
-                    ]}
-                  >
-                    Water Pump
-                  </Text>
-                ) : null}
-                {selectedPump === "nutrient" || selectedPump === "both" ? (
-                  <Text
-                    style={[
-                      styles.tableHeaderCell,
-                      styles.tableHeaderCellRight,
-                      { color: theme.colors.textSecondary },
-                    ]}
-                  >
-                    Nutrient Pump
-                  </Text>
-                ) : null}
               </View>
-              {pageData.map((event, idx) => (
-                <View
-                  key={event.id}
-                  style={[
-                    styles.tableRow,
-                    idx % 2 === 1 && styles.tableRowStriped,
-                  ]}
-                >
+            ) : pageData.length > 0 ? (
+              <>
+                <View style={styles.tableHeader}>
                   <Text
-                    style={[styles.tableCell, { color: theme.colors.text }]}
-                    numberOfLines={1}
+                    style={[
+                      styles.tableHeaderCell,
+                      { color: safeTheme.colors.textSecondary },
+                    ]}
                   >
-                    {formatTime(event.time)}
+                    Date &amp; Time
                   </Text>
                   {selectedPump === "water" || selectedPump === "both" ? (
-                    <View style={styles.tableValueCell}>
-                      <View
-                        style={[
-                          styles.statusDot,
-                          { backgroundColor: getStatusColor(event.waterPump) },
-                        ]}
-                      />
-                      <Text
-                        style={{
-                          color: getStatusColor(event.waterPump),
-                          fontSize: 13,
-                          fontWeight: "600",
-                        }}
-                      >
-                        {getStatusLabel(event.waterPump)}
-                      </Text>
-                    </View>
+                    <Text
+                      style={[
+                        styles.tableHeaderCell,
+                        styles.tableHeaderCellRight,
+                        { color: safeTheme.colors.textSecondary },
+                      ]}
+                    >
+                      Water Pump
+                    </Text>
                   ) : null}
                   {selectedPump === "nutrient" || selectedPump === "both" ? (
-                    <View style={styles.tableValueCell}>
-                      <View
-                        style={[
-                          styles.statusDot,
-                          {
-                            backgroundColor: getStatusColor(
-                              event.nutrientPump
-                            ),
-                          },
-                        ]}
-                      />
-                      <Text
-                        style={{
-                          color: getStatusColor(event.nutrientPump),
-                          fontSize: 13,
-                          fontWeight: "600",
-                        }}
-                      >
-                        {getStatusLabel(event.nutrientPump)}
-                      </Text>
-                    </View>
+                    <Text
+                      style={[
+                        styles.tableHeaderCell,
+                        styles.tableHeaderCellRight,
+                        { color: safeTheme.colors.textSecondary },
+                      ]}
+                    >
+                      Nutrient Pump
+                    </Text>
                   ) : null}
                 </View>
-              ))}
-              {/* ── PAGINATION ── */}
-              <View style={styles.paginationFooter}>
-                <TouchableOpacity
-                  style={[
-                    styles.pageButton,
-                    safePage <= 1 && { opacity: 0.4 },
-                  ]}
-                  disabled={safePage <= 1}
-                  onPress={() => setCurrentPage(safePage - 1)}
-                >
-                  <Ionicons
-                    name="chevron-back"
-                    size={16}
-                    color={theme.colors.primary}
-                  />
-                  <Text
+                {pageData.map((event, idx) => (
+                  <View
+                    key={event.id}
                     style={[
-                      styles.pageButtonText,
-                      { color: theme.colors.primary },
+                      styles.tableRow,
+                      idx % 2 === 1 && styles.tableRowStriped,
                     ]}
                   >
-                    Prev
-                  </Text>
-                </TouchableOpacity>
-                <View style={styles.pageInfo}>
-                  <Text
+                    <Text
+                      style={[
+                        styles.tableCell,
+                        { color: safeTheme.colors.text },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {formatTime(event.time)}
+                    </Text>
+                    {selectedPump === "water" || selectedPump === "both" ? (
+                      <View style={styles.tableValueCell}>
+                        <View
+                          style={[
+                            styles.statusDot,
+                            {
+                              backgroundColor: getStatusColor(event.waterPump),
+                            },
+                          ]}
+                        />
+                        <Text
+                          style={{
+                            color: getStatusColor(event.waterPump),
+                            fontSize: 13,
+                            fontWeight: "600",
+                          }}
+                        >
+                          {getStatusLabel(event.waterPump)}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {selectedPump === "nutrient" || selectedPump === "both" ? (
+                      <View style={styles.tableValueCell}>
+                        <View
+                          style={[
+                            styles.statusDot,
+                            {
+                              backgroundColor: getStatusColor(
+                                event.nutrientPump,
+                              ),
+                            },
+                          ]}
+                        />
+                        <Text
+                          style={{
+                            color: getStatusColor(event.nutrientPump),
+                            fontSize: 13,
+                            fontWeight: "600",
+                          }}
+                        >
+                          {getStatusLabel(event.nutrientPump)}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+                ))}
+                {/* ── PAGINATION ── */}
+                <View style={styles.paginationFooter}>
+                  <TouchableOpacity
                     style={[
-                      styles.pageInfoText,
-                      { color: theme.colors.text },
+                      styles.pageButton,
+                      safePage <= 1 && { opacity: 0.4 },
                     ]}
+                    disabled={safePage <= 1}
+                    onPress={() => setCurrentPage(safePage - 1)}
                   >
-                    Page {safePage} of {totalPages}
-                  </Text>
-                  <Text
+                    <Ionicons
+                      name="chevron-back"
+                      size={16}
+                      color={safeTheme.colors.primary}
+                    />
+                    <Text
+                      style={[
+                        styles.pageButtonText,
+                        { color: safeTheme.colors.primary },
+                      ]}
+                    >
+                      Prev
+                    </Text>
+                  </TouchableOpacity>
+                  <View style={styles.pageInfo}>
+                    <Text
+                      style={[
+                        styles.pageInfoText,
+                        { color: safeTheme.colors.text },
+                      ]}
+                    >
+                      Page {safePage} of {totalPages}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.pageInfoSub,
+                        { color: safeTheme.colors.textSecondary },
+                      ]}
+                    >
+                      {tableTotal > 0
+                        ? `${startIndex}-${endIndex} of ${tableTotal}`
+                        : "No records"}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
                     style={[
-                      styles.pageInfoSub,
-                      { color: theme.colors.textSecondary },
+                      styles.pageButton,
+                      safePage >= totalPages && { opacity: 0.4 },
                     ]}
+                    disabled={safePage >= totalPages}
+                    onPress={() => setCurrentPage(safePage + 1)}
                   >
-                    {tableTotal > 0
-                      ? `${startIndex}-${endIndex} of ${tableTotal}`
-                      : "No records"}
-                  </Text>
+                    <Text
+                      style={[
+                        styles.pageButtonText,
+                        { color: safeTheme.colors.primary },
+                      ]}
+                    >
+                      Next
+                    </Text>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={16}
+                      color={safeTheme.colors.primary}
+                    />
+                  </TouchableOpacity>
                 </View>
-                <TouchableOpacity
+              </>
+            ) : (
+              <View style={styles.placeholder}>
+                <Ionicons
+                  name="water-outline"
+                  size={48}
+                  color={safeTheme.colors.textSecondary}
+                />
+                <Text
                   style={[
-                    styles.pageButton,
-                    safePage >= totalPages && { opacity: 0.4 },
+                    styles.placeholderText,
+                    { color: safeTheme.colors.textSecondary },
                   ]}
-                  disabled={safePage >= totalPages}
-                  onPress={() => setCurrentPage(safePage + 1)}
                 >
-                  <Text
-                    style={[
-                      styles.pageButtonText,
-                      { color: theme.colors.primary },
-                    ]}
-                  >
-                    Next
-                  </Text>
-                  <Ionicons
-                    name="chevron-forward"
-                    size={16}
-                    color={theme.colors.primary}
-                  />
-                </TouchableOpacity>
+                  No pump history data
+                </Text>
               </View>
-            </>
-          ) : (
+            )
+          ) : // ── GRAPH TAB ──
+          isGraphLoading ? (
             <View style={styles.placeholder}>
-              <Ionicons
-                name="water-outline"
-                size={48}
-                color={theme.colors.textSecondary}
+              <ActivityIndicator
+                size="large"
+                color={safeTheme.colors.primary}
               />
               <Text
                 style={[
                   styles.placeholderText,
-                  { color: theme.colors.textSecondary },
-                ]}
-              >
-                No pump history data
-              </Text>
-            </View>
-          )
-        ) : (
-          // ── GRAPH TAB ──
-          isGraphLoading ? (
-            <View style={styles.placeholder}>
-              <ActivityIndicator size="large" color={theme.colors.primary} />
-              <Text
-                style={[
-                  styles.placeholderText,
-                  { color: theme.colors.textSecondary },
+                  { color: safeTheme.colors.textSecondary },
                 ]}
               >
                 Loading graph…
@@ -605,24 +713,38 @@ export default function PumpHistory() {
                   <Text
                     style={[
                       styles.graphSummary,
-                      { color: theme.colors.textSecondary },
+                      { color: safeTheme.colors.textSecondary },
                     ]}
                   >
                     {graphData.length} points ·{" "}
                     {selectedPump === "both"
                       ? "Water + Nutrient"
                       : selectedPump === "water"
-                      ? "Water Pump"
-                      : "Nutrient Pump"}
+                        ? "Water Pump"
+                        : "Nutrient Pump"}
                   </Text>
                 </View>
                 <TouchableOpacity
                   onPress={() => setIsZoomed(true)}
-                  style={[styles.zoomButton, { backgroundColor: theme.colors.primary + "15" }]}
+                  style={[
+                    styles.zoomButton,
+                    { backgroundColor: safeTheme.colors.primary + "15" },
+                  ]}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 >
-                  <Ionicons name="expand-outline" size={18} color={theme.colors.primary} />
-                  <Text style={[styles.zoomButtonText, { color: theme.colors.primary }]}>Full</Text>
+                  <Ionicons
+                    name="expand-outline"
+                    size={18}
+                    color={safeTheme.colors.primary}
+                  />
+                  <Text
+                    style={[
+                      styles.zoomButtonText,
+                      { color: safeTheme.colors.primary },
+                    ]}
+                  >
+                    Full
+                  </Text>
                 </TouchableOpacity>
               </View>
 
@@ -636,7 +758,7 @@ export default function PumpHistory() {
                     <Text
                       style={[
                         styles.legendText,
-                        { color: theme.colors.textSecondary },
+                        { color: safeTheme.colors.textSecondary },
                       ]}
                     >
                       Water
@@ -651,7 +773,7 @@ export default function PumpHistory() {
                     <Text
                       style={[
                         styles.legendText,
-                        { color: theme.colors.textSecondary },
+                        { color: safeTheme.colors.textSecondary },
                       ]}
                     >
                       Nutrient
@@ -667,7 +789,7 @@ export default function PumpHistory() {
                       key={i}
                       style={[
                         styles.axisLabel,
-                        { color: theme.colors.textSecondary },
+                        { color: safeTheme.colors.textSecondary },
                       ]}
                     >
                       {label}
@@ -682,13 +804,13 @@ export default function PumpHistory() {
                         selectedPump === "water"
                           ? "#2196F3"
                           : selectedPump === "nutrient"
-                          ? "#4CAF50"
-                          : theme.colors.primary
+                            ? "#4CAF50"
+                            : safeTheme.colors.primary
                       }
                       unit=""
                       width={width - 100}
                       height={200}
-                      labelColor={theme.colors.textSecondary}
+                      labelColor={safeTheme.colors.textSecondary}
                     />
                   </View>
                   <View style={styles.xAxisContainer}>
@@ -697,7 +819,7 @@ export default function PumpHistory() {
                         key={i}
                         style={[
                           styles.axisLabel,
-                          { color: theme.colors.textSecondary },
+                          { color: safeTheme.colors.textSecondary },
                         ]}
                       >
                         {label}
@@ -712,21 +834,20 @@ export default function PumpHistory() {
               <Ionicons
                 name="analytics-outline"
                 size={48}
-                color={theme.colors.textSecondary}
+                color={safeTheme.colors.textSecondary}
               />
               <Text
                 style={[
                   styles.placeholderText,
-                  { color: theme.colors.textSecondary },
+                  { color: safeTheme.colors.textSecondary },
                 ]}
               >
                 No pump data for graph
               </Text>
             </View>
-          )
-        )}
-      </View>
-    </ScrollView>
+          )}
+        </View>
+      </ScrollView>
 
       {/* ─── FULLSCREEN ZOOM MODAL ─── */}
       <Modal
@@ -736,45 +857,113 @@ export default function PumpHistory() {
         onRequestClose={() => setIsZoomed(false)}
       >
         <StatusBar hidden />
-        <View style={[styles.zoomContainer, { backgroundColor: theme.colors.background }]}>
+        <View
+          style={[
+            styles.zoomContainer,
+            { backgroundColor: safeTheme.colors.background },
+          ]}
+        >
           {/* Zoom Header */}
           <View style={styles.zoomHeader}>
             <View style={styles.zoomHeaderLeft}>
-              <Text style={[styles.zoomTitle, { color: theme.colors.text }]}>
+              <Text
+                style={[styles.zoomTitle, { color: safeTheme.colors.text }]}
+              >
                 Pump History
               </Text>
-              <Text style={[styles.zoomSubtitle, { color: theme.colors.textSecondary }]}>
+              <Text
+                style={[
+                  styles.zoomSubtitle,
+                  { color: safeTheme.colors.textSecondary },
+                ]}
+              >
                 {RANGE_LABELS[timeRange]} · {graphData.length} points
               </Text>
             </View>
             <TouchableOpacity
               onPress={() => setIsZoomed(false)}
-              style={[styles.zoomCloseButton, { backgroundColor: theme.colors.surface }]}
+              style={[
+                styles.zoomCloseButton,
+                { backgroundColor: safeTheme.colors.surface },
+              ]}
               hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
-              <Ionicons name="contract-outline" size={22} color={theme.colors.primary} />
+              <Ionicons
+                name="contract-outline"
+                size={22}
+                color={safeTheme.colors.primary}
+              />
             </TouchableOpacity>
           </View>
 
           {/* Zoom Stats */}
-          <View style={[styles.zoomStatsRow, { backgroundColor: theme.colors.surface }]}>
+          <View
+            style={[
+              styles.zoomStatsRow,
+              { backgroundColor: safeTheme.colors.surface },
+            ]}
+          >
             <View style={styles.zoomStat}>
-              <Text style={[styles.zoomStatLabel, { color: theme.colors.textSecondary }]}>Pump</Text>
-              <Text style={[styles.zoomStatValue, { color: theme.colors.text }]}>
-                {selectedPump === "water" ? "Water" : selectedPump === "nutrient" ? "Nutrient" : "Both"}
+              <Text
+                style={[
+                  styles.zoomStatLabel,
+                  { color: safeTheme.colors.textSecondary },
+                ]}
+              >
+                Pump
+              </Text>
+              <Text
+                style={[styles.zoomStatValue, { color: safeTheme.colors.text }]}
+              >
+                {selectedPump === "water"
+                  ? "Water"
+                  : selectedPump === "nutrient"
+                    ? "Nutrient"
+                    : "Both"}
               </Text>
             </View>
-            <View style={[styles.zoomStatDivider, { backgroundColor: theme.colors.border }]} />
+            <View
+              style={[
+                styles.zoomStatDivider,
+                { backgroundColor: safeTheme.colors.border },
+              ]}
+            />
             <View style={styles.zoomStat}>
-              <Text style={[styles.zoomStatLabel, { color: theme.colors.textSecondary }]}>Points</Text>
-              <Text style={[styles.zoomStatValue, { color: theme.colors.primary }]}>
+              <Text
+                style={[
+                  styles.zoomStatLabel,
+                  { color: safeTheme.colors.textSecondary },
+                ]}
+              >
+                Points
+              </Text>
+              <Text
+                style={[
+                  styles.zoomStatValue,
+                  { color: safeTheme.colors.primary },
+                ]}
+              >
                 {graphData.length}
               </Text>
             </View>
-            <View style={[styles.zoomStatDivider, { backgroundColor: theme.colors.border }]} />
+            <View
+              style={[
+                styles.zoomStatDivider,
+                { backgroundColor: safeTheme.colors.border },
+              ]}
+            />
             <View style={styles.zoomStat}>
-              <Text style={[styles.zoomStatLabel, { color: theme.colors.textSecondary }]}>Range</Text>
-              <Text style={[styles.zoomStatValue, { color: theme.colors.text }]}>
+              <Text
+                style={[
+                  styles.zoomStatLabel,
+                  { color: safeTheme.colors.textSecondary },
+                ]}
+              >
+                Range
+              </Text>
+              <Text
+                style={[styles.zoomStatValue, { color: safeTheme.colors.text }]}
+              >
                 {RANGE_LABELS[timeRange]}
               </Text>
             </View>
@@ -785,11 +974,17 @@ export default function PumpHistory() {
             <View style={styles.zoomChartInner}>
               <LineChart
                 data={graphData}
-                color={selectedPump === "water" ? "#2196F3" : selectedPump === "nutrient" ? "#4CAF50" : theme.colors.primary}
+                color={
+                  selectedPump === "water"
+                    ? "#2196F3"
+                    : selectedPump === "nutrient"
+                      ? "#4CAF50"
+                      : safeTheme.colors.primary
+                }
                 unit=""
-                width={height - 80}
-                height={width - 60}
-                labelColor={theme.colors.textSecondary}
+                width={height - 80} // ✅ Fixed: using height variable
+                height={width - 60} // ✅ Fixed: using width variable
+                labelColor={safeTheme.colors.textSecondary}
                 xTitle="Time"
                 yTitle="State"
                 showGradient={true}
@@ -801,7 +996,10 @@ export default function PumpHistory() {
           {/* Zoom out button */}
           <TouchableOpacity
             onPress={() => setIsZoomed(false)}
-            style={[styles.zoomOutButton, { backgroundColor: theme.colors.primary }]}
+            style={[
+              styles.zoomOutButton,
+              { backgroundColor: safeTheme.colors.primary },
+            ]}
           >
             <Ionicons name="contract-outline" size={18} color="#FFF" />
             <Text style={styles.zoomOutButtonText}>Zoom Out</Text>
@@ -812,12 +1010,31 @@ export default function PumpHistory() {
   );
 }
 
-
 const styles = StyleSheet.create({
   container: { flex: 1 },
   header: { padding: 20, paddingBottom: 8 },
   title: { fontSize: 28, fontWeight: "700", marginBottom: 4 },
   subtitle: { fontSize: 14 },
+
+  // ✅ Added error styles
+  errorContainer: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 12,
+    backgroundColor: "#FFEBEE",
+    borderRadius: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  errorText: { fontSize: 14, flex: 1 },
+  retryButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    backgroundColor: "#F44336",
+    borderRadius: 4,
+  },
+  retryText: { color: "#FFF", fontWeight: "600" },
 
   timeRangeContainer: {
     flexDirection: "row",
@@ -835,24 +1052,50 @@ const styles = StyleSheet.create({
   },
   timeRangeText: { fontSize: 13, fontWeight: "600" },
 
-  pumpSelector: {
-    flexDirection: "row",
-    justifyContent: "center",
-    gap: 8,
+  pumpDropdownContainer: {
     paddingHorizontal: 16,
     marginBottom: 12,
+    zIndex: 100,
   },
-  pumpSelectorButton: {
+  pumpDropdownButton: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 16,
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
     borderWidth: 1.5,
-    borderColor: "rgba(0,0,0,0.08)",
   },
-  pumpSelectorText: { fontSize: 12, fontWeight: "600" },
+  pumpDropdownText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  pumpDropdownMenu: {
+    marginTop: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: "hidden",
+    elevation: 5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+  },
+  pumpDropdownItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(0,0,0,0.06)",
+  },
+  pumpDropdownItemText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "500",
+  },
 
   tabSwitcherContainer: { paddingHorizontal: 16, marginBottom: 12 },
   tabSwitcher: {

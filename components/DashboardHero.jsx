@@ -2,9 +2,8 @@
 // The hero section for the Dashboard, showing device name, crop info,
 // and time. Scrolls naturally with the Dashboard's ScrollView.
 import { Ionicons } from "@expo/vector-icons";
-import { useEffect, useRef, useState } from "react";
-import { Animated, StyleSheet, Text, View } from "react-native";
-import Logo from "./Logo";
+import { useEffect, useState } from "react";
+import { StyleSheet, Text, View } from "react-native";
 
 export default function DashboardHero({
   selectedDeviceName,

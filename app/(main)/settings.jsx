@@ -3,6 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  AppState,
   Dimensions,
   Pressable,
   ScrollView,
@@ -25,7 +26,7 @@ function formatDuration(seconds) {
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-// ── Interval Picker Component ──────────────────────────────────────────────
+// ── Interval Picker Component ──
 function IntervalPicker({
   label,
   value,
@@ -140,7 +141,7 @@ function IntervalPicker({
   );
 }
 
-// ── Main Config Screen ──────────────────────────────────────────────────────
+// ── Main Config Screen ──
 export default function ConfigScreen() {
   const { theme, isDark, toggleTheme } = useTheme();
   const { onScroll, headerHeight } = useScroll();
@@ -154,9 +155,10 @@ export default function ConfigScreen() {
     getSelectedDeviceConfig,
     isReady,
     getSelectedDeviceName,
-    // ✅ Directly access context values
     deviceOnlineStatus,
     deviceInitialLoadComplete,
+    connectionState,
+    addAlert,
   } = useMqtt();
   
   const deviceConfig = getSelectedDeviceConfig();
@@ -169,55 +171,128 @@ export default function ConfigScreen() {
   });
   const [publishing, setPublishing] = useState(false);
   const [showError, setShowError] = useState(false);
+  const [publishError, setPublishError] = useState(null);
+
+  // ── App resume state tracking ──
+  const [isResuming, setIsResuming] = useState(false);
+  const appStateRef = useRef(AppState.currentState);
+  const resumeTimeoutRef = useRef(null);
+  const isMountedRef = useRef(true);
 
   // Get selected device info
   const selectedDeviceName = getSelectedDeviceName();
-
-  // ✅ Get device key
   const deviceKey = externalKey;
 
-  // ✅ SIMPLIFIED: Just check if device is online - stable value
+  // ── ✅ STABLE STATUS DERIVATION (SAME AS LAYOUT) ──
   const isDeviceOnline = useMemo(() => {
     if (!deviceKey) return false;
     return deviceOnlineStatus[deviceKey] === true;
   }, [deviceKey, deviceOnlineStatus]);
 
-  // ✅ SIMPLIFIED: Check if initial load is complete - stable value
   const isInitialLoadComplete = useMemo(() => {
     if (!deviceKey) return false;
     return deviceInitialLoadComplete[deviceKey] === true;
   }, [deviceKey, deviceInitialLoadComplete]);
 
-  // ✅ SIMPLIFIED: Device is offline only if initial load is complete AND not online
+  // ── Loading state (show NOTHING) ──
+  const isLoading = useMemo(() => {
+    if (!deviceKey) return false;
+    return !isInitialLoadComplete;
+  }, [deviceKey, isInitialLoadComplete]);
+
+  // ── Waiting state ──
+  const isWaiting = useMemo(() => {
+    return (!isInitialLoadComplete && !isLoading) ||
+      connectionState === "connecting" ||
+      connectionState === "waiting" ||
+      connectionState === "idle";
+  }, [isInitialLoadComplete, isLoading, connectionState]);
+
+  // ── Offline state (only when confirmed) ──
   const isDeviceOffline = useMemo(() => {
     return isInitialLoadComplete && !isDeviceOnline;
   }, [isInitialLoadComplete, isDeviceOnline]);
 
-  // ✅ SIMPLIFIED: Get status - ONLY show Online or Offline, NOTHING during loading
-  const getStatusInfo = () => {
+  // ── Not connected state ──
+  const isNotConnected = useMemo(() => {
+    return connectionState === "idle" || connectionState === "disconnected" || connectionState === "error";
+  }, [connectionState]);
+
+  // ── ✅ SINGLE SOURCE OF TRUTH for device status ──
+  const deviceStatus = useMemo(() => {
     // If not connected, show nothing
-    if (!isConnected) {
-      return null;
+    if (isNotConnected || !isConnected) {
+      return { type: 'unknown' };
     }
     
-    // ✅ When loading or initial load not complete, show NOTHING
-    if (!isInitialLoadComplete) {
-      return null;
+    // ✅ When loading or waiting, show NOTHING
+    if (isLoading || isWaiting) {
+      return { type: 'loading' };
     }
     
-    // Only show status when we have a definitive state
+    // ✅ Only show status when we have a definitive state
     if (isDeviceOnline) {
-      return { text: '● Online', color: '#4CAF50' };
+      return { type: 'online', text: '● Online', color: '#4CAF50' };
     }
     
     if (isDeviceOffline) {
-      return { text: '● Offline', color: '#f44336' };
+      return { type: 'offline', text: '● Offline', color: '#f44336' };
     }
     
-    return null;
-  };
+    return { type: 'unknown' };
+  }, [isNotConnected, isConnected, isLoading, isWaiting, isDeviceOnline, isDeviceOffline]);
 
-  const statusInfo = getStatusInfo();
+  // ── ✅ DEVICE READY STATE (stable, no flicker) ──
+  const isDeviceReady = useMemo(() => {
+    return isConnected && isInitialLoadComplete && isDeviceOnline && !isResuming && !isLoading && !isWaiting;
+  }, [isConnected, isInitialLoadComplete, isDeviceOnline, isResuming, isLoading, isWaiting]);
+
+  // ── AppState listener for resume handling ──
+  useEffect(() => {
+    isMountedRef.current = true;
+    
+    const subscription = AppState.addEventListener("change", (nextAppState) => {
+      const previousAppState = appStateRef.current;
+      
+      if (nextAppState === "active" && previousAppState !== "active") {
+        console.log("📱 Config: App resumed");
+        setIsResuming(true);
+        
+        if (resumeTimeoutRef.current) {
+          clearTimeout(resumeTimeoutRef.current);
+        }
+        
+        resumeTimeoutRef.current = setTimeout(() => {
+          if (isMountedRef.current) {
+            setIsResuming(false);
+          }
+          resumeTimeoutRef.current = null;
+        }, 1500);
+      }
+      
+      if (nextAppState === "background") {
+        console.log("📱 Config: App backgrounded");
+        if (resumeTimeoutRef.current) {
+          clearTimeout(resumeTimeoutRef.current);
+          resumeTimeoutRef.current = null;
+        }
+        if (isMountedRef.current) {
+          setIsResuming(false);
+        }
+      }
+      
+      appStateRef.current = nextAppState;
+    });
+    
+    return () => {
+      isMountedRef.current = false;
+      subscription.remove();
+      if (resumeTimeoutRef.current) {
+        clearTimeout(resumeTimeoutRef.current);
+        resumeTimeoutRef.current = null;
+      }
+    };
+  }, []);
 
   // Load device config from context
   useEffect(() => {
@@ -247,34 +322,92 @@ export default function ConfigScreen() {
     return errors;
   };
 
-  // ── Auto-publish on auto_mode toggle — wait for device response ──
+  // ── Helper function to handle publish result ──
+  const handlePublishResult = (result, action) => {
+    // Check if result is a boolean (old format) or object (new format)
+    const isSuccess = typeof result === 'boolean' ? result : result?.success;
+    const errorMsg = typeof result === 'object' ? result?.error : null;
+    
+    if (isSuccess) {
+      setPublishError(null);
+      return { success: true };
+    } else {
+      setPublishError(errorMsg || 'Unknown error occurred');
+      return { success: false, error: errorMsg || 'Unknown error occurred' };
+    }
+  };
+
+  // ── Auto-publish on auto_mode toggle ──
   const handleAutoModePublish = async (autoModeValue) => {
-    if (!isConnected) return;
-    if (!externalKey) return;
-    if (!config.report_interval || !config.sampling_interval) return;
+    if (!isConnected) {
+      Alert.alert("Not Connected", "Please wait for device to connect.");
+      return;
+    }
+    if (!externalKey) {
+      Alert.alert("Error", "No device selected.");
+      return;
+    }
+    if (!config.report_interval || !config.sampling_interval) {
+      Alert.alert("Missing Values", "Please set Report and Sampling intervals first.");
+      return;
+    }
+    if (!isDeviceReady) {
+      Alert.alert(
+        "Device Not Ready",
+        isDeviceOffline
+          ? "Device is offline. Please wait for device to connect."
+          : isResuming
+          ? "App is resuming. Please wait a moment."
+          : "Device is still connecting. Please wait."
+      );
+      return;
+    }
 
     setPublishing(true);
+    setPublishError(null);
+    
     try {
       const configToSend = {
         report_interval: config.report_interval,
         sampling_interval: config.sampling_interval,
         auto_mode: autoModeValue,
       };
-      const success = await publishConfig(externalKey, configToSend);
+
+      console.log('📤 Publishing auto mode:', {
+        deviceKey: externalKey,
+        config: configToSend,
+        isConnected,
+        isDeviceReady,
+      });
+
+      const result = await publishConfig(externalKey, configToSend);
+      console.log('📥 Auto mode publish result:', result);
+      
+      const { success, error } = handlePublishResult(result, 'auto mode');
+      
       if (success) {
-        console.log(`✅ Auto mode ${autoModeValue ? 'ON' : 'OFF'} published — waiting for device response...`);
+        console.log(`✅ Auto mode ${autoModeValue ? 'ON' : 'OFF'} published`);
+        addAlert?.("success", `Auto mode ${autoModeValue ? 'ON' : 'OFF'}`, "Configuration updated successfully");
       } else {
         setConfig((c) => ({ ...c, auto_mode: !autoModeValue }));
+        Alert.alert(
+          "Publish Failed", 
+          `Failed to update auto mode: ${error}\nPlease try again.`
+        );
       }
     } catch (error) {
       console.error('Auto mode publish error:', error);
       setConfig((c) => ({ ...c, auto_mode: !autoModeValue }));
+      Alert.alert(
+        "Error", 
+        error.message || "Failed to publish auto mode. Please try again."
+      );
     } finally {
       setPublishing(false);
     }
   };
 
-  // ── Publish configuration using MQTT context ──
+  // ── Publish configuration ──
   const handlePublish = async () => {
     const errors = validateConfig();
     if (errors.length > 0) {
@@ -303,19 +436,24 @@ export default function ConfigScreen() {
       return;
     }
 
-    // ✅ Check if device is actually online
-    if (!isDeviceOnline) {
+    if (!isDeviceReady) {
       Alert.alert(
-        "Device Offline",
-        !isInitialLoadComplete
-          ? "Device is still connecting. Please wait for the device to come online before publishing configuration."
-          : "Device is offline. Please make sure the device is connected and try again."
+        "Device Not Ready",
+        isDeviceOffline
+          ? "Device is offline. Please make sure the device is connected and try again."
+          : isResuming
+          ? "App is resuming. Please wait a moment and try again."
+          : isLoading || isWaiting
+          ? "Device is still connecting. Please wait for the device to come online."
+          : "Device is not ready. Please wait."
       );
       return;
     }
 
     setPublishing(true);
     setShowError(false);
+    setPublishError(null);
+    
     try {
       const configToSend = {
         report_interval: config.report_interval,
@@ -323,7 +461,19 @@ export default function ConfigScreen() {
         auto_mode: config.auto_mode,
       };
 
-      const success = await publishConfig(externalKey, configToSend);
+      console.log('📤 Publishing config:', {
+        deviceKey: externalKey,
+        config: configToSend,
+        isConnected,
+        isDeviceReady,
+        connectionState,
+        isDeviceOnline,
+      });
+
+      const result = await publishConfig(externalKey, configToSend);
+      console.log('📥 Publish result:', result);
+      
+      const { success, error } = handlePublishResult(result, 'config');
 
       if (success) {
         const summary =
@@ -333,12 +483,24 @@ export default function ConfigScreen() {
           `✅ Configuration sent to: ${selectedDeviceName || externalKey}`;
 
         Alert.alert("✅ Configuration Published", summary);
+        setPublishError(null);
       } else {
-        Alert.alert("❌ Publish Failed", "Could not publish configuration. Please try again.");
+        Alert.alert(
+          "❌ Publish Failed", 
+          `${error}\n\nPlease check:\n• Device is online\n• Connection is stable\n• Try again in a moment`
+        );
       }
     } catch (error) {
-      console.error("Publish error:", error);
-      Alert.alert("Error", String(error));
+      console.error("Publish error details:", {
+        message: error.message,
+        stack: error.stack,
+        config: configToSend,
+      });
+      
+      Alert.alert(
+        "❌ Publish Error", 
+        error.message || "An unexpected error occurred. Please try again."
+      );
     } finally {
       setPublishing(false);
     }
@@ -357,6 +519,11 @@ export default function ConfigScreen() {
     );
   }
 
+  // ✅ Determine what to show
+  const showStatusBadge = deviceStatus.type === 'online' || deviceStatus.type === 'offline';
+  const showDeviceDot = deviceStatus.type === 'online' || deviceStatus.type === 'offline';
+  const showWarning = deviceStatus.type === 'offline';
+
   return (
     <ScrollView
       ref={scrollRef}
@@ -368,7 +535,7 @@ export default function ConfigScreen() {
       onScroll={onScroll}
       scrollEventThrottle={16}
     >
-      {/* Header with Connection Status and Device Info */}
+      {/* ── Header ── */}
       <View style={styles.headerRow}>
         <View>
           <Text style={[styles.title, { color: theme.colors.text }]}>
@@ -380,20 +547,19 @@ export default function ConfigScreen() {
             </Text>
           )}
         </View>
-        {/* ✅ FIX: Show status ONLY when not loading and we have a definitive state */}
-        {statusInfo && (
+        {showStatusBadge && (
           <View style={[
             styles.statusBadge,
-            { backgroundColor: statusInfo.color }
+            { backgroundColor: deviceStatus.color }
           ]}>
             <Text style={[styles.statusText, { color: '#fff' }]}>
-              {statusInfo.text}
+              {deviceStatus.text}
             </Text>
           </View>
         )}
       </View>
 
-      {/* Device Info */}
+      {/* ── Device Info ── */}
       {externalKey && (
         <View style={[
           styles.deviceInfo,
@@ -406,14 +572,16 @@ export default function ConfigScreen() {
           <Text style={[styles.deviceId, { color: theme.colors.text }]}>
             Device: {externalKey}
           </Text>
-          {/* ✅ Only show dot when online, nothing when loading/offline */}
-          {isDeviceOnline && isInitialLoadComplete && (
-            <View style={[styles.onlineDot, { backgroundColor: '#4CAF50' }]} />
+          {showDeviceDot && (
+            <View style={[
+              styles.onlineDot, 
+              { backgroundColor: deviceStatus.type === 'online' ? '#4CAF50' : '#f44336' }
+            ]} />
           )}
         </View>
       )}
 
-      {/* Device Configuration Section */}
+      {/* ── Device Configuration Section ── */}
       <View
         style={[
           styles.section,
@@ -457,18 +625,17 @@ export default function ConfigScreen() {
             </Text>
             <Text style={[styles.requiredBadge, { color: '#F44336' }]}>*</Text>
           </View>
-          {/* ✅ FIX: Disable switch when device is offline or loading */}
           <Switch
             value={config.auto_mode}
             onValueChange={(v) => {
               handleAutoModePublish(v);
             }}
-            disabled={publishing || !isConnected || !isDeviceOnline}
+            disabled={publishing || !isDeviceReady}
             {...switchColors}
           />
         </View>
 
-        {/* Show current values with validation status */}
+        {/* ── Current Values ── */}
         <View style={[styles.currentValuesContainer, { 
           backgroundColor: showError && (!config.report_interval || !config.sampling_interval) 
             ? 'rgba(244,67,54,0.08)' 
@@ -517,17 +684,22 @@ export default function ConfigScreen() {
               ⚠️ Please set all required fields before publishing.
             </Text>
           )}
+          {publishError && (
+            <Text style={[styles.errorText, { color: '#F44336' }]}>
+              ❌ Error: {publishError}
+            </Text>
+          )}
         </View>
 
-        {/* ✅ FIX: Publish button - only enabled when device is online and initial load complete */}
+        {/* ── Publish Button ── */}
         <Pressable
           onPress={handlePublish}
-          disabled={publishing || !isConnected || !isDeviceOnline || !isInitialLoadComplete}
+          disabled={publishing || !isDeviceReady}
           style={[
             styles.publishButton,
             { 
-              backgroundColor: (isConnected && isDeviceOnline && isInitialLoadComplete) ? theme.colors.primary : '#888',
-              opacity: publishing || !isConnected || !isDeviceOnline || !isInitialLoadComplete ? 0.6 : 1 
+              backgroundColor: isDeviceReady ? theme.colors.primary : '#888',
+              opacity: publishing || !isDeviceReady ? 0.6 : 1 
             },
           ]}
         >
@@ -537,16 +709,20 @@ export default function ConfigScreen() {
           </Text>
         </Pressable>
 
-        {/* ✅ FIX: Show warning ONLY when device is definitely offline */}
-        {isConnected && isDeviceOffline && (
+        {/* ── Warnings (ONLY when definitive) ── */}
+        {showWarning && (
           <Text style={[styles.warningText, { color: '#f44336' }]}>
             ⚠️ Device is offline. Please wait for device to connect.
           </Text>
         )}
-        {/* ✅ REMOVED: "Not connected" and "Connecting..." warnings - show nothing */}
+        {isResuming && !showWarning && (
+          <Text style={[styles.warningText, { color: '#FF9800' }]}>
+            ⏳ App is resuming. Please wait a moment...
+          </Text>
+        )}
       </View>
 
-      {/* Notifications Section */}
+      {/* ── Notifications Section ── */}
       <View
         style={[
           styles.section,
@@ -594,7 +770,7 @@ export default function ConfigScreen() {
         </View>
       </View>
 
-      {/* Appearance Section */}
+      {/* ── Appearance Section ── */}
       <View
         style={[
           styles.section,
