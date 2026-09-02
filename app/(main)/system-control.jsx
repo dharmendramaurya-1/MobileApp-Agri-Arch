@@ -523,7 +523,7 @@ export default function SystemControl() {
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <ScrollView
         ref={scrollRef}
-        contentContainerStyle={{ paddingTop: headerHeight, paddingBottom: 80 }}
+        contentContainerStyle={{ paddingTop: headerHeight, }}
         onScroll={Animated.event(
           [{ nativeEvent: { contentOffset: { y: useScroll().scrollY } } }],
           { useNativeDriver: false }
@@ -555,7 +555,7 @@ export default function SystemControl() {
         </View>
 
         {/* ── Device Info ── */}
-        {deviceKey && (
+        {/* {deviceKey && (
           <View style={[
             styles.deviceInfo,
             {
@@ -567,12 +567,12 @@ export default function SystemControl() {
             <Text style={[styles.deviceIdText, { color: theme.colors.text }]}>
               Device: {deviceKey.slice(0, 12)}...
             </Text>
-            {/* ✅ Show dot ONLY when online, NOTHING when loading */}
+           
             {isDeviceOnline && isInitialLoadComplete && (
               <View style={[styles.onlineDot, { backgroundColor: '#4CAF50' }]} />
             )}
           </View>
-        )}
+        )} */}
 
         {/* ── Status Badge - ONLY show when definitive ── */}
         {statusDisplay && (
