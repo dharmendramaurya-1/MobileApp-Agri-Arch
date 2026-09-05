@@ -476,8 +476,6 @@ export const fetchSensorHistorical = async ({
     const shortName = getSenMLName(sensorKey);
     const fullName = `urn:dev:${externalKey}:${shortName}`;
 
-    console.log(`📡 Fetch sensor historical: ${sensorKey} (${fullName})`);
-    console.log(`   Publisher: ${publisherId} | limit=${limit} offset=${offset}`);
 
     const params = {
       publisher: publisherId,
@@ -504,15 +502,6 @@ export const fetchSensorHistorical = async ({
     }));
 
     // ✅ Log API response for debugging total mismatch
-    console.log(`📡 API Response for ${fullName}:`);
-    console.log(`   messages count: ${messages.length}`);
-    console.log(`   API total: ${data.total}`);
-    console.log(`   API limit: ${data.limit}, offset: ${data.offset}`);
-    console.log(`   Request params: limit=${limit}, offset=${offset}`);
-    if (messages.length > 0) {
-      console.log(`   First msg time: ${messages[0].time ? new Date(messages[0].time).toLocaleString() : 'N/A'}`);
-      console.log(`   Last msg time: ${messages[messages.length-1].time ? new Date(messages[messages.length-1].time).toLocaleString() : 'N/A'}`);
-    }
 
     return {
       success: true,

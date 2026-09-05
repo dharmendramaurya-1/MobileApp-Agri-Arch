@@ -942,6 +942,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 16,
     marginBottom: 12,
+    marginTop: 12,
   },
   headerLeft: { flex: 1, marginRight: 10 },
   headerActions: {
