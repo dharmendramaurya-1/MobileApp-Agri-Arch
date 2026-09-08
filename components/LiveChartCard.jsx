@@ -76,7 +76,7 @@ export default function LiveChartCard({
   themeColors,
   chartWidth = INLINE_W,
   chartHeight = 210,
-  emptyText = "Waiting for live MQTT data…",
+  emptyText = "Waiting for live data…",
   stats,
   dotsLimit = 80,
 }) {
