@@ -16,7 +16,6 @@ const toMilliseconds = (ns) => ns / 1000000;
 
 /**
  * Maps frontend sensor keys (dataKey) to the actual SenML record names
- * used by the device (e.g. "urn:dev:9003718EEB3F:ATMP").
  */
 const SENSOR_NAME_MAP = {
   ambientTemperature: "ATMP",
@@ -34,7 +33,7 @@ const SENSOR_NAME_MAP = {
 /**
  * Resolve the SenML record name for a sensor dataKey
  */
-const getSenMLName = (sensorKey) => SENSOR_NAME_MAP[sensorKey] || sensorKey;
+export const getSenMLName = (sensorKey) => SENSOR_NAME_MAP[sensorKey] || sensorKey;
 
 /**
  * Search SenML data from the server
@@ -60,7 +59,6 @@ export const searchSenML = async (params) => {
       name = null
     } = params;
 
-    // Convert milliseconds to nanoseconds for API
     const fromNs = from ? toNanoseconds(from) : null;
     const toNs = to ? toNanoseconds(to) : null;
 
@@ -95,7 +93,6 @@ export const searchSenML = async (params) => {
     console.log("✅ SenML search successful");
     console.log("   Response status:", response.status);
     
-    // ✅ Handle different response structures
     const data = response.data;
     const messages = data?.messages || [];
     const total = data?.total || 0;
@@ -103,11 +100,9 @@ export const searchSenML = async (params) => {
     console.log("   Total records:", total);
     console.log("   Messages count:", messages.length);
 
-    // Parse the messages - convert time from nanoseconds to milliseconds
     const parsedMessages = messages.map((msg) => ({
       ...msg,
       timeMs: msg.time ? toMilliseconds(msg.time) : null,
-      // Extract the actual sensor name from the full name
       sensorName: msg.name ? msg.name.split(':').pop() : null,
     }));
 
@@ -144,10 +139,52 @@ export const searchSenML = async (params) => {
 };
 
 /**
+ * Get all sensor data for a time range
+ */
+export const getAllSensorData = async (from, to, limit = 1000) => {
+  const result = await searchSenML({
+    from: from,
+    to: to,
+    limit: limit,
+    offset: 0,
+  });
+
+  if (!result.success) {
+    return {
+      success: false,
+      error: result.error,
+      data: {},
+      total: 0,
+    };
+  }
+
+  const groupedData = {};
+  result.messages.forEach((msg) => {
+    const sensorName = msg.sensorName || msg.name;
+    if (!groupedData[sensorName]) {
+      groupedData[sensorName] = [];
+    }
+    
+    groupedData[sensorName].push({
+      time: msg.timeMs,
+      value: msg.value !== undefined ? msg.value : (msg.bool_value ? 1 : 0),
+      unit: msg.unit || '',
+      bool_value: msg.bool_value,
+    });
+  });
+
+  return {
+    success: true,
+    data: groupedData,
+    total: result.total,
+    raw: result.messages,
+  };
+};
+
+/**
  * Get data for a specific time range with sensor name mapping
  */
 export const getSensorDataByTimeRange = async (from, to, limit = 500, sensorKey = null) => {
-  // Map sensor key to its actual SenML record name if provided
   let nameFilter = null;
   if (sensorKey) {
     nameFilter = getSenMLName(sensorKey);
@@ -170,7 +207,6 @@ export const getSensorDataByTimeRange = async (from, to, limit = 500, sensorKey 
     };
   }
 
-  // Group data by sensor name
   const groupedData = {};
   result.messages.forEach((msg) => {
     const sensorName = msg.sensorName || msg.name;
@@ -215,7 +251,6 @@ export const getWeeklySensorData = async (sensorKey, days = 7) => {
     };
   }
 
-  // Get the specific sensor data from grouped result
   const sensorName = getSenMLName(sensorKey);
   const sensorData = result.data[sensorName] || [];
 
@@ -229,9 +264,7 @@ export const getWeeklySensorData = async (sensorKey, days = 7) => {
 };
 
 /**
- * Fetch a single page of historical data for one sensor within a time range.
- * The API returns { messages, total, offset, limit, dir } so callers can
- * paginate through the full result set.
+ * Get paginated sensor data
  */
 export const getPaginatedSensorData = async ({
   sensorKey,
@@ -264,7 +297,6 @@ export const getPaginatedSensorData = async ({
     };
   }
 
-  // Normalize each record to { time (ms), value, unit }
   const data = result.messages.map((msg) => ({
     time: msg.timeMs,
     value: msg.value !== undefined ? msg.value : (msg.bool_value ? 1 : 0),
@@ -282,8 +314,7 @@ export const getPaginatedSensorData = async ({
 };
 
 /**
- * Fetch ALL historical data points for a sensor within a time range by
- * walking through every page of the API (used by the Graph tab).
+ * Get all historical data for a sensor
  */
 export const getAllHistoricalData = async ({
   sensorKey,
@@ -313,7 +344,6 @@ export const getAllHistoricalData = async ({
       total = result.total;
       all.push(...result.data);
 
-      // Stop when we've collected everything
       if (all.length >= total || result.data.length < pageSize) break;
       offset += pageSize;
     }
@@ -322,23 +352,18 @@ export const getAllHistoricalData = async ({
     return { success: false, error: error.message, data: all, total: all.length };
   }
 
-  // Sort oldest → newest for charting
   all.sort((a, b) => a.time - b.time);
 
   return { success: true, data: all, total: total || all.length };
 };
 
-
 /**
- * Get all sensor data for a specific timestamp (snapshot)
+ * Get snapshot data for a specific timestamp
  */
 export const getSnapshotData = async (timestamp) => {
-  const fromNs = toNanoseconds(timestamp);
-  const toNs = fromNs + 1000000000; // Add 1 second in nanoseconds
-
   const result = await searchSenML({
     from: timestamp,
-    to: timestamp + 1000, // 1 second in milliseconds
+    to: timestamp + 1000,
     limit: 100,
     offset: 0,
   });
@@ -351,7 +376,6 @@ export const getSnapshotData = async (timestamp) => {
     };
   }
 
-  // Parse the data into a key-value map
   const snapshot = {};
   result.messages.forEach((msg) => {
     const sensorName = msg.sensorName || msg.name;
@@ -369,18 +393,12 @@ export const getSnapshotData = async (timestamp) => {
   };
 };
 
-
 /**
  * Get SenML data for a publisher
- *
- * API:
- * GET /reader/senml?publisher=<publisher_id>
  */
 export const getSenMLByPublisher = async (publisherId = null) => {
   try {
     const authToken = await AsyncStorage.getItem("authToken");
-
-    // If publisherId is not passed, get it from AsyncStorage
     const storedPublisherId = await AsyncStorage.getItem("publisher_id");
     const publisher = publisherId || storedPublisherId;
 
@@ -419,13 +437,9 @@ export const getSenMLByPublisher = async (publisherId = null) => {
 
   } catch (error) {
     console.error("❌ Get SenML error:");
-
     if (error.response) {
       console.error("   Status:", error.response.status);
-      console.error(
-        "   Data:",
-        JSON.stringify(error.response.data, null, 2)
-      );
+      console.error("   Data:", JSON.stringify(error.response.data, null, 2));
     } else if (error.request) {
       console.error("   No response received");
     } else {
@@ -434,26 +448,15 @@ export const getSenMLByPublisher = async (publisherId = null) => {
 
     return {
       success: false,
-      error:
-        error.response?.data?.message ||
-        error.message ||
-        "Failed to get SenML data",
+      error: error.response?.data?.message || error.message || "Failed to get SenML data",
       data: null,
       status: error.response?.status || 500,
     };
   }
 };
 
-
 /**
- * Fetch historical data for a single sensor using GET /reader/senml
- * with the full URN name filter.
- *
- * Example URL:
- *   GET /reader/senml?publisher=<publisher_id>&name=urn:dev:<ext_key>:ATMP
- *
- * This is the primary fetch function — it constructs the full SenML URN
- * (e.g. urn:dev:9003718EEB3F:ATMP) and returns paginated results.
+ * Fetch historical data for a single sensor
  */
 export const fetchSensorHistorical = async ({
   sensorKey,
@@ -503,16 +506,10 @@ export const fetchSensorHistorical = async ({
       sensorName: msg.name ? msg.name.split(":").pop() : null,
     }));
 
-    // ✅ Log API response for debugging total mismatch
     console.log(`📡 API Response for ${fullName}:`);
     console.log(`   messages count: ${messages.length}`);
     console.log(`   API total: ${data.total}`);
     console.log(`   API limit: ${data.limit}, offset: ${data.offset}`);
-    console.log(`   Request params: limit=${limit}, offset=${offset}`);
-    if (messages.length > 0) {
-      console.log(`   First msg time: ${messages[0].time ? new Date(messages[0].time).toLocaleString() : 'N/A'}`);
-      console.log(`   Last msg time: ${messages[messages.length-1].time ? new Date(messages[messages.length-1].time).toLocaleString() : 'N/A'}`);
-    }
 
     return {
       success: true,
@@ -533,8 +530,7 @@ export const fetchSensorHistorical = async ({
 };
 
 /**
- * Fetch ALL historical data for a sensor by walking through every page.
- * Used by the Graph tab so the chart gets every data point.
+ * Fetch ALL historical data for a sensor
  */
 export const fetchAllSensorHistorical = async ({
   sensorKey,
@@ -568,7 +564,6 @@ export const fetchAllSensorHistorical = async ({
       total = result.total;
       all.push(...result.data);
 
-      // Stop when we've collected everything
       if (all.length >= total || result.data.length < pageSize) break;
       offset += pageSize;
     }
@@ -577,19 +572,13 @@ export const fetchAllSensorHistorical = async ({
     return { success: false, error: error.message, data: all, total: all.length };
   }
 
-  // Sort oldest → newest for charting
   all.sort((a, b) => (a.time || 0) - (b.time || 0));
 
   return { success: true, data: all, total: total || all.length };
 };
 
-
 /**
- * Downsample an array of { time, value, ... } objects so that at most
- * `maxPoints` evenly-spaced entries are returned.
- *
- * Algorithm: divide the time range into `maxPoints` equal buckets and
- * pick the entry closest to the centre of each bucket.
+ * Downsample data for charts
  */
 export const downsampleData = (data, maxPoints = 200) => {
   if (!data || data.length <= maxPoints) return data;
@@ -618,5 +607,7 @@ export default {
   fetchAllSensorHistorical,
   getSnapshotData,
   getSenMLByPublisher,
+  getAllSensorData,
   downsampleData,
+  getSenMLName,
 };

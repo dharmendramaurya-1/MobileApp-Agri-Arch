@@ -1,6 +1,6 @@
 // components/AlertList.jsx
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -13,104 +13,56 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAlerts } from '../src/context/AlertContext';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 
 export const AlertList = ({ onClose }) => {
-  const { alerts, markAsRead, clearAlerts, markAllAsRead } = useAlerts();
-  const [swipedId, setSwipedId] = useState(null);
-  const [flickerAnim] = useState(new Animated.Value(1));
+  const { alerts, alertCount, clearAlerts, removeAlertById } = useAlerts();
+  const insets = useSafeAreaInsets();
 
   const colors = {
-    background: '#f5f7fa',
+    background: '#f2f4f8',
     surface: '#ffffff',
     text: '#1a1a2e',
     textSecondary: '#6b7280',
     border: '#e5e7eb',
-    primary: '#4CAF50',
     error: '#ef4444',
     warning: '#f59e0b',
-    success: '#10b981',
+    success: '#22c55e',
     info: '#3b82f6',
   };
 
-  // Show ALL alerts
-  const dataAlerts = alerts;
+  const allAlerts = alerts;
 
-  // Debug logs
-  console.log('🔔 AlertList - Total alerts:', alerts.length);
-  if (alerts.length > 0) {
-    console.log('🔔 AlertList - First alert:', alerts[0]);
-  }
-
-  // ── Flicker animation for dimming > 100% ──
-  const startFlicker = () => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(flickerAnim, {
-          toValue: 0.3,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-        Animated.timing(flickerAnim, {
-          toValue: 1,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-        Animated.timing(flickerAnim, {
-          toValue: 0.5,
-          duration: 150,
-          useNativeDriver: true,
-        }),
-        Animated.timing(flickerAnim, {
-          toValue: 1,
-          duration: 250,
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
+  // ── Get icon based on alert title ──────────────────────────────────────
+  const getAlertIcon = (title) => {
+    if (title.includes('Tank')) return 'water-outline';
+    if (title.includes('EC')) return 'flash-outline';
+    if (title.includes('pH')) return 'flask-outline';
+    if (title.includes('Light')) return 'sunny-outline';
+    if (title.includes('CO₂')) return 'leaf-outline';
+    if (title.includes('Temp')) return 'thermometer-outline';
+    if (title.includes('Humidity')) return 'water-outline';
+    if (title.includes('Fault')) return 'alert-circle-outline';
+    if (title.includes('Pump')) return 'pulse-outline';
+    if (title.includes('Valve')) return 'git-commit-outline';
+    if (title.includes('AC')) return 'snow-outline';
+    if (title.includes('Buzzer')) return 'volume-high-outline';
+    if (title.includes('Mode')) return 'settings-outline';
+    return 'notifications-outline';
   };
 
-  // Check for dimming > 100 in alerts
-  useEffect(() => {
-    const hasDimmingOver100 = dataAlerts.some(alert => 
-      alert.title && alert.title.includes('Dimming') && 
-      alert.title.includes('100') && 
-      !alert.read
-    );
-    
-    if (hasDimmingOver100) {
-      startFlicker();
-    }
-  }, [dataAlerts]);
-
-  const getSeverityIcon = (severity) => {
-    switch (severity) {
-      case 'error': return 'alert-circle';
-      case 'warning': return 'warning';
-      case 'success': return 'checkmark-circle';
-      default: return 'information-circle';
-    }
-  };
-
-  const getSeverityColor = (severity) => {
-    switch (severity) {
-      case 'error': return colors.error;
-      case 'warning': return colors.warning;
-      case 'success': return colors.success;
-      default: return colors.info;
-    }
-  };
-
-  const getSeverityBg = (severity) => {
-    switch (severity) {
-      case 'error': return '#fef2f2';
-      case 'warning': return '#fffbeb';
-      case 'success': return '#ecfdf5';
-      default: return '#eff6ff';
-    }
+  const getAlertColor = (title) => {
+    if (title.includes('LOW') || title.includes('FAULT')) return colors.error;
+    if (title.includes('HIGH')) return colors.warning;
+    if (title.includes('ON') || title.includes('OPEN')) return colors.success;
+    if (title.includes('OFF') || title.includes('CLOSED')) return colors.textSecondary;
+    if (title.includes('AUTO')) return colors.info;
+    if (title.includes('MANUAL')) return colors.warning;
+    return colors.info;
   };
 
   const getTimeDisplay = (timestamp) => {
@@ -124,24 +76,6 @@ export const AlertList = ({ onClose }) => {
     if (hours < 24) return `${hours}h`;
     if (days < 7) return `${days}d`;
     return new Date(timestamp).toLocaleDateString();
-  };
-
-  const handleDelete = (id) => {
-    Alert.alert(
-      'Delete Alert',
-      'Are you sure you want to delete this alert?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            markAsRead(id);
-            setSwipedId(null);
-          }
-        }
-      ]
-    );
   };
 
   const handleClearAll = () => {
@@ -159,216 +93,144 @@ export const AlertList = ({ onClose }) => {
     );
   };
 
-  // ── Swipeable Alert Item ──────────────────────────────────────────────
+  // ── Swipeable Alert Item (Auto-delete on 50% swipe) ──────────────────
   const SwipeableAlertItem = ({ alert }) => {
     const pan = useRef(new Animated.ValueXY()).current;
-    const [isSwiped, setIsSwiped] = useState(false);
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const panResponder = useRef(
       PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: (_, gestureState) => {
           return Math.abs(gestureState.dx) > 10;
         },
         onPanResponderMove: (_, gestureState) => {
-          if (gestureState.dx < 0 && gestureState.dx > -120) {
+          if (gestureState.dx < 0 && gestureState.dx > -width * 0.7) {
             pan.x.setValue(gestureState.dx);
           }
         },
         onPanResponderRelease: (_, gestureState) => {
-          if (gestureState.dx < -60) {
+          if (gestureState.dx < -width * 0.4) {
             Animated.spring(pan, {
-              toValue: { x: -90, y: 0 },
+              toValue: { x: -width, y: 0 },
               useNativeDriver: false,
               friction: 5,
-            }).start();
-            setIsSwiped(true);
-            setSwipedId(alert.id);
+            }).start(() => {
+              removeAlertById(alert.id);
+            });
+            setIsDeleting(true);
           } else {
             Animated.spring(pan, {
               toValue: { x: 0, y: 0 },
               useNativeDriver: false,
               friction: 5,
             }).start();
-            setIsSwiped(false);
-            setSwipedId(null);
+            setIsDeleting(false);
           }
         },
       })
     ).current;
 
-    const handleDeleteSwipe = () => {
-      handleDelete(alert.id);
-    };
+    const alertColor = getAlertColor(alert.title);
+    const alertIcon = getAlertIcon(alert.title);
 
-    const isUnread = !alert.read;
-    
-    // Check if this is a dimming alert > 100%
-    const isDimmingOver100 = alert.title && 
-      alert.title.includes('Dimming') && 
-      alert.title.includes('100');
+    if (isDeleting) return null;
+
+    const opacity = pan.x.interpolate({
+      inputRange: [-width * 0.7, 0],
+      outputRange: [0.3, 1],
+      extrapolate: 'clamp',
+    });
 
     return (
-      <View style={styles.swipeContainer}>
-        <Animated.View
-          style={[
-            styles.alertItemWrapper,
-            {
-              transform: [{ translateX: pan.x }],
-              backgroundColor: isUnread ? getSeverityBg(alert.severity) : colors.surface,
-              borderLeftColor: isUnread ? getSeverityColor(alert.severity) : colors.border,
-              borderLeftWidth: 3,
-              opacity: isDimmingOver100 ? flickerAnim : (isUnread ? 1 : 0.6),
-            },
-          ]}
-          {...panResponder.panHandlers}
-        >
-          <TouchableOpacity
-            style={styles.alertContent}
-            onPress={() => {
-              if (isUnread) markAsRead(alert.id);
-            }}
-            activeOpacity={0.7}
-          >
-            <View style={styles.alertHeader}>
-              <View style={[styles.alertIconContainer, { 
-                backgroundColor: getSeverityColor(alert.severity) + '20',
-                width: 28,
-                height: 28,
-                borderRadius: 14,
-              }]}>
-                <Ionicons
-                  name={getSeverityIcon(alert.severity)}
-                  size={16}
-                  color={getSeverityColor(alert.severity)}
-                />
-              </View>
-              <Text style={[styles.alertTitle, { color: colors.text }]} numberOfLines={1}>
+      <Animated.View
+        style={[
+          styles.alertItemWrapper,
+          {
+            transform: [{ translateX: pan.x }],
+            opacity: opacity,
+            backgroundColor: colors.surface,
+          },
+        ]}
+        {...panResponder.panHandlers}
+      >
+        <View style={styles.alertContent}>
+          <View style={styles.alertRow}>
+            <View style={[styles.iconWrapper, { backgroundColor: alertColor + '15' }]}>
+              <Ionicons name={alertIcon} size={20} color={alertColor} />
+            </View>
+            <View style={styles.alertTextContainer}>
+              <Text style={[styles.alertTitle, { color: colors.text }]}>
                 {alert.title}
               </Text>
-              {isUnread && (
-                <View style={styles.unreadDot} />
-              )}
-            </View>
-            <Text 
-              style={[styles.alertMessage, { color: colors.textSecondary }]}
-              numberOfLines={1}
-            >
-              {alert.message}
-            </Text>
-            <View style={styles.alertFooter}>
               <Text style={[styles.alertTime, { color: colors.textSecondary }]}>
                 {getTimeDisplay(alert.timestamp)}
               </Text>
-              {isDimmingOver100 && (
-                <Text style={[styles.flickerWarning, { color: colors.error }]}>
-                  ⚡ Flickering!
-                </Text>
-              )}
             </View>
-          </TouchableOpacity>
-        </Animated.View>
+            <View style={[styles.statusDot, { backgroundColor: alertColor }]} />
+          </View>
+        </View>
 
-        {/* Delete button that appears on swipe */}
-        {isSwiped && (
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={handleDeleteSwipe}
-          >
-            <Ionicons name="trash-outline" size={20} color="#FFF" />
-            <Text style={styles.deleteButtonText}>Delete</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+        <Animated.View
+          style={[
+            styles.deleteBackground,
+            {
+              opacity: pan.x.interpolate({
+                inputRange: [-width * 0.7, -width * 0.2, 0],
+                outputRange: [1, 0.8, 0],
+                extrapolate: 'clamp',
+              }),
+            },
+          ]}
+        >
+          <Ionicons name="trash-outline" size={24} color="#FFF" />
+        </Animated.View>
+      </Animated.View>
     );
   };
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
-      
-      {/* ── Header ── */}
-      <View style={[styles.header, { borderBottomColor: colors.border }]}>
-        <TouchableOpacity onPress={onClose} style={styles.backButton}>
+
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <TouchableOpacity onPress={onClose} style={styles.backButton} activeOpacity={0.7}>
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
-        <Text style={[styles.title, { color: colors.text }]}>
-          🔔 Alerts
-        </Text>
-        <View style={styles.headerActions}>
-          {dataAlerts.filter(a => !a.read).length > 0 && (
-            <TouchableOpacity onPress={markAllAsRead} style={styles.actionButton}>
-              <Text style={[styles.actionText, { color: colors.primary }]}>
-                Read All
-              </Text>
-            </TouchableOpacity>
-          )}
-          {dataAlerts.length > 0 && (
-            <TouchableOpacity onPress={handleClearAll} style={styles.actionButton}>
-              <Text style={[styles.actionText, { color: colors.error }]}>
-                Clear
-              </Text>
-            </TouchableOpacity>
+        <View style={styles.headerCenter}>
+          <Text style={[styles.title, { color: colors.text }]}>Alerts</Text>
+          {allAlerts.length > 0 && (
+            <View style={styles.countBadge}>
+              <Text style={styles.countText}>{allAlerts.length}</Text>
+            </View>
           )}
         </View>
+        {allAlerts.length > 0 ? (
+          <TouchableOpacity onPress={handleClearAll} style={styles.clearButton} activeOpacity={0.7}>
+            <Text style={[styles.clearText, { color: colors.error }]}>Clear</Text>
+          </TouchableOpacity>
+        ) : (
+          <View style={{ width: 50 }} />
+        )}
       </View>
 
-      {/* ── Stats ── */}
-      <View style={[styles.statsBar, { backgroundColor: colors.surface }]}>
-        <View style={styles.statItem}>
-          <Text style={[styles.statNumber, { color: colors.text }]}>
-            {dataAlerts.length}
-          </Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
-            Total
-          </Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={[styles.statNumber, { color: colors.info }]}>
-            {dataAlerts.filter(a => !a.read).length}
-          </Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
-            Unread
-          </Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={[styles.statNumber, { color: colors.error }]}>
-            {dataAlerts.filter(a => a.severity === 'error').length}
-          </Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
-            Errors
-          </Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={[styles.statNumber, { color: colors.warning }]}>
-            {dataAlerts.filter(a => a.severity === 'warning').length}
-          </Text>
-          <Text style={[styles.statLabel, { color: colors.textSecondary }]}>
-            Warnings
-          </Text>
-        </View>
-      </View>
-
-      {/* ── Alert List ── */}
       <ScrollView
         style={styles.scrollView}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        {dataAlerts.length === 0 ? (
+        {allAlerts.length === 0 ? (
           <View style={styles.emptyContainer}>
-            <Ionicons name="notifications-off" size={64} color="#ccc" />
-            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-              No alerts yet
-            </Text>
+            <View style={styles.emptyIconWrapper}>
+              <Ionicons name="checkmark-circle" size={56} color="#22c55e" />
+            </View>
+            <Text style={[styles.emptyTitle, { color: colors.text }]}>All Clear</Text>
             <Text style={[styles.emptySubtext, { color: colors.textSecondary }]}>
-              All clear! Your system is running smoothly.
+              No alerts at the moment
             </Text>
           </View>
         ) : (
-          dataAlerts.map((alert) => (
+          allAlerts.map((alert) => (
             <SwipeableAlertItem key={alert.id} alert={alert} />
           ))
         )}
@@ -381,176 +243,144 @@ export const AlertList = ({ onClose }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    paddingTop: height * 0.08, // Reduced from 0.1
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 12, // Reduced
-    borderBottomWidth: 1,
+    paddingBottom: 12,
+    backgroundColor: '#f2f4f8',
   },
   backButton: {
     padding: 4,
-    marginRight: 10,
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
   },
-  title: {
-    fontSize: 20, // Reduced
-    fontWeight: '700',
-    flex: 1,
-  },
-  headerActions: {
+  headerCenter: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
   },
-  actionButton: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: 'rgba(0,0,0,0.05)',
-  },
-  actionText: {
-    fontSize: 11, // Reduced
-    fontWeight: '600',
-  },
-  statsBar: {
-    flexDirection: 'row',
-    paddingVertical: 8, // Reduced
-    paddingHorizontal: 16,
-    justifyContent: 'space-around',
-    marginHorizontal: 12,
-    marginVertical: 8,
-    borderRadius: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  statItem: {
-    alignItems: 'center',
-  },
-  statNumber: {
-    fontSize: 16, // Reduced
+  title: {
+    fontSize: 18,
     fontWeight: '700',
   },
-  statLabel: {
-    fontSize: 9, // Reduced
-    marginTop: 1,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+  countBadge: {
+    backgroundColor: '#ef4444',
+    borderRadius: 12,
+    minWidth: 22,
+    height: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 6,
   },
-  statDivider: {
-    width: 1,
-    backgroundColor: '#e5e7eb',
+  countText: {
+    color: '#FFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  clearButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  clearText: {
+    fontSize: 14,
+    fontWeight: '600',
   },
   scrollView: {
     flex: 1,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
   },
   scrollContent: {
-    paddingBottom: 16,
-  },
-  swipeContainer: {
-    marginBottom: 6, // Reduced
-    position: 'relative',
+    paddingBottom: 20,
+    paddingTop: 4,
   },
   alertItemWrapper: {
-    borderRadius: 8, // Reduced
+    borderRadius: 12,
     overflow: 'hidden',
-    backgroundColor: '#fff',
+    backgroundColor: '#ffffff',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
     elevation: 1,
+    marginBottom: 8,
+    position: 'relative',
   },
   alertContent: {
-    padding: 10, // Reduced from 16
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#ffffff',
+    zIndex: 2,
   },
-  alertHeader: {
+  alertRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 3, // Reduced
   },
-  alertIconContainer: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+  iconWrapper: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 8,
+    marginRight: 12,
   },
-  alertTitle: {
-    fontSize: 13, // Reduced
-    fontWeight: '600',
+  alertTextContainer: {
     flex: 1,
   },
-  unreadDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#3b82f6',
-    marginLeft: 6,
-  },
-  alertMessage: {
-    fontSize: 12, // Reduced
-    marginLeft: 36, // Reduced
-    marginBottom: 4, // Reduced
-    lineHeight: 16,
-  },
-  alertFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginLeft: 36, // Reduced
+  alertTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 2,
   },
   alertTime: {
-    fontSize: 10, // Reduced
-    color: '#6b7280',
+    fontSize: 11,
   },
-  flickerWarning: {
-    fontSize: 10,
-    fontWeight: '600',
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginLeft: 8,
   },
-  deleteButton: {
+  deleteBackground: {
     position: 'absolute',
     right: 0,
     top: 0,
     bottom: 0,
-    width: 80, // Reduced
+    width: '100%',
     backgroundColor: '#ef4444',
     justifyContent: 'center',
-    alignItems: 'center',
-    borderTopRightRadius: 8,
-    borderBottomRightRadius: 8,
-    flexDirection: 'row',
-    gap: 4,
-  },
-  deleteButtonText: {
-    color: '#FFF',
-    fontSize: 12,
-    fontWeight: '600',
+    alignItems: 'flex-end',
+    paddingRight: 20,
+    borderRadius: 12,
   },
   emptyContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingVertical: 60,
+    paddingVertical: 80,
   },
-  emptyText: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginTop: 12,
-    color: '#6b7280',
+  emptyIconWrapper: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#22c55e15',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 4,
   },
   emptySubtext: {
-    fontSize: 12,
-    marginTop: 6,
-    color: '#6b7280',
+    fontSize: 14,
     textAlign: 'center',
   },
   bottomSpacer: {
-    height: 16,
+    height: 20,
   },
 });

@@ -10,137 +10,127 @@ const SENSOR_DATA = [
   {
     key: "ambient-temperature",
     dataKey: "ambientTemperature",
-    _apiName: "temp",
+    _apiName: "ATMP",
     name: "Ambient Temperature",
     title: "Ambient Temperature",
     location: "Greenhouse",
     unit: "°C",
     icon: "thermometer-outline",
     color: "#FF5722",
-    maxValue: 50,
-    min: 18,
-    max: 32,
   },
   {
     key: "ambient-humidity",
     dataKey: "ambientHumidity",
-    _apiName: "temphumidity",
+    _apiName: "HUMI",
     name: "Ambient Humidity",
     title: "Ambient Humidity",
     location: "Greenhouse",
     unit: "%",
     icon: "water-outline",
     color: "#2196F3",
-    maxValue: 100,
-    min: 40,
-    max: 70,
   },
   {
     key: "co2",
     dataKey: "co2Level",
-    _apiName: "tempco2",
+    _apiName: "co2",
     name: "CO₂ Level",
     title: "CO₂ Level",
     location: "Greenhouse",
     unit: "ppm",
     icon: "leaf",
     color: "#9C27B0",
-    maxValue: 2000,
-    min: 400,
-    max: 450,
   },
   {
     key: "light-level",
     dataKey: "lightLevel",
-    _apiName: "templux",
+    _apiName: "lux",
     name: "Light Level",
     title: "Light Level",
     location: "Greenhouse",
     unit: "lux",
     icon: "sunny-outline",
     color: "#FFC107",
-    maxValue: 100000,
-    min: 3000,
-    max: 8000,
   },
   {
     key: "ph-level",
     dataKey: "phValue",
-    _apiName: "tempph",
+    _apiName: "ph",
     name: "pH Value",
     title: "pH Level",
     location: "Field A",
     unit: "pH",
     icon: "flask",
     color: "#4CAF50",
-    maxValue: 14,
-    min: 6.5,
-    max: 7.0,
   },
   {
     key: "ec-value",
     dataKey: "ecValue",
-    _apiName: "tempec",
+    _apiName: "ec",
     name: "EC Value",
     title: "EC Value",
     location: "Field A",
     unit: "mS/cm",
     icon: "flash",
     color: "#00BCD4",
-    maxValue: 10,
-    min: 1.5,
-    max: 2.0,
   },
   {
     key: "water-temperature",
     dataKey: "waterTemperature",
-    _apiName: "tempwater_temp",
+    _apiName: "WATTMP",
     name: "Water Temperature",
     title: "Water Temperature",
     location: "Water Tank",
     unit: "°C",
     icon: "water-outline",
     color: "#03A9F4",
-    maxValue: 50,
-    min: 18,
-    max: 26,
   },
   {
     key: "water-level",
     dataKey: "waterLevel",
-    _apiName: "templevel",
+    _apiName: "level",
     name: "Water Level",
     title: "Water Level",
     location: "Water Tank",
     unit: "%",
     icon: "water",
     color: "#2E7D32",
-    maxValue: 100,
-    min: 30,
-    max: 90,
+  },
+  {
+    key: "soil-moisture",
+    dataKey: "soilMoisture",
+    _apiName: "soil_moisture",
+    name: "Soil Moisture",
+    title: "Soil Moisture",
+    location: "Field",
+    unit: "%",
+    icon: "leaf",
+    color: "#8D6E63",
+  },
+  {
+    key: "device-status",
+    dataKey: "deviceStatus",
+    _apiName: "DevStat",
+    name: "Device Status",
+    title: "Device Status",
+    location: "System",
+    unit: "",
+    icon: "hardware-chip-outline",
+    color: "#4CAF50",
   },
 ];
 
 /**
- * Find a sensor by its route slug, e.g. "co2"
+ * Find a sensor by its route slug, e.g. "ambient-temperature"
  */
 export function getSensorByKey(key) {
   return SENSOR_DATA.find((s) => s.key === key);
 }
 
 /**
- * Find a sensor by its MQTT sensorData field name, e.g. "co2Level"
+ * Find a sensor by its MQTT sensorData field name, e.g. "ambientTemperature"
  */
 export function getSensorByDataKey(dataKey) {
   return SENSOR_DATA.find((s) => s.dataKey === dataKey);
-}
-
-/**
- * Get API name for a sensor (internal use)
- */
-export function getApiNameByDataKey(dataKey) {
-  const sensor = getSensorByDataKey(dataKey);
-  return sensor?._apiName || dataKey;
 }
 
 /**
@@ -151,7 +141,16 @@ export function getApiNameByKey(key) {
   return sensor?._apiName || key;
 }
 
-// ✅ Export the full sensor data (including internal fields)
+/**
+ * Get API name for a sensor by dataKey (internal use)
+ */
+export function getApiNameByDataKey(dataKey) {
+  const sensor = getSensorByDataKey(dataKey);
+  return sensor?._apiName || dataKey;
+}
+
+// ✅ Export the full sensor data
 export const SENSORS = SENSOR_DATA;
 
+// ✅ Default export
 export default SENSORS;

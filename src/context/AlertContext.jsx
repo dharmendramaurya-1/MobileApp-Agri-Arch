@@ -1,6 +1,5 @@
 // src/context/AlertContext.jsx
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { Alert as RNAlert } from 'react-native';
 import { useMqtt } from './MqttContext';
 
 const AlertContext = createContext(undefined);
@@ -8,272 +7,181 @@ const AlertContext = createContext(undefined);
 export const AlertProvider = ({ children }) => {
   const { 
     deviceStatusFlags, 
-    actuatorStatus,
     hasReceivedData,
   } = useMqtt();
   
   const [alerts, setAlerts] = useState([]);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const previousActuatorState = useRef({});
-  const previousFlagsState = useRef({});
-  const initialLoadRef = useRef(true);
+  const previousState = useRef({});
+  const isInitialLoad = useRef(true);
 
   // ── Generate alert ID ────────────────────────────────────────────────────
   const generateAlertId = () => {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+    return `alert_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
   };
 
   // ── Add alert ────────────────────────────────────────────────────────────
-  const addAlert = (type, title, message, severity = 'info', showNative = true) => {
+  const addAlert = (title, message) => {
+    // Check if this exact alert already exists
+    const exists = alerts.some(alert => alert.title === title);
+    
+    if (exists) {
+      return null;
+    }
+
     const newAlert = {
       id: generateAlertId(),
-      type,
       title,
       message,
-      severity,
       timestamp: new Date(),
-      read: false,
     };
     
-    setAlerts(prev => [newAlert, ...prev]);
-    setUnreadCount(prev => prev + 1);
-    
-    if (showNative && (severity === 'error' || severity === 'warning') && !initialLoadRef.current) {
-      RNAlert.alert(title, message);
-    }
+    setAlerts(prev => {
+      const updated = [newAlert, ...prev];
+      if (updated.length > 50) {
+        return updated.slice(0, 50);
+      }
+      return updated;
+    });
     
     return newAlert;
   };
 
-  // ── Mark alert as read ──────────────────────────────────────────────────
-  const markAsRead = (alertId) => {
-    setAlerts(prev => prev.map(alert => 
-      alert.id === alertId ? { ...alert, read: true } : alert
-    ));
-    setUnreadCount(prev => Math.max(0, prev - 1));
+  // ── Remove alert by title ──────────────────────────────────────────────
+  const removeAlert = (title) => {
+    setAlerts(prev => prev.filter(alert => alert.title !== title));
   };
 
-  const markAllAsRead = () => {
-    setAlerts(prev => prev.map(alert => ({ ...alert, read: true })));
-    setUnreadCount(0);
+  // ── Remove alert by ID ──────────────────────────────────────────────────
+  const removeAlertById = (alertId) => {
+    setAlerts(prev => prev.filter(alert => alert.id !== alertId));
   };
 
-  // ── Clear alerts ────────────────────────────────────────────────────────
+  // ── Clear all alerts ────────────────────────────────────────────────────
   const clearAlerts = () => {
     setAlerts([]);
-    setUnreadCount(0);
   };
 
-  // ── Monitor Actuator Status Changes (PRIMARY SOURCE) ──────────────────
-  useEffect(() => {
-    if (!hasReceivedData || !actuatorStatus) return;
-    
-    console.log('📊 Actuator Status:', actuatorStatus);
-    
-    const prev = previousActuatorState.current;
-    const current = actuatorStatus;
-    
-    // ONLY show ON/OFF status for pumps and valves from actuatorStatus
-    const actuatorFields = {
-      water_pump: { 
-        label: 'Water Pump', 
-        emoji: '💧',
-        format: (val) => val ? 'ON' : 'OFF',
-        severity: (val) => val ? 'success' : 'info'
-      },
-      nutrient_pump: { 
-        label: 'Nutrient Pump', 
-        emoji: '🌿',
-        format: (val) => val ? 'ON' : 'OFF',
-        severity: (val) => val ? 'success' : 'info'
-      },
-      ph_up_pump: { 
-        label: 'pH UP Pump', 
-        emoji: '⬆️',
-        format: (val) => val ? 'ON' : 'OFF',
-        severity: (val) => val ? 'success' : 'info'
-      },
-      ph_down_pump: { 
-        label: 'pH DOWN Pump', 
-        emoji: '⬇️',
-        format: (val) => val ? 'ON' : 'OFF',
-        severity: (val) => val ? 'success' : 'info'
-      },
-      water_ILvalve: { 
-        label: 'Inlet Valve', 
-        emoji: '🚰',
-        format: (val) => val ? 'OPEN' : 'CLOSED',
-        severity: (val) => val ? 'success' : 'info'
-      },
-      water_OLvalve: { 
-        label: 'Outlet Valve', 
-        emoji: '🚿',
-        format: (val) => val ? 'OPEN' : 'CLOSED',
-        severity: (val) => val ? 'success' : 'info'
-      },
-      ac_stat: { 
-        label: 'AC Status', 
-        emoji: '❄️',
-        format: (val) => val ? 'ON' : 'OFF',
-        severity: (val) => val ? 'success' : 'info'
-      },
-      dimming_level: { 
-        label: 'Dimming Level', 
-        emoji: '💡',
-        format: (val) => `${val}%`,
-        severity: () => 'info'
-      }
-    };
-    
-    Object.entries(actuatorFields).forEach(([key, config]) => {
-      const currentVal = current[key];
-      const prevVal = prev[key];
-      
-      // Skip if value hasn't changed
-      if (currentVal === undefined || currentVal === null || currentVal === prevVal) return;
-      
-      const formattedValue = config.format(currentVal);
-      const severity = config.severity(currentVal);
-      
-      addAlert(
-        'actuator',
-        `${config.emoji} ${config.label}: ${formattedValue}`,
-        `${config.label} changed to ${formattedValue} at ${new Date().toLocaleTimeString()}`,
-        severity
-      );
-    });
-    
-    previousActuatorState.current = current;
-    
-  }, [actuatorStatus, hasReceivedData]);
-
-  // ── Monitor Device Flags Changes (ONLY SENSOR THRESHOLDS) ──────────────
+  // ── Update alerts from device flags ────────────────────────────────────
   useEffect(() => {
     if (!hasReceivedData || !deviceStatusFlags) return;
     
     console.log('📊 Device Flags:', deviceStatusFlags);
     
-    const prev = previousFlagsState.current;
     const current = deviceStatusFlags;
-    
-    // ONLY sensor threshold alerts - REMOVED pumps/valves/ac to avoid duplicates
-    const flagFields = {
-      tankLow: { 
-        label: 'Tank Level', 
-        emoji: '🪣',
-        format: (val) => val ? 'LOW ⚠️' : 'NORMAL ✅',
-        severity: (val) => val ? 'error' : 'success'
-      },
-      tankHigh: { 
-        label: 'Tank Level', 
-        emoji: '🪣',
-        format: (val) => val ? 'HIGH ⚠️' : 'NORMAL ✅',
-        severity: (val) => val ? 'warning' : 'success'
-      },
-      co2High: { 
-        label: 'CO₂', 
-        emoji: '🫧',
-        format: (val) => val ? 'HIGH ⚠️' : 'NORMAL ✅',
-        severity: (val) => val ? 'warning' : 'success'
-      },
-      co2Low: { 
-        label: 'CO₂', 
-        emoji: '🫧',
-        format: (val) => val ? 'LOW ⚠️' : 'NORMAL ✅',
-        severity: (val) => val ? 'warning' : 'success'
-      },
-      phHigh: { 
-        label: 'pH', 
-        emoji: '🧪',
-        format: (val) => val ? 'HIGH ⚠️' : 'NORMAL ✅',
-        severity: (val) => val ? 'warning' : 'success'
-      },
-      phLow: { 
-        label: 'pH', 
-        emoji: '🧪',
-        format: (val) => val ? 'LOW ⚠️' : 'NORMAL ✅',
-        severity: (val) => val ? 'warning' : 'success'
-      },
-      ecHigh: { 
-        label: 'EC', 
-        emoji: '⚡',
-        format: (val) => val ? 'HIGH ⚠️' : 'NORMAL ✅',
-        severity: (val) => val ? 'warning' : 'success'
-      },
-      ecLow: { 
-        label: 'EC', 
-        emoji: '⚡',
-        format: (val) => val ? 'LOW ⚠️' : 'NORMAL ✅',
-        severity: (val) => val ? 'warning' : 'success'
-      },
-      luxHigh: { 
-        label: 'Light', 
-        emoji: '☀️',
-        format: (val) => val ? 'HIGH ⚠️' : 'NORMAL ✅',
-        severity: (val) => val ? 'warning' : 'success'
-      },
-      luxLow: { 
-        label: 'Light', 
-        emoji: '☀️',
-        format: (val) => val ? 'LOW ⚠️' : 'NORMAL ✅',
-        severity: (val) => val ? 'warning' : 'success'
-      },
-      // ❌ REMOVED: inletValve, outletValve, waterPump, nutrientPump, acStatus
-      // These are already in actuatorStatus
-      dimmingLevel: { 
-        label: 'Dimming Level', 
-        emoji: '💡',
-        format: (val) => `${val}%`,
-        severity: () => 'info'
-      },
-      sensorFault: { 
-        label: 'Sensor Fault', 
-        emoji: '⚠️',
-        format: (val) => val ? `0x${val.toString(16)}` : 'NONE',
-        severity: (val) => val ? 'error' : 'success'
+    const prev = previousState.current;
+
+    // ──────────────────────────────────────────────────────────────────────
+    // ✅ TYPE 1: SENSOR ALERTS (High/Low) - Only show when TRUE
+    // ──────────────────────────────────────────────────────────────────────
+    const sensorAlerts = [
+      { key: 'tankLow', label: 'Tank Level', emoji: '🪣', status: 'LOW' },
+      { key: 'tankHigh', label: 'Tank Level', emoji: '🪣', status: 'HIGH' },
+      { key: 'ecHigh', label: 'EC', emoji: '⚡', status: 'HIGH' },
+      { key: 'ecLow', label: 'EC', emoji: '⚡', status: 'LOW' },
+      { key: 'phHigh', label: 'pH', emoji: '🧪', status: 'HIGH' },
+      { key: 'phLow', label: 'pH', emoji: '🧪', status: 'LOW' },
+      { key: 'luxLow', label: 'Light', emoji: '☀️', status: 'LOW' },
+      { key: 'luxHigh', label: 'Light', emoji: '☀️', status: 'HIGH' },
+      { key: 'co2High', label: 'CO₂', emoji: '🫧', status: 'HIGH' },
+      { key: 'co2Low', label: 'CO₂', emoji: '🫧', status: 'LOW' },
+      { key: 'waterTempHigh', label: 'Water Temp', emoji: '🌡️', status: 'HIGH' },
+      { key: 'waterTempLow', label: 'Water Temp', emoji: '🌡️', status: 'LOW' },
+      { key: 'airTempHigh', label: 'Air Temp', emoji: '🌡️', status: 'HIGH' },
+      { key: 'airTempLow', label: 'Air Temp', emoji: '🌡️', status: 'LOW' },
+      { key: 'humidityHigh', label: 'Humidity', emoji: '💧', status: 'HIGH' },
+      { key: 'humidityLow', label: 'Humidity', emoji: '💧', status: 'LOW' },
+      { key: 'sensorFault', label: 'Sensor Fault', emoji: '⚠️', status: 'FAULT' },
+    ];
+
+    // ✅ Sensor alerts: Only show when TRUE, remove when FALSE
+    sensorAlerts.forEach(({ key, label, emoji, status }) => {
+      const currentVal = current[key];
+      
+      if (currentVal === true) {
+        // Show alert (TRUE = problem)
+        const title = `${emoji} ${label}: ${status}`;
+        const message = `${label} - ${status} at ${new Date().toLocaleTimeString()}`;
+        addAlert(title, message);
+      } else {
+        // Remove alert (FALSE = normal)
+        const title = `${emoji} ${label}: ${status}`;
+        removeAlert(title);
       }
-    };
-    
-    Object.entries(flagFields).forEach(([key, config]) => {
+    });
+
+    // ──────────────────────────────────────────────────────────────────────
+    // ✅ TYPE 2: ACTUATOR ALERTS (Pumps, Valves, AC, Buzzer) - Show BOTH states
+    // ──────────────────────────────────────────────────────────────────────
+    const actuatorAlerts = [
+      { key: 'waterPump', label: 'Water Pump', emoji: '💧', onStatus: 'ON', offStatus: 'OFF' },
+      { key: 'nutrientPump', label: 'Nutrient Pump', emoji: '🌿', onStatus: 'ON', offStatus: 'OFF' },
+      { key: 'inletValve', label: 'Inlet Valve', emoji: '🚰', onStatus: 'OPEN', offStatus: 'CLOSED' },
+      { key: 'outletValve', label: 'Outlet Valve', emoji: '🚿', onStatus: 'OPEN', offStatus: 'CLOSED' },
+      { key: 'acStatus', label: 'AC Status', emoji: '❄️', onStatus: 'ON', offStatus: 'OFF' },
+      { key: 'buzzer', label: 'Buzzer', emoji: '🔊', onStatus: 'ON', offStatus: 'OFF' },
+    ];
+
+    // ✅ Actuator alerts: Show when state changes (ON or OFF)
+    actuatorAlerts.forEach(({ key, label, emoji, onStatus, offStatus }) => {
       const currentVal = current[key];
       const prevVal = prev[key];
       
+      // Skip if this is initial load (no previous state)
+      if (isInitialLoad.current) {
+        return;
+      }
+
       // Skip if value hasn't changed
-      if (currentVal === undefined || currentVal === null || currentVal === prevVal) return;
-      
-      const formattedValue = config.format(currentVal);
-      const severity = config.severity(currentVal);
-      
-      addAlert(
-        'flag',
-        `${config.emoji} ${config.label}: ${formattedValue}`,
-        `${config.label} changed to ${formattedValue} at ${new Date().toLocaleTimeString()}`,
-        severity
-      );
+      if (currentVal === prevVal) {
+        return;
+      }
+
+      // Value changed - show alert for new state
+      if (currentVal === true) {
+        // Turned ON / OPEN
+        const title = `${emoji} ${label}: ${onStatus}`;
+        const message = `${label} turned ${onStatus} at ${new Date().toLocaleTimeString()}`;
+        addAlert(title, message);
+      } else if (currentVal === false) {
+        // Turned OFF / CLOSED
+        const title = `${emoji} ${label}: ${offStatus}`;
+        const message = `${label} turned ${offStatus} at ${new Date().toLocaleTimeString()}`;
+        addAlert(title, message);
+      }
     });
-    
-    previousFlagsState.current = current;
-    
+
+    // ──────────────────────────────────────────────────────────────────────
+    // ✅ TYPE 3: MODE CHANGE ALERT (Auto/Manual)
+    // ──────────────────────────────────────────────────────────────────────
+    if (!isInitialLoad.current) {
+      const currentMode = current.mode;
+      const prevMode = prev.mode;
+      
+      if (currentMode !== undefined && currentMode !== prevMode) {
+        const modeStatus = currentMode ? 'AUTO' : 'MANUAL';
+        const title = `⚙️ Mode: ${modeStatus}`;
+        const message = `System mode changed to ${modeStatus} at ${new Date().toLocaleTimeString()}`;
+        addAlert(title, message);
+      }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // ✅ Initial load complete - mark it
+    // ──────────────────────────────────────────────────────────────────────
+    if (isInitialLoad.current) {
+      isInitialLoad.current = false;
+    }
+
+    // Save current state for next comparison
+    previousState.current = current;
+
   }, [deviceStatusFlags, hasReceivedData]);
 
-  // ── Clear old alerts ────────────────────────────────────────────────────
-  useEffect(() => {
-    if (alerts.length > 100) {
-      setAlerts(prev => prev.slice(0, 100));
-    }
-  }, [alerts.length]);
-
-  // ✅ VALUE
   const value = {
     alerts,
-    unreadCount,
-    addAlert,
-    markAsRead,
-    markAllAsRead,
+    alertCount: alerts.length,
     clearAlerts,
-    getAlertsByType: (type) => alerts.filter(alert => alert.type === type),
-    getUnreadAlerts: () => alerts.filter(alert => !alert.read),
-    getRecentAlerts: (count = 10) => alerts.slice(0, count),
+    removeAlertById,
   };
 
   return (
