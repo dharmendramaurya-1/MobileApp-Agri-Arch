@@ -72,41 +72,46 @@ function CustomHeader({ navigation, theme }) {
   const deviceKey = selectedExternalKey || externalKey;
 
   // ✅ Get device status using the sync function - this handles loading state properly
-  const deviceStatusSync = useMemo(() => {
-    if (!deviceKey) {
-      return { isOnline: false, isLoading: false, isChecking: false, isInitialLoadComplete: false };
-    }
-    return getDeviceStatusSync(deviceKey);
-  }, [deviceKey, getDeviceStatusSync]);
+    const isDeviceOnline = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceOnlineStatus[deviceKey] === true;
+  }, [deviceKey, deviceOnlineStatus]);
 
   // ✅ Get status display - handles loading state correctly
+  // const getStatusDisplay = () => {
+  //   // If no device key, show offline
+  //   if (!deviceKey) {
+  //     return { text: 'Offline', color: '#cfcece', isLoading: false };
+  //   }
+
+  //   // ✅ Check if still loading initial data
+  //   const isLoading = deviceStatusSync.isLoading || 
+  //                    deviceStatusSync.isChecking || 
+  //                    !deviceStatusSync.isInitialLoadComplete;
+
+  //   // If still loading, show "Connecting..."
+  //   if (isLoading) {
+  //     return { text: 'Connecting...', color: '#FFC107', isLoading: true };
+  //   }
+
+  //   // If load is complete, show online/offline based on actual status
+  //   if (deviceStatusSync.isInitialLoadComplete) {
+  //     if (deviceStatusSync.isOnline) {
+  //       return { text: 'Online', color: '#f7f8f7', isLoading: false };
+  //     } else {
+  //       return { text: 'Offline', color: '#cfcece', isLoading: false };
+  //     }
+  //   }
+
+  //   // Default to connecting if we're still waiting
+  //   return { text: 'Connecting...', color: '#FFC107', isLoading: true };
+  // };
+
   const getStatusDisplay = () => {
-    // If no device key, show offline
-    if (!deviceKey) {
-      return { text: 'Offline', color: '#cfcece', isLoading: false };
+    if (isDeviceOnline) {
+      return { text: 'Online', color: '#f7f8f7' };
     }
-
-    // ✅ Check if still loading initial data
-    const isLoading = deviceStatusSync.isLoading || 
-                     deviceStatusSync.isChecking || 
-                     !deviceStatusSync.isInitialLoadComplete;
-
-    // If still loading, show "Connecting..."
-    if (isLoading) {
-      return { text: 'Connecting...', color: '#FFC107', isLoading: true };
-    }
-
-    // If load is complete, show online/offline based on actual status
-    if (deviceStatusSync.isInitialLoadComplete) {
-      if (deviceStatusSync.isOnline) {
-        return { text: 'Online', color: '#f7f8f7', isLoading: false };
-      } else {
-        return { text: 'Offline', color: '#cfcece', isLoading: false };
-      }
-    }
-
-    // Default to connecting if we're still waiting
-    return { text: 'Connecting...', color: '#FFC107', isLoading: true };
+    return { text: 'Offline', color: '#cfcece' };
   };
 
   const statusDisplay = getStatusDisplay();

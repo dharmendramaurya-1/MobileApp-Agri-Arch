@@ -386,13 +386,15 @@ function SensorTile({
           status={active ? status.level : 'normal'}
         />
         
-        <Text style={[styles.sensorValue, { color: valueColor }]}>
+        <View style={{ flexDirection: "row", alignItems: "flex-center", marginTop: 4 }}>
+          <Text style={[styles.sensorValue, { color: valueColor }]}>
           {hasValue ? fmt(liveValue) : isDeviceWaiting ? "..." : "--"}
         </Text>
         
         <Text style={[styles.sensorUnit, { color: valueColor }]}>
           {hasValue ? sensor.unit : ""}
         </Text>
+        </View>
         
         {hasValue && active && status.level !== 'unknown' && (
           <View style={styles.statusContainer}>
@@ -684,7 +686,7 @@ export default function Dashboard() {
           <View style={styles.header}>
             <View style={styles.headerLeft}>
               <Text style={[styles.greeting, { color: theme.colors.text }]}>
-                {u_name} 👋
+                {u_name}
               </Text>
             </View>
             <View style={styles.headerActions}>

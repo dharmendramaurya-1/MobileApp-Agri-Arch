@@ -15,7 +15,6 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-
 import LineChart from "../../../components/LineChart";
 import LiveChartCard from "../../../components/LiveChartCard";
 import ZoomableChart from "../../../components/ZoomableChart";
@@ -42,6 +41,10 @@ const RANGE_LABELS = { "1h": "Last 1h", "1d": "Last 24h", "7d": "Last 7d", "30d"
 // swipe to pan across the whole time range.
 const ZOOM_CHART_WIDTH = screenHeight - 100;
 const ZOOM_CHART_HEIGHT = width - 60;
+
+// The fullscreen chart is drawn wider than the screen; pinch to zoom in and
+// swipe to pan across the whole time range.
+
 
 // ✅ Helper: Get sensor status from device flags (same source as alerts)
 const getSensorStatusFromFlags = (sensorKey, deviceStatus) => {
@@ -161,7 +164,8 @@ export default function SensorDetailScreen({
     getSelectedDeviceId, 
     getSelectedExternalKey, 
     availableDevices,
-    deviceStatusFlags,      // ✅ NEW - Device status flags
+    deviceStatusFlags,
+     externalKey     // ✅ NEW - Device status flags
   } = useMqtt();
   
   // ✅ Use HistoricalDataContext
@@ -191,6 +195,17 @@ export default function SensorDetailScreen({
   const liveValue = sensorData[config.dataKey];
   const selectedDevId = getSelectedDeviceId();
   const selectedExtKey = getSelectedExternalKey();
+
+    const liveDeviceKey = selectedExtKey || externalKey || null;
+  const livePoints = useLiveMqttWindow({
+    deviceKey: liveDeviceKey,
+    enabled: !!liveDeviceKey,
+    extractPoint: (parsed) => {
+      const v = parsed ? parsed[config.dataKey] : undefined;
+      if (v === undefined || v === null || typeof v !== "number") return null;
+      return { value: v };
+    },
+  });
 
   // ✅ Get status from device flags (same source as alerts)
   const status = useMemo(() => {
@@ -295,6 +310,20 @@ export default function SensorDetailScreen({
     return String(value);
   };
 
+    const getStatusColor = (value) => {
+    if (value === null || value === undefined) return "#666";
+    if (config.min !== undefined && value < config.min) return "#FF9800";
+    if (config.max !== undefined && value > config.max) return "#F44336";
+    return config.color;
+  };
+
+  const getStatusText = (value) => {
+    if (value === null || value === undefined) return "No data";
+    if (config.min !== undefined && value < config.min) return "Low";
+    if (config.max !== undefined && value > config.max) return "High";
+    return "Normal";
+  };
+
   const formatTime = (ms) => {
     if (!ms) return "--";
     const d = new Date(ms);
@@ -361,6 +390,7 @@ export default function SensorDetailScreen({
             styles.header,
             {
               paddingHorizontal: 16,
+              paddingTop:  12,
             },
           ]}
         >
@@ -383,16 +413,16 @@ export default function SensorDetailScreen({
         <View style={styles.valueRow}>
           <Text style={[styles.valueLabel, { color: theme.colors.textSecondary }]}>Live</Text>
           {/* ✅ Use status from device flags */}
-          <View style={[styles.statusBadge, { backgroundColor: status.color + "20" }]}>
-            <Ionicons name={status.icon} size={16} color={status.color} />
-            <Text style={[styles.statusText, { color: status.color }]}>
-              {status.label}
+           <View style={[styles.statusBadge, { backgroundColor: getStatusColor(liveValue) + "20" }]}>
+            <Ionicons name="checkmark-circle-outline" size={16} color={getStatusColor(liveValue)} />
+            <Text style={[styles.statusText, { color: getStatusColor(liveValue) }]}>
+              {getStatusText(liveValue)}
             </Text>
           </View>
         </View>
         <View style={styles.mainValueContainer}>
           {/* ✅ Use status color for the value */}
-          <Text style={[styles.mainValue, { color: status.color }]}>
+          <Text style={[styles.mainValue, { color: theme.colors.text }]}>
             {formatValue(liveValue)}
           </Text>
           <Text style={[styles.mainUnit, { color: theme.colors.textSecondary }]}>
@@ -895,7 +925,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-  tableHeaderCellRight: { textAlign: "right" },
+  tableHeaderCellRight: { textAlign: "right", flex: 1, },
   tableRow: {
     flexDirection: "row",
     alignItems: "center",

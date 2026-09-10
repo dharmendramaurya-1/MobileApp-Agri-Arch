@@ -1,4 +1,4 @@
-// app/(main)/pump-history.tsx
+// app/(main)/pump-history.jsx
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -15,10 +15,10 @@ import {
 import LineChart from "../../components/LineChart";
 import LiveChartCard from "../../components/LiveChartCard";
 import ZoomableChart from "../../components/ZoomableChart";
-import useLiveMqttWindow from "../../src/hooks/useLiveMqttWindow";
 import { useMqtt } from "../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
+import useLiveMqttWindow from "../../src/hooks/useLiveMqttWindow";
 import {
   downsampleData,
   fetchAllSensorHistorical,
@@ -29,13 +29,13 @@ const { width, height } = Dimensions.get("window"); // ✅ Added height
 const PAGE_SIZE = 10;
 const MAX_GRAPH_POINTS = 200;
 const MAX_TABLE_ROWS = 100;
-const RANGE_DAYS: Record<string, number> = {
+const RANGE_DAYS = {
   "1h": 1 / 24,
   "1d": 1,
   "7d": 7,
   "30d": 30,
 };
-const RANGE_LABELS: Record<string, string> = {
+const RANGE_LABELS = {
   "1h": "Last 1h",
   "1d": "Last 24h",
   "7d": "Last 7d",
@@ -46,14 +46,6 @@ const RANGE_LABELS: Record<string, string> = {
 // swipe to pan across the whole time range.
 const ZOOM_CHART_WIDTH = height - 80;
 const ZOOM_CHART_HEIGHT = width - 60;
-
-interface PumpEvent {
-  id: string;
-  time: number;
-  waterPump: boolean;
-  nutrientPump: boolean;
-  rawStatus: number;
-}
 
 export default function PumpHistory() {
   const { theme } = useTheme();
@@ -82,36 +74,37 @@ export default function PumpHistory() {
   } = useMqtt();
 
   const [timeRange, setTimeRange] = useState("7d");
-  const [activeTab, setActiveTab] = useState<"table" | "graph">("table");
-  const [allTableData, setAllTableData] = useState<PumpEvent[]>([]);
-  const [graphData, setGraphData] = useState<any[]>([]);
+  const [activeTab, setActiveTab] = useState("table");
+  const [allTableData, setAllTableData] = useState([]);
+  const [graphData, setGraphData] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [isTableLoading, setIsTableLoading] = useState(false);
   const [isGraphLoading, setIsGraphLoading] = useState(false);
-  const [selectedPump, setSelectedPump] = useState<
-    "water" | "nutrient" | "both"
-  >("both");
+  const [selectedPump, setSelectedPump] = useState("both");
   const [isPumpDropdownOpen, setIsPumpDropdownOpen] = useState(false);
   const [isZoomed, setIsZoomed] = useState(false);
-  const [error, setError] = useState<string | null>(null); // ✅ Added error state
+  const [error, setError] = useState(null); // ✅ Added error state
 
   // ── Real-time rolling 10-min window of pump states from live MQTT ──
-  const liveDeviceKey = (selectedExternalKey || externalKey) as string | null;
-  const livePumpRaw: any[] = useLiveMqttWindow({
+  const liveDeviceKey = selectedExternalKey || externalKey;
+  const livePumpRaw = useLiveMqttWindow({
     deviceKey: liveDeviceKey,
     enabled: !!liveDeviceKey,
-    extractPoint: (parsed: any) => {
-      let waterPump: boolean | null = null;
-      let nutrientPump: boolean | null = null;
+    extractPoint: (parsed) => {
+      let waterPump = null;
+      let nutrientPump = null;
 
-      if (typeof parsed?.water_pump === "boolean") waterPump = parsed.water_pump;
-      if (typeof parsed?.nutrient_pump === "boolean") nutrientPump = parsed.nutrient_pump;
+      if (typeof parsed?.water_pump === "boolean")
+        waterPump = parsed.water_pump;
+      if (typeof parsed?.nutrient_pump === "boolean")
+        nutrientPump = parsed.nutrient_pump;
 
       // DevStat bitmask also carries pump flags (e.g. status responses)
       const flags = parsed?.deviceStatusFlags;
       if (flags) {
         if (typeof flags.waterPump === "boolean") waterPump = flags.waterPump;
-        if (typeof flags.nutrientPump === "boolean") nutrientPump = flags.nutrientPump;
+        if (typeof flags.nutrientPump === "boolean")
+          nutrientPump = flags.nutrientPump;
       }
 
       if (waterPump === null && nutrientPump === null) return null;
@@ -120,8 +113,8 @@ export default function PumpHistory() {
   });
 
   // Encode raw water/nutrient flags into the same 0/1…3 series as the graph
-  const livePumpPoints: any[] = useMemo(() => {
-    return livePumpRaw.map((s: any) => {
+  const livePumpPoints = useMemo(() => {
+    return livePumpRaw.map((s) => {
       let value = 0;
       if (selectedPump === "water") {
         value = s.waterPump ? 1 : 0;
@@ -135,8 +128,7 @@ export default function PumpHistory() {
   }, [livePumpRaw, selectedPump]);
 
   // Current pump state label + stats for the live card (meaningful for ON/OFF)
-  const livePumpStats: { label: string; value: string; color?: string }[] =
-    useMemo(() => {
+  const livePumpStats = useMemo(() => {
       const last = livePumpRaw[livePumpRaw.length - 1];
       if (!last) return [];
       const colors =
@@ -158,15 +150,24 @@ export default function PumpHistory() {
       const stateColor = state === "OFF" ? "#F44336" : colors;
       return [
         { label: "State", value: state, color: stateColor },
-        { label: "Points", value: String(livePumpRaw.length), color: safeTheme.colors.text },
+        {
+          label: "Points",
+          value: String(livePumpRaw.length),
+          color: safeTheme.colors.text,
+        },
       ];
-    }, [livePumpRaw, selectedPump, safeTheme.colors.primary, safeTheme.colors.text]);
+    }, [
+      livePumpRaw,
+      selectedPump,
+      safeTheme.colors.primary,
+      safeTheme.colors.text,
+    ]);
 
   const getDevicePublisherAndKey = useCallback(() => {
     const selectedDevId = getSelectedDeviceId?.();
     const selectedExtKey = getSelectedExternalKey?.();
     if (selectedDevId && availableDevices && Array.isArray(availableDevices)) {
-      const device = availableDevices.find((d: any) => d.id === selectedDevId);
+      const device = availableDevices.find((d) => d.id === selectedDevId);
       if (device) {
         return {
           publisherId: device.id,
@@ -197,13 +198,10 @@ export default function PumpHistory() {
       });
 
       if (result.success && result.data.length > 0) {
-        const events: PumpEvent[] = result.data
-          .filter((d: any) => d.value != null)
-          .map((d: any, idx: number) => {
-            const parsed = parseDeviceStatus(d.value) as {
-              waterPump: boolean;
-              nutrientPump: boolean;
-            };
+        const events = result.data
+          .filter((d) => d.value != null)
+          .map((d, idx) => {
+            const parsed = parseDeviceStatus(d.value);
             return {
               id: `${d.time}-${idx}`,
               time: d.time,
@@ -264,7 +262,7 @@ export default function PumpHistory() {
   const startIndex = tableTotal > 0 ? (safePage - 1) * PAGE_SIZE + 1 : 0;
   const endIndex = Math.min(safePage * PAGE_SIZE, tableTotal);
 
-  const formatTime = (ms: number) => {
+  const formatTime = (ms) => {
     if (!ms) return "--";
     const d = new Date(ms);
     const date = d.toLocaleDateString([], {
@@ -279,8 +277,8 @@ export default function PumpHistory() {
     return `${date}, ${time}`;
   };
 
-  const getStatusColor = (on: boolean) => (on ? "#4CAF50" : "#F44336");
-  const getStatusLabel = (on: boolean) => (on ? "ON" : "OFF");
+  const getStatusColor = (on) => (on ? "#4CAF50" : "#F44336");
+  const getStatusLabel = (on) => (on ? "ON" : "OFF");
 
   // ✅ Fixed xLabels with safety checks
   const { xLabels, yLabels } = useMemo(() => {
@@ -302,7 +300,7 @@ export default function PumpHistory() {
   }, [graphData, selectedPump, timeRange]);
 
   // ✅ Fixed icon names
-  const getPumpIcon = (pump: string) => {
+  const getPumpIcon = (pump) => {
     switch (pump) {
       case "water":
         return "water-outline";
@@ -456,7 +454,7 @@ export default function PumpHistory() {
                 },
               ]}
             >
-              {(["water", "nutrient", "both"] as const).map((pump) => (
+              {["water", "nutrient", "both"].map((pump) => (
                 <TouchableOpacity
                   key={pump}
                   style={[

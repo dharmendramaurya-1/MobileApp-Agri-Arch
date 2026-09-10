@@ -275,6 +275,7 @@ export const MqttProvider = ({ children }) => {
   
   const backgroundGraceTimerRef = useRef(null);
   const backgroundGraceActiveRef = useRef(false);
+  const liveDataSubscribersRef = useRef(new Set());
   const [selectedDeviceId, setSelectedDeviceId] = useState(null);
   const [selectedDeviceName, setSelectedDeviceName] = useState(null);
   const [selectedExternalKey, setSelectedExternalKey] = useState(null);
@@ -1098,17 +1099,16 @@ export const MqttProvider = ({ children }) => {
     // Update sensor data
     updateDeviceData(deviceKey, parsed);
 
-    // Mark online based on status response
-    if (isStatusResponse) {
-      markDeviceOnline(deviceKey, true);
-      delete pendingRequestIds.current[deviceKey];
-      delete statusCheckLockRef.current[deviceKey];
-      
-      // Clear the timeout timer
-      if (statusResponseTimersRef.current[deviceKey]) {
-        clearTimeout(statusResponseTimersRef.current[deviceKey]);
-        delete statusResponseTimersRef.current[deviceKey];
-      }
+    // Any live message (data OR status response) proves the device is
+    // online — mark it online so the UI never gets stuck on "Connecting..."
+    markDeviceOnline(deviceKey, true);
+    delete pendingRequestIds.current[deviceKey];
+    delete statusCheckLockRef.current[deviceKey];
+
+    // Clear the timeout timer
+    if (statusResponseTimersRef.current[deviceKey]) {
+      clearTimeout(statusResponseTimersRef.current[deviceKey]);
+      delete statusResponseTimersRef.current[deviceKey];
     }
 
     let isOnline = false;
@@ -1731,21 +1731,25 @@ export const MqttProvider = ({ children }) => {
   };
 
   // ── getDeviceStatusSync ──
+  // Reads from STATE (not refs) so the function's identity changes whenever
+  // a device's online/load status changes — consumers that memoize on it
+  // (e.g. the header status in (main)/_layout) recompute with fresh values
+  // instead of freezing on the status from the very first render.
   const getDeviceStatusSync = useCallback((deviceKey) => {
     if (!deviceKey) {
       return { isOnline: false, hasData: false, data: null, isLoading: false, isChecking: false, hasPendingRequest: false, isInitialLoadComplete: false };
     }
 
-    const isOnline = deviceOnlineStatusRef.current[deviceKey] || false;
-    const hasData = devicesDataRef.current[deviceKey]?.hasReceivedData || false;
-    const data = devicesDataRef.current[deviceKey] || null;
-    const isLoading = deviceInitialLoadStatusRef.current[deviceKey] || false;
+    const isOnline = deviceOnlineStatus[deviceKey] || false;
+    const hasData = devicesData[deviceKey]?.hasReceivedData || false;
+    const data = devicesData[deviceKey] || null;
+    const isLoading = deviceInitialLoadStatus[deviceKey] || false;
     const isChecking = !!statusCheckLockRef.current[deviceKey];
     const hasPendingRequest = !!pendingRequestsRef.current[deviceKey];
-    const isInitialLoadComplete = deviceInitialLoadCompleteRef.current[deviceKey] || false;
+    const isInitialLoadComplete = deviceInitialLoadComplete[deviceKey] || false;
 
     return { isOnline, hasData, data, isLoading, isChecking, hasPendingRequest, isInitialLoadComplete };
-  }, []);
+  }, [deviceOnlineStatus, deviceInitialLoadStatus, deviceInitialLoadComplete, devicesData]);
 
   // ── getSelectedDeviceOnlineStatus (FIXED) ──
   const getSelectedDeviceOnlineStatus = useCallback(() => {

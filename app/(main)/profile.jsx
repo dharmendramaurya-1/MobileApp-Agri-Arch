@@ -1,4 +1,4 @@
-// app/(main)/profile.tsx
+// app/(main)/profile.jsx
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useRef, useState } from "react";
@@ -17,14 +17,7 @@ import { useMqtt } from "../../src/context/MqttContext";
 import { useTheme } from "../../src/context/ThemContext";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 
-interface MenuItemProps {
-  icon: string;
-  label: string;
-  onPress: () => void;
-  color?: string;
-}
-
-function MenuItem({ icon, label, onPress, color }: MenuItemProps) {
+function MenuItem({ icon, label, onPress, color }) {
   const { theme } = useTheme();
   return (
     <TouchableOpacity
@@ -42,7 +35,7 @@ function MenuItem({ icon, label, onPress, color }: MenuItemProps) {
           ]}
         >
           <Ionicons
-            name={icon as any}
+            name={icon}
             size={22}
             color={color || theme.colors.primary}
           />
@@ -70,9 +63,9 @@ export default function ProfileScreen() {
   useScrollReset(scrollRef);
 
   // ✅ State for username
-  const [username, setUsername] = useState<string>("User");
+  const [username, setUsername] = useState("User");
   const [isLoading, setIsLoading] = useState(true);
-  const [profileData, setProfileData] = useState<any>(null);
+  const [profileData, setProfileData] = useState(null);
 
   // ✅ useEffect INSIDE the component
   useEffect(() => {
