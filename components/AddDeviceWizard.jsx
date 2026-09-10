@@ -1047,7 +1047,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: 45,
+    paddingTop: 15,
     paddingBottom: 4,
   },
   iconButton: {
@@ -1066,7 +1066,7 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: "700", letterSpacing: 0.3 },
   progressWrap: {
     paddingHorizontal: 16,
-    paddingTop: 6,
+    paddingTop: 26,
     paddingBottom: 10,
   },
   progressTrack: {

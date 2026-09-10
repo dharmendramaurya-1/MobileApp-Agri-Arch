@@ -138,6 +138,7 @@ function CustomHeader({ navigation, theme }) {
   // ── Hero collapse (shutter) driven by the current screen's scroll ──────
   const { scrollY, setHeaderHeight, heroHeight, setHeroHeight } = useScroll();
   const heroMeasuredRef = useRef(false);
+  const [topRowHeight, setTopRowHeight] = useState(0);
 
   // Native-driver collapse: the hero slides up (translateY) and fades in
   const heroTranslateY = scrollY.interpolate({
@@ -160,6 +161,15 @@ function CustomHeader({ navigation, theme }) {
     });
     return () => scrollY.removeListener(id);
   }, [scrollY, heroHeight]);
+
+  // Only the top toolbar participates in the native Drawer header layout.
+  // The hero is absolutely positioned, so its old height cannot block touches
+  // on screen content after the hero collapses.
+  useEffect(() => {
+    if (topRowHeight > 0 && heroHeight > 0) {
+      setHeaderHeight(topRowHeight + heroHeight);
+    }
+  }, [topRowHeight, heroHeight, setHeaderHeight]);
 
   useEffect(() => {
     const profile = async () => {
@@ -223,12 +233,13 @@ function CustomHeader({ navigation, theme }) {
     <View
       style={styles.headerContainer}
       pointerEvents="box-none"
-      onLayout={(e) => {
-        const h = e.nativeEvent.layout.height;
-        if (h > 0) setHeaderHeight(h);
-      }}
     >
       <View
+        pointerEvents="box-none"
+        onLayout={(e) => {
+          const h = e.nativeEvent.layout.height;
+          if (h > 0) setTopRowHeight(h);
+        }}
         style={[
           styles.headerTopRow,
           { paddingTop: Platform.OS === "ios" ? 50 : 40 },
@@ -270,6 +281,7 @@ function CustomHeader({ navigation, theme }) {
           style={[
             styles.heroSection,
             {
+              top: topRowHeight,
               transform: [{ translateY: heroTranslateY }],
               opacity: heroOpacity,
             },
@@ -849,6 +861,8 @@ function MainDrawer({ theme }) {
 const styles = StyleSheet.create({
   headerContainer: {
     zIndex: 10,
+    position: "relative",
+    overflow: "visible",
   },
   headerTopRow: {
     flexDirection: "row",
@@ -873,7 +887,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
   },
   heroSection: {
-    position: "relative",
+    position: "absolute",
     width: "100%",
     zIndex: 1,
     borderBottomLeftRadius: 27,

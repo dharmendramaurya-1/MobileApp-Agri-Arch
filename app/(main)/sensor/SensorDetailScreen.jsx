@@ -17,11 +17,14 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import LineChart from "../../../components/LineChart";
+import LiveChartCard from "../../../components/LiveChartCard";
+import ZoomableChart from "../../../components/ZoomableChart";
 import { SENSORS, getSensorByKey } from "../../../src/config/sensorConfigs";
 import { useHistoricalData } from "../../../src/context/HistoricalDataContext";
 import { useMqtt } from "../../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../../src/context/ScrollContext";
 import { useTheme } from "../../../src/context/ThemContext";
+import useLiveMqttWindow from "../../../src/hooks/useLiveMqttWindow";
 import {
   downsampleData
 } from "../../../src/services/senmlService";
@@ -35,6 +38,10 @@ const MAX_GRAPH_POINTS = 200;
 const MAX_TABLE_ROWS = 100;
 const RANGE_DAYS = { "1h": 1/24, "1d": 1, "7d": 7, "30d": 30 };
 const RANGE_LABELS = { "1h": "Last 1h", "1d": "Last 24h", "7d": "Last 7d", "30d": "Last 30d" };
+// The fullscreen chart is drawn wider than the screen; pinch to zoom in and
+// swipe to pan across the whole time range.
+const ZOOM_CHART_WIDTH = screenHeight - 100;
+const ZOOM_CHART_HEIGHT = width - 60;
 
 // ✅ Helper: Get sensor status from device flags (same source as alerts)
 const getSensorStatusFromFlags = (sensorKey, deviceStatus) => {
@@ -398,7 +405,6 @@ export default function SensorDetailScreen({
           </Text>
         )}
       </View>
-
       {/* ─── HISTORICAL ─── */}
       <View style={styles.historicalSection}>
         <View style={styles.historicalHeader}>
@@ -654,6 +660,20 @@ export default function SensorDetailScreen({
           )}
         </View>
       </View>
+
+     
+
+      {/* ─── LIVE · LAST 10 MIN ─── */}
+      <View style={{ marginBottom: 4, marginTop: 12}}>
+        <LiveChartCard
+          title={`${config.name} · Live`}
+          subtitle={`${config.name} — last 10 minutes of MQTT data`}
+          color={config.color}
+          unit={config.unit}
+          points={livePoints}
+          themeColors={theme.colors}
+        />
+      </View>
     </ScrollView>
 
       {/* ─── FULLSCREEN ZOOM MODAL ─── */}
@@ -711,20 +731,24 @@ export default function SensorDetailScreen({
           {/* Fullscreen Chart */}
           <View style={styles.zoomChartWrapper}>
             <Text style={[styles.zoomAxisTitle, { color: theme.colors.textSecondary }]}>↑ {config.unit || "Value"}</Text>
-            <View style={styles.zoomChartInner}>
+            <ZoomableChart
+              chartWidth={ZOOM_CHART_WIDTH}
+              chartHeight={ZOOM_CHART_HEIGHT}
+              background={theme.colors.background}
+            >
               <LineChart
                 data={graphData}
                 color={config.color}
                 unit=""
-                width={screenHeight - 100}
-                height={width - 60}
+                width={ZOOM_CHART_WIDTH}
+                height={ZOOM_CHART_HEIGHT}
                 labelColor={theme.colors.textSecondary}
                 xTitle="Time"
                 yTitle={config.unit}
                 showGradient={true}
                 showDots={graphData.length <= 80}
               />
-            </View>
+            </ZoomableChart>
             <Text style={[styles.zoomAxisTitle, { color: theme.colors.textSecondary }]}>Time →</Text>
           </View>
 
@@ -1035,10 +1059,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 16,
-  },
-  zoomChartInner: {
-    alignItems: "center",
-    justifyContent: "center",
   },
   zoomAxisTitle: { fontSize: 11, fontWeight: "600", opacity: 0.6, marginVertical: 4 },
   zoomOutButton: {

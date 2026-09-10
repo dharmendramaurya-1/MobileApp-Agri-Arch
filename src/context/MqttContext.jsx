@@ -1063,6 +1063,17 @@ export const MqttProvider = ({ children }) => {
     };
   }, [getDeviceStatusOnce]);
 
+  // ── Register live-data listener (fires on every processed MQTT message) ──
+  const subscribeToLiveData = useCallback((callback) => {
+    if (typeof callback !== "function") return () => {};
+    liveDataSubscribersRef.current.add(callback);
+    console.log(`📡 Subscribed live-data listener (${liveDataSubscribersRef.current.size} total)`);
+    return () => {
+      liveDataSubscribersRef.current.delete(callback);
+      console.log(`📡 Unsubscribed live-data listener (${liveDataSubscribersRef.current.size} total)`);
+    };
+  }, []);
+
   // ── UNIFIED: Process device data ──
   const processDeviceData = useCallback((deviceKey, parsed, isStatusResponse) => {
     if (!deviceKey || !parsed || Object.keys(parsed).length === 0) {
@@ -1129,6 +1140,24 @@ export const MqttProvider = ({ children }) => {
     if (isStatusResponse) {
       delete pendingRequestIds.current[deviceKey];
       delete statusCheckLockRef.current[deviceKey];
+    }
+
+    // ── Notify live-data subscribers so screens can build real-time charts ──
+    try {
+      liveDataSubscribersRef.current.forEach((cb) => {
+        try {
+          cb({
+            deviceKey,
+            parsed: { ...parsed },
+            receivedAt: now,
+            isStatusResponse,
+          });
+        } catch (listenerError) {
+          console.error("❌ Live-data listener error:", listenerError);
+        }
+      });
+    } catch (notifyError) {
+      console.error("❌ Error notifying live-data listeners:", notifyError);
     }
   }, [clearAllTimersForDevice, markDeviceOnline, updateDeviceData, updateLegacyState]);
 
@@ -2504,6 +2533,7 @@ export const MqttProvider = ({ children }) => {
     deviceInitialLoadStatus,
     deviceInitialLoadComplete,
     availableDevices,
+    subscribeToLiveData,
     getDeviceData,
     getDeviceStatus,
     isDeviceChecking,

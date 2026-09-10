@@ -11,7 +11,6 @@ import {
   KeyboardAvoidingView,
   Linking,
   Platform,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -20,6 +19,7 @@ import {
   TouchableWithoutFeedback,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import AppStatusBar from "../../components/AppStatusBar";
 import { useAuth } from "../../src/context/AuthContext";
 import { useTheme } from "../../src/context/ThemContext";
@@ -299,9 +299,11 @@ export default function LoginScreen() {
                 style={styles.forgotPassword}
                 onPress={handleForgotPassword}
               >
-                <Text style={[styles.forgotPasswordText, { color: GREEN }]}>
+               <View>
+                 <Text style={[styles.forgotPasswordText, { color: GREEN }]}>
                   Forgot password?
                 </Text>
+               </View>
               </TouchableOpacity>
 
               <TouchableOpacity

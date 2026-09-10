@@ -529,7 +529,7 @@ export default function ConfigScreen() {
       ref={scrollRef}
       style={[styles.container, { backgroundColor: theme.colors.background }]}
       contentContainerStyle={{
-        paddingBottom: SCREEN_HEIGHT * 0.1,
+        // paddingBottom: SCREEN_HEIGHT * 0.1,
         paddingTop: headerHeight,
       }}
       onScroll={onScroll}
@@ -560,7 +560,7 @@ export default function ConfigScreen() {
       </View>
 
       {/* ── Device Info ── */}
-      {externalKey && (
+      {/* {externalKey && (
         <View style={[
           styles.deviceInfo,
           { 
@@ -579,7 +579,7 @@ export default function ConfigScreen() {
             ]} />
           )}
         </View>
-      )}
+      )} */}
 
       {/* ── Device Configuration Section ── */}
       <View

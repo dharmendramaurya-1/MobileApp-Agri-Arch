@@ -479,8 +479,6 @@ export const fetchSensorHistorical = async ({
     const shortName = getSenMLName(sensorKey);
     const fullName = `urn:dev:${externalKey}:${shortName}`;
 
-    console.log(`📡 Fetch sensor historical: ${sensorKey} (${fullName})`);
-    console.log(`   Publisher: ${publisherId} | limit=${limit} offset=${offset}`);
 
     const params = {
       publisher: publisherId,

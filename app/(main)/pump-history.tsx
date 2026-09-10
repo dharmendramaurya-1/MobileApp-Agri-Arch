@@ -13,6 +13,9 @@ import {
   View,
 } from "react-native";
 import LineChart from "../../components/LineChart";
+import LiveChartCard from "../../components/LiveChartCard";
+import ZoomableChart from "../../components/ZoomableChart";
+import useLiveMqttWindow from "../../src/hooks/useLiveMqttWindow";
 import { useMqtt } from "../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
@@ -38,6 +41,11 @@ const RANGE_LABELS: Record<string, string> = {
   "7d": "Last 7d",
   "30d": "Last 30d",
 };
+
+// The fullscreen chart is drawn wider than the screen; pinch to zoom in and
+// swipe to pan across the whole time range.
+const ZOOM_CHART_WIDTH = height - 80;
+const ZOOM_CHART_HEIGHT = width - 60;
 
 interface PumpEvent {
   id: string;
@@ -65,8 +73,13 @@ export default function PumpHistory() {
   const { onScroll, headerHeight } = useScroll();
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
-  const { getSelectedDeviceId, getSelectedExternalKey, availableDevices } =
-    useMqtt();
+  const {
+    getSelectedDeviceId,
+    getSelectedExternalKey,
+    selectedExternalKey,
+    externalKey,
+    availableDevices,
+  } = useMqtt();
 
   const [timeRange, setTimeRange] = useState("7d");
   const [activeTab, setActiveTab] = useState<"table" | "graph">("table");
@@ -82,10 +95,77 @@ export default function PumpHistory() {
   const [isZoomed, setIsZoomed] = useState(false);
   const [error, setError] = useState<string | null>(null); // ✅ Added error state
 
+  // ── Real-time rolling 10-min window of pump states from live MQTT ──
+  const liveDeviceKey = (selectedExternalKey || externalKey) as string | null;
+  const livePumpRaw: any[] = useLiveMqttWindow({
+    deviceKey: liveDeviceKey,
+    enabled: !!liveDeviceKey,
+    extractPoint: (parsed: any) => {
+      let waterPump: boolean | null = null;
+      let nutrientPump: boolean | null = null;
+
+      if (typeof parsed?.water_pump === "boolean") waterPump = parsed.water_pump;
+      if (typeof parsed?.nutrient_pump === "boolean") nutrientPump = parsed.nutrient_pump;
+
+      // DevStat bitmask also carries pump flags (e.g. status responses)
+      const flags = parsed?.deviceStatusFlags;
+      if (flags) {
+        if (typeof flags.waterPump === "boolean") waterPump = flags.waterPump;
+        if (typeof flags.nutrientPump === "boolean") nutrientPump = flags.nutrientPump;
+      }
+
+      if (waterPump === null && nutrientPump === null) return null;
+      return { waterPump: !!waterPump, nutrientPump: !!nutrientPump };
+    },
+  });
+
+  // Encode raw water/nutrient flags into the same 0/1…3 series as the graph
+  const livePumpPoints: any[] = useMemo(() => {
+    return livePumpRaw.map((s: any) => {
+      let value = 0;
+      if (selectedPump === "water") {
+        value = s.waterPump ? 1 : 0;
+      } else if (selectedPump === "nutrient") {
+        value = s.nutrientPump ? 1 : 0;
+      } else {
+        value = (s.waterPump ? 1 : 0) + (s.nutrientPump ? 2 : 0);
+      }
+      return { time: s.time, value };
+    });
+  }, [livePumpRaw, selectedPump]);
+
+  // Current pump state label + stats for the live card (meaningful for ON/OFF)
+  const livePumpStats: { label: string; value: string; color?: string }[] =
+    useMemo(() => {
+      const last = livePumpRaw[livePumpRaw.length - 1];
+      if (!last) return [];
+      const colors =
+        selectedPump === "water"
+          ? "#2196F3"
+          : selectedPump === "nutrient"
+            ? "#4CAF50"
+            : safeTheme.colors.primary;
+      let state = "OFF";
+      if (selectedPump === "water") {
+        state = last.waterPump ? "ON" : "OFF";
+      } else if (selectedPump === "nutrient") {
+        state = last.nutrientPump ? "ON" : "OFF";
+      } else {
+        if (last.waterPump && last.nutrientPump) state = "Both";
+        else if (last.waterPump) state = "Water";
+        else if (last.nutrientPump) state = "Nutrient";
+      }
+      const stateColor = state === "OFF" ? "#F44336" : colors;
+      return [
+        { label: "State", value: state, color: stateColor },
+        { label: "Points", value: String(livePumpRaw.length), color: safeTheme.colors.text },
+      ];
+    }, [livePumpRaw, selectedPump, safeTheme.colors.primary, safeTheme.colors.text]);
+
   const getDevicePublisherAndKey = useCallback(() => {
-    const selectedDevId = getSelectedDeviceId();
-    const selectedExtKey = getSelectedExternalKey();
-    if (selectedDevId && availableDevices) {
+    const selectedDevId = getSelectedDeviceId?.();
+    const selectedExtKey = getSelectedExternalKey?.();
+    if (selectedDevId && availableDevices && Array.isArray(availableDevices)) {
       const device = availableDevices.find((d: any) => d.id === selectedDevId);
       if (device) {
         return {
@@ -120,7 +200,10 @@ export default function PumpHistory() {
         const events: PumpEvent[] = result.data
           .filter((d: any) => d.value != null)
           .map((d: any, idx: number) => {
-            const parsed = parseDeviceStatus(d.value);
+            const parsed = parseDeviceStatus(d.value) as {
+              waterPump: boolean;
+              nutrientPump: boolean;
+            };
             return {
               id: `${d.time}-${idx}`,
               time: d.time,
@@ -254,6 +337,23 @@ export default function PumpHistory() {
           </Text>
         </View>
 
+        {/* ── LIVE PUMP · LAST 10 MIN ── */}
+        <LiveChartCard
+          title="Pump · Live"
+          subtitle={`${selectedPump === "water" ? "Water" : selectedPump === "nutrient" ? "Nutrient" : "Both"} pump — last 10 min of MQTT data`}
+          color={
+            selectedPump === "water"
+              ? "#2196F3"
+              : selectedPump === "nutrient"
+                ? "#4CAF50"
+                : safeTheme.colors.primary
+          }
+          unit=""
+          points={livePumpPoints}
+          stats={livePumpStats}
+          themeColors={safeTheme.colors}
+        />
+
         {/* ── ERROR DISPLAY ── */}
         {error && (
           <View style={styles.errorContainer}>
@@ -327,7 +427,10 @@ export default function PumpHistory() {
               }
             />
             <Text
-              style={[styles.pumpDropdownText, { color: safeTheme.colors.text }]}
+              style={[
+                styles.pumpDropdownText,
+                { color: safeTheme.colors.text },
+              ]}
             >
               {selectedPump === "water"
                 ? "Water"
@@ -347,7 +450,8 @@ export default function PumpHistory() {
               style={[
                 styles.pumpDropdownMenu,
                 {
-                  backgroundColor: safeTheme.colors.surface || safeTheme.colors.background,
+                  backgroundColor:
+                    safeTheme.colors.surface || safeTheme.colors.background,
                   borderColor: "rgba(0,0,0,0.1)",
                 },
               ]}
@@ -971,7 +1075,11 @@ export default function PumpHistory() {
 
           {/* Fullscreen Chart */}
           <View style={styles.zoomChartWrapper}>
-            <View style={styles.zoomChartInner}>
+            <ZoomableChart
+              chartWidth={ZOOM_CHART_WIDTH}
+              chartHeight={ZOOM_CHART_HEIGHT}
+              background={safeTheme.colors.background}
+            >
               <LineChart
                 data={graphData}
                 color={
@@ -982,15 +1090,15 @@ export default function PumpHistory() {
                       : safeTheme.colors.primary
                 }
                 unit=""
-                width={height - 80} // ✅ Fixed: using height variable
-                height={width - 60} // ✅ Fixed: using width variable
+                width={ZOOM_CHART_WIDTH}
+                height={ZOOM_CHART_HEIGHT}
                 labelColor={safeTheme.colors.textSecondary}
                 xTitle="Time"
                 yTitle="State"
                 showGradient={true}
                 showDots={graphData.length <= 80}
               />
-            </View>
+            </ZoomableChart>
           </View>
 
           {/* Zoom out button */}
@@ -1282,7 +1390,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 16,
   },
-  zoomChartInner: { alignItems: "center", justifyContent: "center" },
   zoomOutButton: {
     flexDirection: "row",
     alignItems: "center",
