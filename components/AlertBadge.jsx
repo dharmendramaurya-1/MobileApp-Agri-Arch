@@ -5,11 +5,11 @@ import { Animated, StyleSheet, Text, TouchableOpacity, View } from 'react-native
 import { useAlerts } from '../src/context/AlertContext';
 
 export const AlertBadge = ({ onPress }) => {
-  const { unreadCount } = useAlerts();
+  const { alertCount } = useAlerts();
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
 
   React.useEffect(() => {
-    if (unreadCount > 0) {
+    if (alertCount > 0) {
       Animated.sequence([
         Animated.spring(scaleAnim, {
           toValue: 1.3,
@@ -23,20 +23,20 @@ export const AlertBadge = ({ onPress }) => {
         }),
       ]).start();
     }
-  }, [unreadCount]);
+  }, [alertCount]);
 
   return (
     <TouchableOpacity onPress={onPress} style={styles.container} activeOpacity={0.7}>
       <View style={styles.iconContainer}>
         <Ionicons 
-          name={unreadCount > 0 ? "notifications" : "notifications-outline"} 
+          name={alertCount > 0 ? "notifications" : "notifications-outline"} 
           size={24} 
-          color={unreadCount > 0 ? "#FF6B35" : "#FFFFFF"} 
+          color={alertCount > 0 ? "#FF6B35" : "#FFFFFF"} 
         />
-        {unreadCount > 0 && (
+        {alertCount > 0 && (
           <Animated.View style={[styles.badge, { transform: [{ scale: scaleAnim }] }]}>
             <Text style={styles.badgeText}>
-              {unreadCount > 99 ? '99+' : unreadCount}
+              {alertCount > 99 ? '99+' : alertCount}
             </Text>
           </Animated.View>
         )}

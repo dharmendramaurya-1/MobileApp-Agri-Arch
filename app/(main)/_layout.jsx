@@ -51,7 +51,7 @@ function CustomHeader({ navigation, theme }) {
   
   const [cropInfo, setCropInfo] = useState(null);
 
-  // ✅ Get MQTT context - DIRECT ACCESS
+  // ✅ Get MQTT context
   const { 
     getSelectedDeviceName,
     selectedExternalKey,
@@ -59,9 +59,11 @@ function CustomHeader({ navigation, theme }) {
     sensorData,
     connectionState,
     isConnected,
-    // ✅ Directly access context values
     deviceOnlineStatus,
     deviceInitialLoadComplete,
+    deviceInitialLoadStatus,
+    // ✅ Get the device status sync function for accurate status
+    getDeviceStatusSync,
   } = useMqtt();
 
   const selectedDeviceName = getSelectedDeviceName();
@@ -69,18 +71,42 @@ function CustomHeader({ navigation, theme }) {
   // ✅ Get device key
   const deviceKey = selectedExternalKey || externalKey;
 
-  // ✅ Directly read from context - SAME as dashboard
-  const isDeviceOnline = useMemo(() => {
-    if (!deviceKey) return false;
-    return deviceOnlineStatus[deviceKey] === true;
-  }, [deviceKey, deviceOnlineStatus]);
-
-  // ✅ Get status display - only Online or Offline
-  const getStatusDisplay = () => {
-    if (isDeviceOnline) {
-      return { text: 'Online', color: '#f7f8f7' };
+  // ✅ Get device status using the sync function - this handles loading state properly
+  const deviceStatusSync = useMemo(() => {
+    if (!deviceKey) {
+      return { isOnline: false, isLoading: false, isChecking: false, isInitialLoadComplete: false };
     }
-    return { text: 'Offline', color: '#cfcece' };
+    return getDeviceStatusSync(deviceKey);
+  }, [deviceKey, getDeviceStatusSync]);
+
+  // ✅ Get status display - handles loading state correctly
+  const getStatusDisplay = () => {
+    // If no device key, show offline
+    if (!deviceKey) {
+      return { text: 'Offline', color: '#cfcece', isLoading: false };
+    }
+
+    // ✅ Check if still loading initial data
+    const isLoading = deviceStatusSync.isLoading || 
+                     deviceStatusSync.isChecking || 
+                     !deviceStatusSync.isInitialLoadComplete;
+
+    // If still loading, show "Connecting..."
+    if (isLoading) {
+      return { text: 'Connecting...', color: '#FFC107', isLoading: true };
+    }
+
+    // If load is complete, show online/offline based on actual status
+    if (deviceStatusSync.isInitialLoadComplete) {
+      if (deviceStatusSync.isOnline) {
+        return { text: 'Online', color: '#f7f8f7', isLoading: false };
+      } else {
+        return { text: 'Offline', color: '#cfcece', isLoading: false };
+      }
+    }
+
+    // Default to connecting if we're still waiting
+    return { text: 'Connecting...', color: '#FFC107', isLoading: true };
   };
 
   const statusDisplay = getStatusDisplay();
@@ -317,7 +343,7 @@ function CustomHeader({ navigation, theme }) {
                 <Ionicons name="radio-outline" size={14} color="#FFF" />
                 <View>
                   <Text style={styles.cropInfoLabel}>Status</Text>
-                  {/* ✅ Show Online / Offline / Connecting */}
+                  {/* ✅ Show Connecting / Online / Offline correctly */}
                   <Text style={[styles.cropInfoValue, { color: statusDisplay.color }]}>
                     {statusDisplay.text}
                   </Text>
@@ -348,11 +374,8 @@ function CustomDrawerContent({ navigation }) {
     getSelectedDeviceId,
     selectedExternalKey,
     externalKey,
-    // ✅ Directly access context values
-    deviceOnlineStatus,
-    deviceInitialLoadComplete,
-    connectionState,
-    isConnected,
+    // ✅ Get the device status sync function
+    getDeviceStatusSync,
   } = useMqtt();
 
   const selectedDeviceName = getSelectedDeviceName();
@@ -361,18 +384,42 @@ function CustomDrawerContent({ navigation }) {
   // ✅ Get device key
   const deviceKey = selectedExternalKey || externalKey;
 
-  // ✅ Directly read from context - SAME as dashboard
-  const isDeviceOnline = useMemo(() => {
-    if (!deviceKey) return false;
-    return deviceOnlineStatus[deviceKey] === true;
-  }, [deviceKey, deviceOnlineStatus]);
-
-  // ✅ Get status display for drawer - only Online or Offline
-  const getDrawerStatusDisplay = () => {
-    if (isDeviceOnline) {
-      return { text: 'Active', color: '#4CAF50', dotColor: '#4CAF50' };
+  // ✅ Get device status using the sync function - this handles loading state properly
+  const deviceStatusSync = useMemo(() => {
+    if (!deviceKey) {
+      return { isOnline: false, isLoading: false, isChecking: false, isInitialLoadComplete: false };
     }
-    return { text: 'Offline', color: '#F44336', dotColor: '#F44336' };
+    return getDeviceStatusSync(deviceKey);
+  }, [deviceKey, getDeviceStatusSync]);
+
+  // ✅ Get status display for drawer - handles loading state correctly
+  const getDrawerStatusDisplay = () => {
+    // If no device key, show offline
+    if (!deviceKey) {
+      return { text: 'Offline', color: '#F44336', dotColor: '#F44336', isLoading: false };
+    }
+
+    // ✅ Check if still loading initial data
+    const isLoading = deviceStatusSync.isLoading || 
+                     deviceStatusSync.isChecking || 
+                     !deviceStatusSync.isInitialLoadComplete;
+
+    // If still loading, show "Connecting..."
+    if (isLoading) {
+      return { text: 'Connecting...', color: '#FFC107', dotColor: '#FFC107', isLoading: true };
+    }
+
+    // If load is complete, show online/offline based on actual status
+    if (deviceStatusSync.isInitialLoadComplete) {
+      if (deviceStatusSync.isOnline) {
+        return { text: 'Active', color: '#4CAF50', dotColor: '#4CAF50', isLoading: false };
+      } else {
+        return { text: 'Offline', color: '#F44336', dotColor: '#F44336', isLoading: false };
+      }
+    }
+
+    // Default to connecting
+    return { text: 'Connecting...', color: '#FFC107', dotColor: '#FFC107', isLoading: true };
   };
 
   const drawerStatus = getDrawerStatusDisplay();

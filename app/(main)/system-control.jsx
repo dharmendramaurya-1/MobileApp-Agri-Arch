@@ -23,6 +23,13 @@ import { useSystemMode } from "../../src/context/SystemModeContext";
 import { useTheme } from "../../src/context/ThemContext";
 import { getDisplayStatus } from "../../src/utils/deviceStatusParser";
 
+// ✅ Import SVG icons
+import {
+  InletValveIcon,
+  OutletValveIcon,
+  WaterPumpIcon,
+} from "../../components/SvgIcons";
+
 const { height } = Dimensions.get("window");
 
 // ── Timing field definitions, grouped by parent device ──
@@ -37,7 +44,7 @@ const TIMING_FIELDS = {
   ],
 };
 
-// ── Device configuration ──
+// ── Device configuration with SVG icons ──
 const DEVICE_CONFIG = {
   water_pump: {
     displayName: "Water Pump",
@@ -46,6 +53,7 @@ const DEVICE_CONFIG = {
     category: "pump",
     actuatorKey: "water_pump",
     color: "#2196F3",
+    svgIcon: WaterPumpIcon,
   },
   water_ILvalve: {
     displayName: "Inlet Valve",
@@ -54,6 +62,7 @@ const DEVICE_CONFIG = {
     category: "valve",
     actuatorKey: "water_ILvalve",
     color: "#00BCD4",
+    svgIcon: InletValveIcon,
   },
   water_OLvalve: {
     displayName: "Outlet Valve",
@@ -62,6 +71,7 @@ const DEVICE_CONFIG = {
     category: "valve",
     actuatorKey: "water_OLvalve",
     color: "#FF9800",
+    svgIcon: OutletValveIcon,
   },
   nutrient_pump: {
     displayName: "Nutrient Pump",
@@ -70,6 +80,7 @@ const DEVICE_CONFIG = {
     category: "pump",
     actuatorKey: "nutrient_pump",
     color: "#4CAF50",
+    svgIcon: WaterPumpIcon,
   },
   ac_stat: {
     displayName: "AC Status",
@@ -78,6 +89,7 @@ const DEVICE_CONFIG = {
     category: "system",
     actuatorKey: "ac_stat",
     color: "#9C27B0",
+    svgIcon: null,
   },
 };
 
@@ -174,7 +186,7 @@ function DimmingCard({ dimmingLevel, onDimmingChange, locked, theme, cardBg, bor
   );
 }
 
-// ── Expandable Actuator Card ──
+// ── Expandable Actuator Card with SVG Icons ──
 function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggleTime, onToggle, timingValues, onTimingChange, theme, cardBg, borderC }) {
   const [expanded, setExpanded] = useState(() => {
     const timingFields = TIMING_FIELDS[device.id] || [];
@@ -211,6 +223,9 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
   const chevronRotation = rotateAnim.interpolate({ inputRange: [0, 1], outputRange: ["-90deg", "0deg"] });
   const statusColor = isOn ? accentColor : "#757575";
 
+  // ✅ Get SVG icon component
+  const SvgIcon = device.svgIcon;
+
   return (
     <Animated.View style={[styles.card, {
       backgroundColor: cardBg,
@@ -224,8 +239,18 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
         activeOpacity={hasTiming ? 0.7 : 1}
         disabled={locked}
       >
+        {/* ✅ SVG Icon or Fallback Ionicons */}
         <View style={[styles.iconCircle, { backgroundColor: `${statusColor}12` }]}>
-          <Ionicons name={isOn ? device.icon : `${device.icon}-outline`} size={22} color={statusColor} />
+          {SvgIcon ? (
+            <SvgIcon
+              active={isOn}
+              size={32}
+              color={accentColor}
+              status="normal"
+            />
+          ) : (
+            <Ionicons name={isOn ? device.icon : `${device.icon}-outline`} size={22} color={statusColor} />
+          )}
         </View>
         <View style={styles.cardInfo}>
           <Text style={[styles.cardName, { color: theme.colors.text }]}>{device.displayName}</Text>
@@ -599,7 +624,6 @@ export default function SystemControl() {
             <Text style={[styles.bannerText, { color: "#FF9800" }]}>Device offline. Waiting for connection...</Text>
           </View>
         )}
-        {/* ✅ REMOVED: "Connecting..." banner - show NOTHING while loading */}
 
         {/* ── Dimming Card ── */}
         <DimmingCard

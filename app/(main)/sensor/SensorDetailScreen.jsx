@@ -1,4 +1,5 @@
 // app/(main)/sensor/SensorDetailScreen.jsx
+
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -19,14 +20,17 @@ import LineChart from "../../../components/LineChart";
 import LiveChartCard from "../../../components/LiveChartCard";
 import ZoomableChart from "../../../components/ZoomableChart";
 import { SENSORS, getSensorByKey } from "../../../src/config/sensorConfigs";
+import { useHistoricalData } from "../../../src/context/HistoricalDataContext";
 import { useMqtt } from "../../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../../src/context/ScrollContext";
 import { useTheme } from "../../../src/context/ThemContext";
 import useLiveMqttWindow from "../../../src/hooks/useLiveMqttWindow";
 import {
-  downsampleData,
-  fetchAllSensorHistorical,
+  downsampleData
 } from "../../../src/services/senmlService";
+
+// ✅ Import device status parser
+import { parseDeviceStatus } from "../../../src/utils/deviceStatusParser";
 
 const { width, height: screenHeight } = Dimensions.get("window");
 const PAGE_SIZE = 10;
@@ -39,6 +43,109 @@ const RANGE_LABELS = { "1h": "Last 1h", "1d": "Last 24h", "7d": "Last 7d", "30d"
 const ZOOM_CHART_WIDTH = screenHeight - 100;
 const ZOOM_CHART_HEIGHT = width - 60;
 
+// ✅ Helper: Get sensor status from device flags (same source as alerts)
+const getSensorStatusFromFlags = (sensorKey, deviceStatus) => {
+  if (!deviceStatus) {
+    return { level: 'unknown', label: 'No Data', color: '#9E9E9E', icon: 'help-circle' };
+  }
+
+  // Parse device status if it's a number
+  const flags = typeof deviceStatus === 'number' 
+    ? parseDeviceStatus(deviceStatus) 
+    : deviceStatus;
+
+  // ── AMBIENT TEMPERATURE ──
+  if (sensorKey === 'ambient-temperature' || sensorKey === 'ambientTemperature') {
+    if (flags.airTempHigh) {
+      return { level: 'high', label: 'High ⬆️', color: '#F44336', icon: 'alert-circle' };
+    }
+    if (flags.airTempLow) {
+      return { level: 'low', label: 'Low ⬇️', color: '#2196F3', icon: 'alert-circle' };
+    }
+    return { level: 'normal', label: 'Normal ✅', color: '#4CAF50', icon: 'checkmark-circle' };
+  }
+
+  // ── WATER TEMPERATURE ──
+  if (sensorKey === 'water-temperature' || sensorKey === 'waterTemperature') {
+    if (flags.waterTempHigh) {
+      return { level: 'high', label: 'High ⬆️', color: '#F44336', icon: 'alert-circle' };
+    }
+    if (flags.waterTempLow) {
+      return { level: 'low', label: 'Low ⬇️', color: '#2196F3', icon: 'alert-circle' };
+    }
+    return { level: 'normal', label: 'Normal ✅', color: '#4CAF50', icon: 'checkmark-circle' };
+  }
+
+  // ── HUMIDITY ──
+  if (sensorKey === 'ambient-humidity' || sensorKey === 'ambientHumidity') {
+    if (flags.humidityHigh) {
+      return { level: 'high', label: 'High ⬆️', color: '#F44336', icon: 'alert-circle' };
+    }
+    if (flags.humidityLow) {
+      return { level: 'low', label: 'Low ⬇️', color: '#2196F3', icon: 'alert-circle' };
+    }
+    return { level: 'normal', label: 'Normal ✅', color: '#4CAF50', icon: 'checkmark-circle' };
+  }
+
+  // ── CO₂ ──
+  if (sensorKey === 'co2' || sensorKey === 'co2Level') {
+    if (flags.co2High) {
+      return { level: 'high', label: 'High ⬆️', color: '#F44336', icon: 'alert-circle' };
+    }
+    if (flags.co2Low) {
+      return { level: 'low', label: 'Low ⬇️', color: '#2196F3', icon: 'alert-circle' };
+    }
+    return { level: 'normal', label: 'Normal ✅', color: '#4CAF50', icon: 'checkmark-circle' };
+  }
+
+  // ── pH ──
+  if (sensorKey === 'ph-level' || sensorKey === 'phValue') {
+    if (flags.phHigh) {
+      return { level: 'high', label: 'High ⬆️', color: '#F44336', icon: 'alert-circle' };
+    }
+    if (flags.phLow) {
+      return { level: 'low', label: 'Low ⬇️', color: '#2196F3', icon: 'alert-circle' };
+    }
+    return { level: 'normal', label: 'Normal ✅', color: '#4CAF50', icon: 'checkmark-circle' };
+  }
+
+  // ── EC ──
+  if (sensorKey === 'ec-value' || sensorKey === 'ecValue') {
+    if (flags.ecHigh) {
+      return { level: 'high', label: 'High ⬆️', color: '#F44336', icon: 'alert-circle' };
+    }
+    if (flags.ecLow) {
+      return { level: 'low', label: 'Low ⬇️', color: '#2196F3', icon: 'alert-circle' };
+    }
+    return { level: 'normal', label: 'Normal ✅', color: '#4CAF50', icon: 'checkmark-circle' };
+  }
+
+  // ── WATER LEVEL ──
+  if (sensorKey === 'water-level' || sensorKey === 'waterLevel') {
+    if (flags.tankHigh) {
+      return { level: 'high', label: 'High ⬆️', color: '#F44336', icon: 'alert-circle' };
+    }
+    if (flags.tankLow) {
+      return { level: 'low', label: 'Low ⬇️', color: '#2196F3', icon: 'alert-circle' };
+    }
+    return { level: 'normal', label: 'Normal ✅', color: '#4CAF50', icon: 'checkmark-circle' };
+  }
+
+  // ── LIGHT LEVEL ──
+  if (sensorKey === 'light-level' || sensorKey === 'lightLevel') {
+    if (flags.luxHigh) {
+      return { level: 'high', label: 'High ⬆️', color: '#F44336', icon: 'alert-circle' };
+    }
+    if (flags.luxLow) {
+      return { level: 'low', label: 'Low ⬇️', color: '#2196F3', icon: 'alert-circle' };
+    }
+    return { level: 'normal', label: 'Normal ✅', color: '#4CAF50', icon: 'checkmark-circle' };
+  }
+
+  // Default
+  return { level: 'normal', label: 'Normal ✅', color: '#4CAF50', icon: 'checkmark-circle' };
+};
+
 export default function SensorDetailScreen({
   sensorKey,
   config: configProp,
@@ -47,7 +154,24 @@ export default function SensorDetailScreen({
 }) {
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
-  const { getSelectedDeviceSensorData, getSelectedDeviceId, getSelectedExternalKey, externalKey, availableDevices } = useMqtt();
+  
+  // ✅ ADDED: deviceStatusFlags
+  const { 
+    getSelectedDeviceSensorData, 
+    getSelectedDeviceId, 
+    getSelectedExternalKey, 
+    availableDevices,
+    deviceStatusFlags,      // ✅ NEW - Device status flags
+  } = useMqtt();
+  
+  // ✅ Use HistoricalDataContext
+  const { 
+    fetchSensorHistorical, 
+    isLoading: isHistoricalLoading,
+    error: historicalError,
+    lastUpdated 
+  } = useHistoricalData();
+  
   const sensorData = getSelectedDeviceSensorData();
   const { onScroll, headerHeight } = useScroll();
   const scrollRef = useRef(null);
@@ -68,17 +192,10 @@ export default function SensorDetailScreen({
   const selectedDevId = getSelectedDeviceId();
   const selectedExtKey = getSelectedExternalKey();
 
-  // ── Real-time rolling 10-min window fed by live MQTT messages ──
-  const liveDeviceKey = selectedExtKey || externalKey || null;
-  const livePoints = useLiveMqttWindow({
-    deviceKey: liveDeviceKey,
-    enabled: !!liveDeviceKey,
-    extractPoint: (parsed) => {
-      const v = parsed ? parsed[config.dataKey] : undefined;
-      if (v === undefined || v === null || typeof v !== "number") return null;
-      return { value: v };
-    },
-  });
+  // ✅ Get status from device flags (same source as alerts)
+  const status = useMemo(() => {
+    return getSensorStatusFromFlags(config.key, deviceStatusFlags);
+  }, [config.key, deviceStatusFlags]);
 
   const getDevicePublisherAndKey = useCallback(() => {
     if (selectedDevId && availableDevices) {
@@ -102,17 +219,19 @@ export default function SensorDetailScreen({
     return { from: fromMs, to: toMs };
   }, [timeRange]);
 
+  // ✅ Use HistoricalDataContext for fetching data
   const fetchAllTableData = useCallback(async () => {
     setIsTableLoading(true);
     try {
       const { from, to } = getTimeWindow();
       const { publisherId, externalKey } = getDevicePublisherAndKey();
 
-      const result = await fetchAllSensorHistorical({
+      const result = await fetchSensorHistorical({
         sensorKey: sensorName,
         from,
         to,
         pageSize: 500,
+        maxPages: 50,
         publisherId,
         externalKey,
       });
@@ -121,6 +240,7 @@ export default function SensorDetailScreen({
         setAllTableData(downsampleData(result.data, MAX_TABLE_ROWS));
       } else {
         setAllTableData([]);
+        console.error("Table fetch error:", result.error);
       }
     } catch (error) {
       console.error("Table fetch error:", error);
@@ -128,7 +248,7 @@ export default function SensorDetailScreen({
     } finally {
       setIsTableLoading(false);
     }
-  }, [getTimeWindow, getDevicePublisherAndKey, sensorName]);
+  }, [getTimeWindow, getDevicePublisherAndKey, sensorName, fetchSensorHistorical]);
 
   const fetchGraphData = useCallback(async () => {
     setIsGraphLoading(true);
@@ -136,11 +256,12 @@ export default function SensorDetailScreen({
       const { from, to } = getTimeWindow();
       const { publisherId, externalKey } = getDevicePublisherAndKey();
 
-      const result = await fetchAllSensorHistorical({
+      const result = await fetchSensorHistorical({
         sensorKey: sensorName,
         from,
         to,
         pageSize: 100,
+        maxPages: 50,
         publisherId,
         externalKey,
       });
@@ -149,6 +270,7 @@ export default function SensorDetailScreen({
         setGraphData(downsampleData(result.data, MAX_GRAPH_POINTS));
       } else {
         setGraphData([]);
+        console.error("Graph fetch error:", result.error);
       }
     } catch (error) {
       console.error("Graph fetch error:", error);
@@ -156,7 +278,7 @@ export default function SensorDetailScreen({
     } finally {
       setIsGraphLoading(false);
     }
-  }, [getTimeWindow, getDevicePublisherAndKey, sensorName]);
+  }, [getTimeWindow, getDevicePublisherAndKey, sensorName, fetchSensorHistorical]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -181,19 +303,8 @@ export default function SensorDetailScreen({
     return `${date}, ${time}`;
   };
 
-  const getStatusColor = (value) => {
-    if (value === null || value === undefined) return "#666";
-    if (config.min !== undefined && value < config.min) return "#FF9800";
-    if (config.max !== undefined && value > config.max) return "#F44336";
-    return config.color;
-  };
-
-  const getStatusText = (value) => {
-    if (value === null || value === undefined) return "No data";
-    if (config.min !== undefined && value < config.min) return "Low";
-    if (config.max !== undefined && value > config.max) return "High";
-    return "Normal";
-  };
+  // ❌ REMOVED: getStatusColor (broken - uses config.min/max)
+  // ❌ REMOVED: getStatusText (broken - uses config.min/max)
 
   // Client-side pagination over downsampled data
   const tableTotal = allTableData.length;
@@ -203,7 +314,7 @@ export default function SensorDetailScreen({
   const startIndex = tableTotal > 0 ? (safePage - 1) * PAGE_SIZE + 1 : 0;
   const endIndex = Math.min(safePage * PAGE_SIZE, tableTotal);
 
-  // ── Prepare graph data for LineChart (same format as before) ──
+  // ── Prepare graph data for LineChart ──
   const graphPoints = useMemo(() => graphData, [graphData]);
 
   // ── X‑axis labels: show a few representative timestamps ──
@@ -217,7 +328,6 @@ export default function SensorDetailScreen({
     for (let i = 0; i <= 4; i++) {
       yLabels.push(minVal + i * yStep);
     }
-    // X labels: show first, middle, last
     const indices = [0, Math.floor(graphPoints.length / 2), graphPoints.length - 1];
     const xLabels = indices.map((i) => {
       const d = new Date(graphPoints[i].time);
@@ -227,6 +337,9 @@ export default function SensorDetailScreen({
   };
 
   const { xLabels, yLabels } = getAxisLabels();
+
+  // ✅ Check if data is loading
+  const isLoading = isTableLoading || isGraphLoading || isHistoricalLoading;
 
   return (
     <>
@@ -247,7 +360,6 @@ export default function SensorDetailScreen({
           style={[
             styles.header,
             {
-              paddingTop:  12,
               paddingHorizontal: 16,
             },
           ]}
@@ -266,26 +378,32 @@ export default function SensorDetailScreen({
         </View>
       )}
 
-      {/* ─── LIVE VALUE ─── */}
-
- <View style={[styles.valueCard, { backgroundColor: theme.colors.surface }]}>
+      {/* ─── LIVE VALUE ─── ✅ FIXED: Uses device status flags ─── */}
+      <View style={[styles.valueCard, { backgroundColor: theme.colors.surface }]}>
         <View style={styles.valueRow}>
           <Text style={[styles.valueLabel, { color: theme.colors.textSecondary }]}>Live</Text>
-          <View style={[styles.statusBadge, { backgroundColor: getStatusColor(liveValue) + "20" }]}>
-            <Ionicons name="checkmark-circle-outline" size={16} color={getStatusColor(liveValue)} />
-            <Text style={[styles.statusText, { color: getStatusColor(liveValue) }]}>
-              {getStatusText(liveValue)}
+          {/* ✅ Use status from device flags */}
+          <View style={[styles.statusBadge, { backgroundColor: status.color + "20" }]}>
+            <Ionicons name={status.icon} size={16} color={status.color} />
+            <Text style={[styles.statusText, { color: status.color }]}>
+              {status.label}
             </Text>
           </View>
         </View>
         <View style={styles.mainValueContainer}>
-          <Text style={[styles.mainValue, { color: theme.colors.text }]}>
+          {/* ✅ Use status color for the value */}
+          <Text style={[styles.mainValue, { color: status.color }]}>
             {formatValue(liveValue)}
           </Text>
           <Text style={[styles.mainUnit, { color: theme.colors.textSecondary }]}>
             {config.unit}
           </Text>
         </View>
+        {lastUpdated && (
+          <Text style={[styles.lastUpdated, { color: theme.colors.textSecondary }]}>
+            Last updated: {lastUpdated.toLocaleString()}
+          </Text>
+        )}
       </View>
       {/* ─── HISTORICAL ─── */}
       <View style={styles.historicalSection}>
@@ -366,7 +484,14 @@ export default function SensorDetailScreen({
         </View>
 
         <View style={[styles.contentCard, { backgroundColor: theme.colors.surface }]}>
-          {activeTab === "table" ? (
+          {historicalError ? (
+            <View style={styles.placeholder}>
+              <Ionicons name="alert-circle-outline" size={48} color="#F44336" />
+              <Text style={[styles.placeholderText, { color: "#F44336" }]}>
+                {historicalError}
+              </Text>
+            </View>
+          ) : activeTab === "table" ? (
             isTableLoading ? (
               <View style={styles.placeholder}>
                 <ActivityIndicator size="large" color={theme.colors.primary} />
@@ -389,25 +514,49 @@ export default function SensorDetailScreen({
                   >
                     Value
                   </Text>
-                </View>
-                {tableData.map((point, idx) => (
-                  <View
-                    key={`${point.time}-${idx}`}
-                    style={[styles.tableRow, idx % 2 === 1 && styles.tableRowStriped]}
+                  {/* ✅ NEW: Status column */}
+                  <Text
+                    style={[
+                      styles.tableHeaderCell,
+                      styles.tableHeaderCellRight,
+                      { color: theme.colors.textSecondary },
+                    ]}
                   >
-                    <Text style={[styles.tableCell, { color: theme.colors.text }]}>
-                      {formatTime(point.time)}
-                    </Text>
-                    <View style={styles.tableValueCell}>
-                      <Text style={[styles.tableValue, { color: getStatusColor(point.value) }]}>
-                        {formatValue(point.value)}
+                    Status
+                  </Text>
+                </View>
+                {tableData.map((point, idx) => {
+                  // ✅ Get status for each historical point using device flags
+                  // Note: Historical data uses the same device status flags
+                  const pointStatus = getSensorStatusFromFlags(config.key, deviceStatusFlags);
+                  return (
+                    <View
+                      key={`${point.time}-${idx}`}
+                      style={[styles.tableRow, idx % 2 === 1 && styles.tableRowStriped]}
+                    >
+                      <Text style={[styles.tableCell, { color: theme.colors.text }]}>
+                        {formatTime(point.time)}
                       </Text>
-                      <Text style={[styles.tableUnit, { color: theme.colors.textSecondary }]}>
-                        {point.unit || config.unit}
-                      </Text>
+                      <View style={styles.tableValueCell}>
+                        <Text style={[styles.tableValue, { color: pointStatus.color }]}>
+                          {formatValue(point.value)}
+                        </Text>
+                        <Text style={[styles.tableUnit, { color: theme.colors.textSecondary }]}>
+                          {point.unit || config.unit}
+                        </Text>
+                      </View>
+                      {/* ✅ NEW: Status column */}
+                      <View style={[styles.tableStatusCell, { justifyContent: 'flex-end' }]}>
+                        <View style={[styles.miniStatusBadge, { backgroundColor: pointStatus.color + '20' }]}>
+                          <Text style={[styles.miniStatusText, { color: pointStatus.color }]}>
+                            {pointStatus.level === 'high' ? 'High' : 
+                             pointStatus.level === 'low' ? 'Low' : 'Normal'}
+                          </Text>
+                        </View>
+                      </View>
                     </View>
-                  </View>
-                ))}
+                  );
+                })}
                 <View style={styles.paginationFooter}>
                   <TouchableOpacity
                     style={[styles.pageButton, safePage <= 1 && { opacity: 0.4 }]}
@@ -619,7 +768,7 @@ export default function SensorDetailScreen({
 
 // ─── STYLES ──────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: {  },
+  container: { flex: 1 },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -671,6 +820,11 @@ const styles = StyleSheet.create({
   },
   mainValue: { fontSize: 42, fontWeight: "700" },
   mainUnit: { fontSize: 18, fontWeight: "500" },
+  lastUpdated: {
+    fontSize: 11,
+    marginTop: 4,
+    opacity: 0.7,
+  },
 
   historicalSection: {
     marginHorizontal: 16,
@@ -735,13 +889,13 @@ const styles = StyleSheet.create({
     borderBottomColor: "rgba(0,0,0,0.08)",
   },
   tableHeaderCell: {
-    flex: 2,
+    flex: 1,
     fontSize: 11,
     fontWeight: "700",
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-  tableHeaderCellRight: { flex: 1, textAlign: "right" },
+  tableHeaderCellRight: { textAlign: "right" },
   tableRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -751,7 +905,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "rgba(0,0,0,0.06)",
   },
   tableRowStriped: { backgroundColor: "rgba(76,175,80,0.04)" },
-  tableCell: { flex: 2, fontSize: 13 },
+  tableCell: { flex: 1, fontSize: 13 },
   tableValueCell: {
     flex: 1,
     flexDirection: "row",
@@ -761,6 +915,20 @@ const styles = StyleSheet.create({
   },
   tableValue: { fontSize: 15, fontWeight: "700" },
   tableUnit: { fontSize: 11, fontWeight: "500" },
+  // ✅ NEW: Status column styles
+  tableStatusCell: {
+    flex: 0.6,
+    alignItems: "flex-end",
+  },
+  miniStatusBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  miniStatusText: {
+    fontSize: 9,
+    fontWeight: "600",
+  },
 
   paginationFooter: {
     flexDirection: "row",
