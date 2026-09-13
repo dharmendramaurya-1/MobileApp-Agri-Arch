@@ -7,16 +7,16 @@ import {
   Alert,
   Animated,
   Dimensions,
+  FlatList,
+  Modal,
   ScrollView,
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   TouchableOpacity,
   View
 } from "react-native";
 import SliderControl from "../../components/SettingsSlider";
-import { useAlerts } from "../../src/context/AlertContext";
 import { useMqtt } from "../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useSystemMode } from "../../src/context/SystemModeContext";
@@ -96,14 +96,158 @@ const DEVICE_CONFIG = {
 const DEVICE_ORDER = ["water_pump", "water_ILvalve", "water_OLvalve", "nutrient_pump", "ac_stat"];
 const CATEGORY_TITLES = { pump: "Pumps", valve: "Valves", system: "System" };
 const CATEGORY_ICONS = { pump: "water", valve: "git-network", system: "hardware-chip" };
+const CONTROL_COLORS = {
+  primary: "#2E7D32",
+  secondary: "#43A047",
+  accent: "#0288D1",
+  soft: "#EAF5EC",
+};
+const PICKER_ROW_HEIGHT = 44;
+const PICKER_COLUMN_HEIGHT = 190;
+const PICKER_CENTER_PADDING = (PICKER_COLUMN_HEIGHT - PICKER_ROW_HEIGHT) / 2;
 
 // ── Format seconds ──
 function fmtSec(sec) {
   if (sec === null || sec === undefined) return "--";
+  if (sec >= 3600) {
+    const hours = Math.floor(sec / 3600);
+    const minutes = Math.floor((sec % 3600) / 60);
+    const seconds = sec % 60;
+    return seconds === 0 && minutes === 0
+      ? `${hours}h`
+      : `${hours}h ${minutes}m${seconds ? ` ${seconds}s` : ""}`;
+  }
   if (sec < 60) return `${sec}s`;
   const min = Math.floor(sec / 60);
   const rem = sec % 60;
   return rem === 0 ? `${min}m` : `${min}m ${rem}s`;
+}
+
+function TimePickerModal({ visible, value, max, onClose, onSelect, theme }) {
+  const pickerMax = 24 * 3600 + 60 * 60 + 60;
+  const safeValue = Math.max(0, Math.min(value || 0, pickerMax));
+  const initialHours = Math.floor(safeValue / 3600);
+  const initialMinutes = Math.floor((safeValue % 3600) / 60);
+  const initialSeconds = safeValue % 60;
+  const [hours, setHours] = useState(initialHours);
+  const [minutes, setMinutes] = useState(initialMinutes);
+  const [seconds, setSeconds] = useState(initialSeconds);
+
+  useEffect(() => {
+    if (visible) {
+      setHours(initialHours);
+      setMinutes(initialMinutes);
+      setSeconds(initialSeconds);
+    }
+  }, [visible, initialHours, initialMinutes, initialSeconds]);
+
+  const hourOptions = Array.from({ length: 25 }, (_, index) => index);
+  const minuteOptions = Array.from({ length: 61 }, (_, index) => index);
+  const secondOptions = Array.from({ length: 61 }, (_, index) => index);
+  const choose = (nextHours, nextMinutes, nextSeconds) => {
+    if (nextHours * 3600 + nextMinutes * 60 + nextSeconds <= pickerMax) {
+      setHours(nextHours);
+      setMinutes(nextMinutes);
+      setSeconds(nextSeconds);
+    }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.pickerOverlay}>
+        <View style={[styles.pickerSheet, { backgroundColor: theme.colors.surface }]}>
+          <View style={styles.pickerHeader}>
+            <View>
+              <Text style={[styles.pickerTitle, { color: theme.colors.text }]}>Set duration</Text>
+              <Text style={[styles.pickerValue, { color: CONTROL_COLORS.primary }]}>{fmtSec(hours * 3600 + minutes * 60 + seconds)}</Text>
+            </View>
+            <TouchableOpacity onPress={onClose} accessibilityLabel="Close time picker">
+              <Ionicons name="close-circle-outline" size={28} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.pickerColumns}>
+            <View style={styles.pickerColumn}>
+              <Text style={[styles.pickerColumnLabel, { color: theme.colors.textSecondary }]}>Hours</Text>
+              <FlatList
+                data={hourOptions}
+                style={styles.pickerList}
+                keyExtractor={(item) => `hour-${item}`}
+                showsVerticalScrollIndicator={false}
+                snapToInterval={PICKER_ROW_HEIGHT}
+                decelerationRate="fast"
+                contentContainerStyle={styles.pickerListContent}
+                initialScrollIndex={hours}
+                getItemLayout={(_, index) => ({ length: PICKER_ROW_HEIGHT, offset: PICKER_ROW_HEIGHT * index, index })}
+                onMomentumScrollEnd={({ nativeEvent }) => {
+                  const selected = Math.max(0, Math.min(24, Math.round(nativeEvent.contentOffset.y / PICKER_ROW_HEIGHT)));
+                  choose(selected, minutes, seconds);
+                }}
+                renderItem={({ item }) => (
+                  <View style={[styles.pickerOption, item === hours && styles.pickerOptionSelected]}>
+                    <Text style={[styles.pickerOptionText, { color: item === hours ? CONTROL_COLORS.primary : theme.colors.textSecondary }]}>{item}</Text>
+                  </View>
+                )}
+              />
+              <View pointerEvents="none" style={styles.pickerSelectionFrame} />
+            </View>
+            <Text style={[styles.pickerColon, { color: theme.colors.textSecondary }]}>:</Text>
+            <View style={styles.pickerColumn}>
+              <Text style={[styles.pickerColumnLabel, { color: theme.colors.textSecondary }]}>Minutes</Text>
+              <FlatList
+                data={minuteOptions}
+                style={styles.pickerList}
+                keyExtractor={(item) => `minute-${item}`}
+                showsVerticalScrollIndicator={false}
+                snapToInterval={PICKER_ROW_HEIGHT}
+                decelerationRate="fast"
+                contentContainerStyle={styles.pickerListContent}
+                initialScrollIndex={minutes}
+                getItemLayout={(_, index) => ({ length: PICKER_ROW_HEIGHT, offset: PICKER_ROW_HEIGHT * index, index })}
+                onMomentumScrollEnd={({ nativeEvent }) => {
+                  const selected = Math.max(0, Math.min(60, Math.round(nativeEvent.contentOffset.y / PICKER_ROW_HEIGHT)));
+                  choose(hours, selected, seconds);
+                }}
+                renderItem={({ item }) => (
+                  <View style={[styles.pickerOption, item === minutes && styles.pickerOptionSelected]}>
+                    <Text style={[styles.pickerOptionText, { color: item === minutes ? CONTROL_COLORS.primary : theme.colors.textSecondary }]}>{item}</Text>
+                  </View>
+                )}
+              />
+              <View pointerEvents="none" style={styles.pickerSelectionFrame} />
+            </View>
+            <Text style={[styles.pickerColon, { color: theme.colors.textSecondary }]}>:</Text>
+            <View style={styles.pickerColumn}>
+              <Text style={[styles.pickerColumnLabel, { color: theme.colors.textSecondary }]}>Seconds</Text>
+              <FlatList
+                data={secondOptions}
+                style={styles.pickerList}
+                keyExtractor={(item) => `second-${item}`}
+                showsVerticalScrollIndicator={false}
+                snapToInterval={PICKER_ROW_HEIGHT}
+                decelerationRate="fast"
+                contentContainerStyle={styles.pickerListContent}
+                initialScrollIndex={seconds}
+                getItemLayout={(_, index) => ({ length: PICKER_ROW_HEIGHT, offset: PICKER_ROW_HEIGHT * index, index })}
+                onMomentumScrollEnd={({ nativeEvent }) => {
+                  const selected = Math.max(0, Math.min(60, Math.round(nativeEvent.contentOffset.y / PICKER_ROW_HEIGHT)));
+                  choose(hours, minutes, selected);
+                }}
+                renderItem={({ item }) => (
+                  <View style={[styles.pickerOption, item === seconds && styles.pickerOptionSelected]}>
+                    <Text style={[styles.pickerOptionText, { color: item === seconds ? CONTROL_COLORS.primary : theme.colors.textSecondary }]}>{String(item).padStart(2, "0")}</Text>
+                  </View>
+                )}
+              />
+              <View pointerEvents="none" style={styles.pickerSelectionFrame} />
+            </View>
+          </View>
+          <TouchableOpacity style={styles.pickerDoneButton} onPress={() => { onSelect(hours * 3600 + minutes * 60 + seconds); onClose(); }}>
+            <Text style={styles.pickerDoneText}>Use {fmtSec(hours * 3600 + minutes * 60 + seconds)}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
 }
 
 // ── Dimming Card Component ──
@@ -126,7 +270,7 @@ function DimmingCard({ dimmingLevel, onDimmingChange, locked, theme, cardBg, bor
     onDimmingChange(firmwareValue);
   };
 
-  const accentColor = "#FFC107";
+  const accentColor = CONTROL_COLORS.accent;
   return (
     <View style={[styles.dimmCard, { backgroundColor: cardBg, borderColor: borderC }]}>
       <View style={styles.dimmHeader}>
@@ -195,9 +339,10 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
   const expandAnim = useRef(new Animated.Value(1)).current;
   const rotateAnim = useRef(new Animated.Value(1)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
-  const accentColor = device.color || "#4CAF50";
+  const accentColor = CONTROL_COLORS.primary;
   const timingFields = TIMING_FIELDS[device.id] || [];
   const hasTiming = timingFields.length > 0;
+  const [pickerField, setPickerField] = useState(null);
 
   const prevIsOn = useRef(isOn);
   useEffect(() => {
@@ -270,7 +415,7 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
         <View style={styles.cardRight}>
           <Switch
             value={isOn}
-            onValueChange={() => onToggle(device)}
+            onValueChange={(nextValue) => onToggle(device, nextValue)}
             trackColor={{ false: "#E0E0E0", true: `${accentColor}60` }}
             thumbColor={isToggling ? "#BDBDBD" : isOn ? accentColor : "#FAFAFA"}
             disabled={locked || isToggling}
@@ -294,12 +439,11 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
             <View style={styles.timingSectionHeader}>
               <Ionicons name="time-outline" size={13} color={accentColor} />
               <Text style={[styles.timingSectionLabel, { color: accentColor }]}>Timing Settings</Text>
-              <Text style={[styles.timingSectionUnit, { color: theme.colors.textSecondary }]}>s</Text>
+              <Text style={[styles.timingSectionUnit, { color: theme.colors.textSecondary }]}>min : sec</Text>
             </View>
             <View style={styles.timingRowInline}>
               {timingFields.map((field) => {
                 const currentValue = timingValues[field.key] ?? actuatorStatus?.[field.key] ?? field.defaultVal;
-                const displayVal = currentValue !== null && currentValue !== undefined ? String(currentValue) : String(field.defaultVal);
                 const preview = fmtSec(currentValue ?? field.defaultVal);
 
                 return (
@@ -309,20 +453,15 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
                       <Text style={[styles.timingInputLabel, { color: theme.colors.text }]} numberOfLines={1}>{field.label}</Text>
                       <Text style={[styles.timingInputPreview, { color: accentColor }]}>{preview}</Text>
                     </View>
-                    <TextInput
-                      style={[styles.timingInput, { color: theme.colors.text, borderColor: `${accentColor}30`, backgroundColor: '#FFF' }]}
-                      value={displayVal}
-                      onChangeText={(text) => {
-                        const parsed = parseInt(text, 10);
-                        if (!isNaN(parsed)) onTimingChange(field.key, parsed);
-                        else if (text === "") onTimingChange(field.key, field.defaultVal);
-                      }}
-                      keyboardType="number-pad"
-                      editable={!locked}
-                      selectTextOnFocus
-                      placeholder={String(field.defaultVal)}
-                      placeholderTextColor="#BDBDBD"
-                    />
+                    <TouchableOpacity
+                      style={[styles.timingInput, { borderColor: `${accentColor}30`, backgroundColor: theme.colors.surface }]}
+                      onPress={() => setPickerField(field)}
+                      disabled={locked}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Set ${field.label}`}
+                    >
+                      <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: "700", textAlign: "center" }}>{fmtSec(currentValue)}</Text>
+                    </TouchableOpacity>
                   </View>
                 );
               })}
@@ -330,6 +469,14 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
           </View>
         </Animated.View>
       )}
+      <TimePickerModal
+        visible={!!pickerField}
+        value={pickerField ? timingValues[pickerField.key] ?? pickerField.defaultVal : 0}
+        max={pickerField?.max || 600}
+        onClose={() => setPickerField(null)}
+        onSelect={(value) => pickerField && onTimingChange(pickerField.key, value)}
+        theme={theme}
+      />
     </Animated.View>
   );
 }
@@ -353,20 +500,20 @@ export default function SystemControl() {
     connectionState,
     deviceOnlineStatus,
     deviceInitialLoadComplete,
+    externalKey,
   } = useMqtt();
 
   const actuatorStatus = getSelectedDeviceActuatorStatus();
   const cropSettings = getSelectedDeviceCropSettings();
   const selectedDeviceName = getSelectedDeviceName();
   const { isManualMode, toggleMode } = useSystemMode();
-  const { addAlert } = useAlerts();
 
-  const [updating, setUpdating] = useState(null);
   const [toggleTimes, setToggleTimes] = useState({});
   const publishTimerRef = useRef(null);
+  const pendingActuatorValuesRef = useRef({});
 
   // ── ✅ FIX: STABLE STATUS DERIVATION (SAME AS LAYOUT) ──
-  const deviceKey = selectedExternalKey;
+  const deviceKey = selectedExternalKey || externalKey;
 
   // ✅ STABLE: Device online status (only changes when definitive)
   const isDeviceOnline = useMemo(() => {
@@ -383,8 +530,8 @@ export default function SystemControl() {
   // ✅ STABLE: Loading state (derived from initial load)
   const isLoading = useMemo(() => {
     if (!deviceKey) return false;
-    return !isInitialLoadComplete;
-  }, [deviceKey, isInitialLoadComplete]);
+    return !isDeviceOnline && !isInitialLoadComplete;
+  }, [deviceKey, isDeviceOnline, isInitialLoadComplete]);
 
   // ✅ STABLE: Offline state (only when confirmed)
   const isOffline = useMemo(() => {
@@ -393,16 +540,18 @@ export default function SystemControl() {
 
   // ✅ STABLE: Waiting state
   const isWaiting = useMemo(() => {
+    if (isDeviceOnline) return false;
     return (!isInitialLoadComplete && !isLoading) ||
       connectionState === "connecting" ||
       connectionState === "waiting" ||
       connectionState === "idle";
-  }, [isInitialLoadComplete, isLoading, connectionState]);
+  }, [isDeviceOnline, isInitialLoadComplete, isLoading, connectionState]);
 
   // ✅ STABLE: Is not connected
   const isNotConnected = useMemo(() => {
+    if (isDeviceOnline) return false;
     return connectionState === "idle" || connectionState === "disconnected" || connectionState === "error";
-  }, [connectionState]);
+  }, [isDeviceOnline, connectionState]);
 
   // ── ✅ STATUS DISPLAY (SAME AS LAYOUT) ──
   const getStatusDisplay = useCallback(() => {
@@ -420,8 +569,8 @@ export default function SystemControl() {
 
   // ── ✅ DEVICE READY STATE (stable, no flicker) ──
   const isDeviceReady = useMemo(() => {
-    return isConnected && isInitialLoadComplete && isDeviceOnline;
-  }, [isConnected, isInitialLoadComplete, isDeviceOnline]);
+    return isConnected && isDeviceOnline;
+  }, [isConnected, isDeviceOnline]);
 
   // ── ✅ DEVICE LOCKED (only lock when definitely offline or disconnected) ──
   const deviceLocked = useMemo(() => {
@@ -470,14 +619,27 @@ export default function SystemControl() {
     return acc;
   }, {});
 
-  // Clear updating when actuatorStatus changes
+  // Keep the optimistic switch state until the device confirms the target value.
   const prevActuatorRef = useRef(actuatorStatus);
   useEffect(() => {
-    if (updating && prevActuatorRef.current !== actuatorStatus) {
-      setUpdating(null);
-    }
     prevActuatorRef.current = actuatorStatus;
-  }, [actuatorStatus, updating]);
+
+    const confirmed = { ...pendingActuatorValuesRef.current };
+    let changed = false;
+    Object.entries(confirmed).forEach(([key, expectedValue]) => {
+      if (actuatorStatus?.[key] === expectedValue) {
+        delete confirmed[key];
+        changed = true;
+      }
+    });
+    if (changed) {
+      pendingActuatorValuesRef.current = confirmed;
+    }
+  }, [actuatorStatus]);
+
+  useEffect(() => () => {
+    if (publishTimerRef.current) clearTimeout(publishTimerRef.current);
+  }, []);
 
   // ── Get mode label from device status flags ──
   const displayStatus = getDisplayStatus(deviceStatusFlags);
@@ -509,13 +671,11 @@ export default function SystemControl() {
       try {
         const currentCropSettings = cropSettings || {};
         await publishSettings(selectedExternalKey, { ...currentCropSettings, dimming: firmwareValue });
-        const time = new Date().toLocaleTimeString();
-        addAlert("device", "☀️ Dimming Updated", `Light dimming set to ${Math.round((firmwareValue / 127) * 100)}% at ${time}`, "success");
       } catch (err) {
         console.error("Dimming publish error:", err);
       }
     }, 500);
-  }, [deviceLocked, selectedExternalKey, cropSettings, publishSettings, addAlert, isManualMode]);
+  }, [deviceLocked, selectedExternalKey, cropSettings, publishSettings, isManualMode]);
 
   // ── ✅ STABLE MODE PILL (SHOW NOTHING DURING LOADING) ──
   const getModePillStyle = useCallback(() => {
@@ -565,18 +725,25 @@ export default function SystemControl() {
               </Text>
             )}
           </View>
-          {/* ✅ Mode pill - ONLY show when definitive state */}
-          {modePill && (
-            <TouchableOpacity
-              style={[styles.modePill, { backgroundColor: modePill.bg }]}
-              onPress={() => router.push("/(main)/settings")}
-              activeOpacity={0.7}
-            >
-              <Ionicons name={modePill.icon} size={12} color="#FFF" />
-              <Text style={styles.modePillText}>{modePill.label}</Text>
-              <Ionicons name="chevron-forward" size={10} color="#FFF" opacity={0.7} />
-            </TouchableOpacity>
-          )}
+          <View style={styles.headerRightControls}>
+            {statusDisplay && (
+              <View style={[styles.statusBadge, { backgroundColor: statusDisplay.color }]}>
+                <View style={styles.onlineDot} />
+                <Text style={[styles.statusBadgeText, { color: "#FFF" }]}>{statusDisplay.text}</Text>
+              </View>
+            )}
+            {modePill && (
+              <TouchableOpacity
+                style={[styles.modePill, { backgroundColor: modePill.bg }]}
+                onPress={() => router.push("/(main)/settings")}
+                activeOpacity={0.7}
+              >
+                <Ionicons name={modePill.icon} size={12} color="#FFF" />
+                <Text style={styles.modePillText}>{modePill.label}</Text>
+                <Ionicons name="chevron-forward" size={10} color="#FFF" opacity={0.7} />
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
 
         {/* ── Device Info ── */}
@@ -598,18 +765,6 @@ export default function SystemControl() {
             )}
           </View>
         )} */}
-
-        {/* ── Status Badge - ONLY show when definitive ── */}
-        {statusDisplay && (
-          <View style={[
-            styles.statusBadge,
-            { backgroundColor: statusDisplay.color }
-          ]}>
-            <Text style={[styles.statusText, { color: '#fff' }]}>
-              {statusDisplay.text}
-            </Text>
-          </View>
-        )}
 
         {/* ── BANNERS: ONLY show when definitely offline/disconnected ── */}
         {isNotConnected && (
@@ -651,9 +806,9 @@ export default function SystemControl() {
                 actuatorStatus={actuatorStatus}
                 isOn={device.vb === true}
                 locked={deviceLocked}
-                isToggling={updating === device.id}
+                isToggling={false}
                 toggleTime={toggleTimes[device.id]}
-                onToggle={(d) => {
+                onToggle={(d, nextValue) => {
                   if (!selectedExternalKey) {
                     Alert.alert("Error", "No device selected");
                     return;
@@ -678,29 +833,45 @@ export default function SystemControl() {
                     );
                     return;
                   }
-                  setUpdating(d.id);
-                  const newVal = !d.vb;
+                  if (Object.prototype.hasOwnProperty.call(pendingActuatorValuesRef.current, d.actuatorKey)) {
+                    return;
+                  }
+                  const newVal = nextValue ?? !d.vb;
+                  const nextPending = {
+                    ...pendingActuatorValuesRef.current,
+                    [d.actuatorKey]: newVal,
+                  };
+                  pendingActuatorValuesRef.current = nextPending;
                   const time = new Date().toLocaleTimeString();
-                  const fullStatus = {};
-                  for (const dev of devices) {
-                    fullStatus[dev.actuatorKey] = dev.id === d.id ? newVal : dev.vb;
-                  }
-                  for (const [deviceId, fields] of Object.entries(TIMING_FIELDS)) {
-                    for (const f of fields) {
-                      fullStatus[f.key] = timingValues[f.key] ?? f.defaultVal;
+                  if (publishTimerRef.current) clearTimeout(publishTimerRef.current);
+                  publishTimerRef.current = setTimeout(async () => {
+                    const fullStatus = {};
+                    for (const dev of devices) {
+                      fullStatus[dev.actuatorKey] = pendingActuatorValuesRef.current[dev.actuatorKey] ?? dev.vb;
                     }
-                  }
-                  publishActuatorStatus(selectedExternalKey, fullStatus).then((success) => {
-                    if (success) {
-                      setToggleTimes((prev) => ({ ...prev, [d.id]: time }));
-                      addAlert("device", newVal ? `${d.displayName} ON` : `${d.displayName} OFF`,
-                        `${d.displayName} toggled at ${time}`, newVal ? "success" : "info");
-                    } else {
-                      Alert.alert("Error", `Failed to toggle ${d.displayName}`);
+                    for (const fields of Object.values(TIMING_FIELDS)) {
+                      for (const field of fields) {
+                        fullStatus[field.key] = timingValues[field.key] ?? field.defaultVal;
+                      }
                     }
-                  }).catch(() => {
-                    Alert.alert("Error", `Failed to toggle ${d.displayName}`);
-                  }).finally(() => setUpdating(null));
+
+                    try {
+                      const success = await publishActuatorStatus(selectedExternalKey, fullStatus);
+                      if (success) {
+                        setToggleTimes((prev) => ({ ...prev, [d.id]: time }));
+                      } else {
+                        const failedPending = { ...pendingActuatorValuesRef.current };
+                        delete failedPending[d.actuatorKey];
+                        pendingActuatorValuesRef.current = failedPending;
+                      }
+                    } catch (error) {
+                      console.error(`Failed to toggle ${d.displayName}:`, error);
+                      const failedPending = { ...pendingActuatorValuesRef.current };
+                      delete failedPending[d.actuatorKey];
+                      pendingActuatorValuesRef.current = failedPending;
+                    }
+                    publishTimerRef.current = null;
+                  }, 500);
                 }}
                 timingValues={timingValues}
                 onTimingChange={handleTimingChange}
@@ -725,6 +896,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 26, fontWeight: "700" },
   subtitle: { fontSize: 13, marginTop: 2, opacity: 0.8 },
 
+  headerRightControls: { alignItems: "flex-end", gap: 6 },
   modePill: {
     flexDirection: "row", alignItems: "center", gap: 5,
     paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12,
@@ -754,18 +926,13 @@ const styles = StyleSheet.create({
 
   // ── Status Badge ──
   statusBadge: {
-    alignSelf: 'flex-start',
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 12,
     marginBottom: 10,
   },
-  statusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#fff',
-  },
-
   banner: { flexDirection: "row", alignItems: "center", gap: 8, padding: 10, borderRadius: 10, marginBottom: 10 },
   bannerText: { fontSize: 12, flex: 1, fontWeight: "500" },
 
@@ -797,6 +964,7 @@ const styles = StyleSheet.create({
   },
   statusDot: { width: 5, height: 5, borderRadius: 3, marginRight: 5 },
   statusText: { fontSize: 10, fontWeight: "600", letterSpacing: 0.3 },
+  statusBadgeText: { fontSize: 11, fontWeight: "700" },
   timeText: { fontSize: 9, opacity: 0.5 },
   cardRight: { flexDirection: "row", alignItems: "center", gap: 6 },
 
@@ -835,6 +1003,89 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   timingInputPreview: { fontSize: 10, fontWeight: "700", textAlign: "right" },
+  pickerOverlay: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.35)",
+  },
+  pickerSheet: {
+    width: "88%",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderBottomLeftRadius: 20,
+    borderBottomRightRadius: 20,
+    padding: 20,
+    paddingBottom: 22,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 18,
+    elevation: 10,
+  },
+  pickerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 14,
+  },
+  pickerTitle: { fontSize: 17, fontWeight: "700" },
+  pickerValue: { fontSize: 13, fontWeight: "700", marginTop: 3 },
+  pickerColumns: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    height: 190,
+    borderRadius: 14,
+    backgroundColor: CONTROL_COLORS.soft,
+    paddingHorizontal: 8,
+  },
+  pickerColumn: {
+    width: 72,
+    height: 190,
+    position: "relative",
+    borderWidth: 1,
+    borderColor: `${CONTROL_COLORS.primary}35`,
+    borderRadius: 12,
+    paddingHorizontal: 4,
+    overflow: "hidden",
+  },
+  pickerColumnLabel: { position: "absolute", top: 0, left: 0, right: 0, height: 24, zIndex: 2, paddingTop: 5, textAlign: "center", fontSize: 11, fontWeight: "600", backgroundColor: CONTROL_COLORS.soft },
+  pickerList: { flex: 1 },
+  pickerListContent: { paddingVertical: PICKER_CENTER_PADDING },
+  pickerOption: { height: PICKER_ROW_HEIGHT, alignItems: "center", justifyContent: "center", borderRadius: 10 },
+  pickerOptionSelected: {
+    backgroundColor: CONTROL_COLORS.soft,
+    borderWidth: 1,
+    borderColor: `${CONTROL_COLORS.primary}55`,
+  },
+  pickerSelectionFrame: {
+    position: "absolute",
+    left: 4,
+    right: 4,
+    top: PICKER_CENTER_PADDING,
+    height: PICKER_ROW_HEIGHT,
+    borderWidth: 2,
+    borderColor: CONTROL_COLORS.primary,
+    borderRadius: 10,
+    zIndex: 3,
+  },
+  pickerOptionText: { fontSize: 18, fontWeight: "700" },
+  pickerColon: { fontSize: 24, fontWeight: "700", marginHorizontal: 8, marginTop: 16 },
+  pickerDoneButton: {
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: CONTROL_COLORS.primary,
+    borderRadius: 10,
+    paddingVertical: 13,
+    marginTop: 14,
+    shadowColor: CONTROL_COLORS.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  pickerDoneText: { color: "#FFF", fontSize: 14, fontWeight: "700" },
 
   // Footer
   footer: {

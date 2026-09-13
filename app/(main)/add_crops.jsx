@@ -2,23 +2,23 @@
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"; // ✅ Added useMemo
 import {
-  ActivityIndicator,
-  Alert,
-  Animated,
-  Dimensions,
-  Easing,
-  FlatList,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    Animated,
+    Dimensions,
+    Easing,
+    FlatList,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import SliderControl from "../../components/SettingsSlider";
@@ -27,9 +27,9 @@ import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useSystemMode } from "../../src/context/SystemModeContext";
 import { useTheme } from "../../src/context/ThemContext";
 import {
-  getAllCrops,
-  getParameterById,
-  getParametersByCropName,
+    getAllCrops,
+    getParameterById,
+    getParametersByCropName,
 } from "../../src/services/add_crops/add_crops";
 
 // Wizard step order (used by the slide transition to decide direction)
@@ -473,7 +473,7 @@ export default function AddCrops() {
     selectedExternalKey,
   } = useMqtt();
 
-  const { isAutoMode, isManualMode } = useSystemMode();
+  const { isAutoMode } = useSystemMode();
 
   // ── ✅ FIX: STABLE STATUS DERIVATION (SAME AS LAYOUT) ──
   const deviceKey = selectedExternalKey || externalKey;
@@ -590,6 +590,45 @@ export default function AddCrops() {
     baseX.setValue(0);
     incomingX.setValue(0);
   };
+
+  useFocusEffect(
+    useCallback(() => {
+      setStep("crop");
+      setSelectedCropName("");
+      setSelectedVariety(null);
+      setSelectedStageItem(null);
+      setVarietyData([]);
+      setCropDetails(null);
+      setShowCustomizeModal(false);
+      setShowSenMLPreview(false);
+      setCustomSettings({
+        tempLow: 0,
+        tempHigh: 0,
+        humidityLow: 0,
+        humidityHigh: 0,
+        waterTempLow: 20,
+        waterTempHigh: 28,
+        waterLevelLow: 25,
+        waterLevelHigh: 90,
+        phLow: 0,
+        phHigh: 0,
+        co2Low: 400,
+        co2High: 1500,
+        luxLow: 0,
+        luxHigh: 0,
+        dimming: 75,
+      });
+      prevStepRef.current = "crop";
+      stepRef.current = "crop";
+      transitionLock.current = false;
+      baseX.stopAnimation();
+      incomingX.stopAnimation();
+      setDisplayStep("crop");
+      setIncomingStep(null);
+      baseX.setValue(0);
+      incomingX.setValue(0);
+    }, [baseX, incomingX])
+  );
 
   useEffect(() => {
     const prev = prevStepRef.current;
@@ -866,7 +905,7 @@ export default function AddCrops() {
       return;
     }
 
-    if (!externalKey) {
+    if (!deviceKey) {
       Alert.alert("No Device", "No device key found. Please add a device first.");
       return;
     }
@@ -906,7 +945,7 @@ export default function AddCrops() {
       let success = false;
 
       if (typeof publishSettings === "function") {
-        success = await publishSettings(externalKey, cropSettings);
+        success = await publishSettings(deviceKey, cropSettings);
       }
 
       if (success) {
@@ -1228,17 +1267,17 @@ export default function AddCrops() {
         <TouchableOpacity
           style={[
             styles.publishBtn,
-            (isConnected && isManualMode && isDeviceOnline) ? { shadowColor: primaryDark } : null,
-            (isAutoMode || !isDeviceOnline) && { opacity: 0.5 },
+            (isConnected && isDeviceOnline) ? { shadowColor: primaryDark } : null,
+            !isDeviceOnline && { opacity: 0.5 },
           ]}
           onPress={handlePublish}
-          disabled={!isConnected || isSubmitting || isAutoMode || !isDeviceOnline}
+          disabled={!isConnected || isSubmitting || !isDeviceOnline}
           activeOpacity={0.85}
           accessibilityRole="button"
         >
           <LinearGradient
             colors={
-              isConnected && isManualMode && isDeviceOnline
+              isConnected && isDeviceOnline
                 ? [primary, primaryDark]
                 : ["#9E9E9E", "#757575"]
             }
@@ -1250,10 +1289,9 @@ export default function AddCrops() {
               <ActivityIndicator color="#fff" />
             ) : (
               <>
-                <Ionicons name={isAutoMode || !isDeviceOnline ? "lock-closed-outline" : "cloud-upload-outline"} size={20} color="#fff" />
+                <Ionicons name={!isDeviceOnline ? "lock-closed-outline" : "cloud-upload-outline"} size={20} color="#fff" />
                 <Text style={styles.publishButtonText}>
-                  {isAutoMode ? "Switch to Manual to Publish" : 
-                   !isDeviceOnline ? "Device Offline" :
+                  {!isDeviceOnline ? "Device Offline" :
                    isConnected ? "Publish Settings" : "Device Not Connected"}
                 </Text>
               </>

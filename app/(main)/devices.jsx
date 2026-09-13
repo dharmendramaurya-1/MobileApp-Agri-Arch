@@ -2,6 +2,7 @@
 // Add Device wizard + registered device list with checkbox selection
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
+import { router } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -87,23 +88,6 @@ function DeviceCard({
   const statusLabel = getStatusLabel();
 
   const handleSelect = () => {
-    // ✅ Only allow selection when device is online
-    if (isDeviceLoading || isDeviceWaiting) {
-      Alert.alert(
-        "⏳ Connecting",
-        `${device.name || "Device"} is still connecting. Please wait...`,
-        [{ text: "OK" }]
-      );
-      return;
-    }
-    if (isOnline !== true) {
-      Alert.alert(
-        "⚠️ Device Offline",
-        `${device.name || "Device"} is currently OFFLINE.\n\nPlease check the device connection.`,
-        [{ text: "OK" }]
-      );
-      return;
-    }
     onSelect(device);
   };
 
@@ -465,71 +449,18 @@ export default function Devices() {
     loadDevices();
   }, []);
 
-  // ── ✅ Auto-switch: when selected device goes offline, pick next online device ──
-  useEffect(() => {
-    if (!selectedDevice || !registeredDevices.length || isDeletingRef.current) return;
-
-    const key = selectedDevice.external_key || selectedDevice.id;
-    if (!key) return;
-
-    const isOnline = deviceOnlineStatus[key] === true;
-    const isLoadComplete = deviceInitialLoadComplete[key] === true;
-    const isLoading = !isLoadComplete && deviceInitialLoadStatus[key] === true;
-
-    if (!isOnline && !isLoading) {
-      const nextOnline = registeredDevices.find((d) => {
-        if (d.id === selectedDevice.id) return false;
-        const dKey = d.external_key || d.id;
-        return deviceOnlineStatus[dKey] === true;
-      });
-
-      if (nextOnline) {
-        console.log(`🔄 Selected device went offline, switching to ${nextOnline.name || nextOnline.external_key}`);
-        selectDevice(nextOnline.id, nextOnline.name)
-          .then(() => setSelectedDevice(nextOnline))
-          .catch((err) => console.error("Auto-switch failed:", err));
-      } else {
-        console.log("⚠️ No online devices available, clearing selection");
-        setSelectedDevice(null);
-      }
-    }
-  }, [deviceOnlineStatus, deviceInitialLoadComplete, deviceInitialLoadStatus]);
-
   // ── Handle device selection ──
   const handleSelectDevice = async (device) => {
-    if (selectedDevice?.id === device.id) return;
-
     const key = device.external_key || device.id;
     if (!key) return;
 
-    const isOnline = deviceOnlineStatus[key] === true;
-    const isLoadComplete = deviceInitialLoadComplete[key] === true;
-    const isLoading = !isLoadComplete && deviceInitialLoadStatus[key] === true;
-
-    if (isLoading) {
-      Alert.alert(
-        "⏳ Connecting",
-        `${device.name || "Device"} is still connecting. Please wait...`,
-        [{ text: "OK" }]
-      );
-      return;
-    }
-
-    if (isOnline !== true) {
-      Alert.alert(
-        "⚠️ Device Offline",
-        `${device.name || "Device"} is currently OFFLINE.\n\nPlease check the device connection.`,
-        [{ text: "OK" }]
-      );
-      return;
-    }
-
     try {
-      await selectDevice(device.id, device.name);
       setSelectedDevice(device);
+      const selection = selectDevice(device.id, device.name);
+      router.replace("/(main)/dashboard");
+      await selection;
     } catch (error) {
       console.error("Error selecting device:", error);
-      Alert.alert("Error", `Failed to select ${device.name}. Please try again.`);
     }
   };
 

@@ -73,7 +73,7 @@ export default function PumpHistory() {
     availableDevices,
   } = useMqtt();
 
-  const [timeRange, setTimeRange] = useState("7d");
+  const [timeRange, setTimeRange] = useState("1d");
   const [activeTab, setActiveTab] = useState("table");
   const [allTableData, setAllTableData] = useState([]);
   const [graphData, setGraphData] = useState([]);
@@ -83,6 +83,7 @@ export default function PumpHistory() {
   const [selectedPump, setSelectedPump] = useState("both");
   const [isPumpDropdownOpen, setIsPumpDropdownOpen] = useState(false);
   const [isZoomed, setIsZoomed] = useState(false);
+  const [selectedPoint, setSelectedPoint] = useState(null);
   const [error, setError] = useState(null); // ✅ Added error state
 
   // ── Real-time rolling 10-min window of pump states from live MQTT ──
@@ -248,6 +249,7 @@ export default function PumpHistory() {
 
   useEffect(() => {
     setCurrentPage(1);
+    setSelectedPoint(null);
     fetchAllData();
   }, [fetchAllData]);
 
@@ -279,25 +281,6 @@ export default function PumpHistory() {
 
   const getStatusColor = (on) => (on ? "#4CAF50" : "#F44336");
   const getStatusLabel = (on) => (on ? "ON" : "OFF");
-
-  // ✅ Fixed xLabels with safety checks
-  const { xLabels, yLabels } = useMemo(() => {
-    if (graphData.length < 2) return { xLabels: [], yLabels: [] };
-    const yLabs =
-      selectedPump === "both"
-        ? ["OFF", "Water", "Nutrient", "Both"]
-        : ["OFF", "ON"];
-    const indices = [0, Math.floor(graphData.length / 2), graphData.length - 1];
-    const xLabs = indices.map((i) => {
-      const point = graphData[i];
-      if (!point) return "";
-      const d = new Date(point.time);
-      return timeRange === "1h"
-        ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-        : d.toLocaleDateString();
-    });
-    return { xLabels: xLabs, yLabels: yLabs };
-  }, [graphData, selectedPump, timeRange]);
 
   // ✅ Fixed icon names
   const getPumpIcon = (pump) => {
@@ -335,38 +318,9 @@ export default function PumpHistory() {
           </Text>
         </View>
 
-        {/* ── LIVE PUMP · LAST 10 MIN ── */}
-        <LiveChartCard
-          title="Pump · Live"
-          subtitle={`${selectedPump === "water" ? "Water" : selectedPump === "nutrient" ? "Nutrient" : "Both"} pump — last 10 min of MQTT data`}
-          color={
-            selectedPump === "water"
-              ? "#2196F3"
-              : selectedPump === "nutrient"
-                ? "#4CAF50"
-                : safeTheme.colors.primary
-          }
-          unit=""
-          points={livePumpPoints}
-          stats={livePumpStats}
-          themeColors={safeTheme.colors}
-        />
-
-        {/* ── ERROR DISPLAY ── */}
-        {error && (
-          <View style={styles.errorContainer}>
-            <Text style={[styles.errorText, { color: "#F44336" }]}>
-              {error}
-            </Text>
-            <TouchableOpacity onPress={fetchAllData} style={styles.retryButton}>
-              <Text style={styles.retryText}>Retry</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
         {/* ── TIME RANGE FILTERS ── */}
         <View style={styles.timeRangeContainer}>
-          {["1h", "1d", "7d", "30d"].map((range) => (
+          {["1d", "7d", "30d"].map((range) => (
             <TouchableOpacity
               key={range}
               style={[
@@ -389,13 +343,7 @@ export default function PumpHistory() {
                   },
                 ]}
               >
-                {range === "1h"
-                  ? "1h"
-                  : range === "1d"
-                    ? "24h"
-                    : range === "7d"
-                      ? "7d"
-                      : "30d"}
+                {range === "1d" ? "24h" : range}
               </Text>
             </TouchableOpacity>
           ))}
@@ -884,51 +832,25 @@ export default function PumpHistory() {
                 ) : null}
               </View>
 
-              <View style={styles.graphWithAxis}>
-                <View style={styles.yAxisContainer}>
-                  {yLabels.map((label, i) => (
-                    <Text
-                      key={i}
-                      style={[
-                        styles.axisLabel,
-                        { color: safeTheme.colors.textSecondary },
-                      ]}
-                    >
-                      {label}
-                    </Text>
-                  ))}
-                </View>
-                <View style={styles.chartAndXAxis}>
-                  <View style={styles.chartArea}>
-                    <LineChart
-                      data={graphData}
-                      color={
-                        selectedPump === "water"
-                          ? "#2196F3"
-                          : selectedPump === "nutrient"
-                            ? "#4CAF50"
-                            : safeTheme.colors.primary
-                      }
-                      unit=""
-                      width={width - 100}
-                      height={200}
-                      labelColor={safeTheme.colors.textSecondary}
-                    />
-                  </View>
-                  <View style={styles.xAxisContainer}>
-                    {xLabels.map((label, i) => (
-                      <Text
-                        key={i}
-                        style={[
-                          styles.axisLabel,
-                          { color: safeTheme.colors.textSecondary },
-                        ]}
-                      >
-                        {label}
-                      </Text>
-                    ))}
-                  </View>
-                </View>
+              <View style={styles.chartArea}>
+                <LineChart
+                  data={graphData}
+                  color={
+                    selectedPump === "water"
+                      ? "#2196F3"
+                      : selectedPump === "nutrient"
+                        ? "#4CAF50"
+                        : safeTheme.colors.primary
+                  }
+                  unit=""
+                  width={width - 34}
+                  height={245}
+                  labelColor={safeTheme.colors.textSecondary}
+                  xTitle="Time"
+                  yTitle={selectedPump === "both" ? "State" : "Pump"}
+                  onPointPress={setSelectedPoint}
+                  selectedPoint={selectedPoint}
+                />
               </View>
             </View>
           ) : (
@@ -949,6 +871,36 @@ export default function PumpHistory() {
             </View>
           )}
         </View>
+
+
+         {/* ── LIVE PUMP · LAST 10 MIN ── */}
+        <LiveChartCard
+          title="Pump · Live"
+          subtitle={`${selectedPump === "water" ? "Water" : selectedPump === "nutrient" ? "Nutrient" : "Both"} pump — last 10 min of MQTT data`}
+          color={
+            selectedPump === "water"
+              ? "#2196F3"
+              : selectedPump === "nutrient"
+                ? "#4CAF50"
+                : safeTheme.colors.primary
+          }
+          unit=""
+          points={livePumpPoints}
+          stats={livePumpStats}
+          themeColors={safeTheme.colors}
+        />
+
+        {/* ── ERROR DISPLAY ── */}
+        {error && (
+          <View style={styles.errorContainer}>
+            <Text style={[styles.errorText, { color: "#F44336" }]}>
+              {error}
+            </Text>
+            <TouchableOpacity onPress={fetchAllData} style={styles.retryButton}>
+              <Text style={styles.retryText}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </ScrollView>
 
       {/* ─── FULLSCREEN ZOOM MODAL ─── */}
@@ -1095,6 +1047,8 @@ export default function PumpHistory() {
                 yTitle="State"
                 showGradient={true}
                 showDots={graphData.length <= 80}
+                onPointPress={setSelectedPoint}
+                selectedPoint={selectedPoint}
               />
             </ZoomableChart>
           </View>
@@ -1223,10 +1177,12 @@ const styles = StyleSheet.create({
   contentCard: {
     marginHorizontal: 16,
     borderRadius: 16,
+    marginBottom: 20,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: "rgba(0,0,0,0.06)",
     minHeight: 200,
+    backgroundColor: "white",
   },
 
   // Table
@@ -1293,7 +1249,7 @@ const styles = StyleSheet.create({
   pageInfoSub: { fontSize: 11, marginTop: 2, opacity: 0.7 },
 
   // Graph
-  graphWrapper: { padding: 14, gap: 10 },
+  graphWrapper: { padding: 14, gap: 10,  },
   graphSummary: { fontSize: 12, fontWeight: "500", textAlign: "center" },
   legendContainer: {
     flexDirection: "row",

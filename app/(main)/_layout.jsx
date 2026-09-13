@@ -12,7 +12,6 @@ import {
   Animated,
   BackHandler,
   Dimensions,
-  Linking,
   Modal,
   Platform,
   ScrollView,
@@ -44,26 +43,35 @@ class ErrorBoundary extends Component {
   render() { return this.state.hasError ? null : this.props.children; }
 }
 
+// Splits a timestamp into a short clock time + short date for the hero.
+function formatUpdatedAt(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  if (isNaN(date.getTime())) return null;
+  return {
+    time: date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    day: date.toLocaleDateString([], { day: "numeric", month: "short" }),
+  };
+}
+
 function CustomHeader({ navigation, theme }) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [user_name, setUsername] = useState("");
   const [showAlerts, setShowAlerts] = useState(false);
   
   const [cropInfo, setCropInfo] = useState(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
+
+  const { user } = useAuth();
 
   // ✅ Get MQTT context
-  const { 
+  const {
     getSelectedDeviceName,
     selectedExternalKey,
+    selectedDeviceId,
     externalKey,
     sensorData,
-    connectionState,
-    isConnected,
     deviceOnlineStatus,
-    deviceInitialLoadComplete,
-    deviceInitialLoadStatus,
-    // ✅ Get the device status sync function for accurate status
-    getDeviceStatusSync,
   } = useMqtt();
 
   const selectedDeviceName = getSelectedDeviceName();
@@ -194,6 +202,36 @@ function CustomHeader({ navigation, theme }) {
     return () => clearInterval(timer);
   }, []);
 
+  // ── Last updated: live MQTT timestamp, falling back to the cached
+  // dashboard snapshot so the hero still shows a value while offline. ──
+  useEffect(() => {
+    const liveTimestamp = sensorData?.lastUpdated;
+    if (liveTimestamp) {
+      setLastUpdatedAt(liveTimestamp);
+      return;
+    }
+
+    const cacheId = selectedDeviceId || selectedExternalKey;
+    if (!cacheId) {
+      setLastUpdatedAt(null);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(`dashboard_sensor_data_${cacheId}`);
+        if (cancelled) return;
+        setLastUpdatedAt(raw ? JSON.parse(raw)?.lastUpdated ?? null : null);
+      } catch {
+        if (!cancelled) setLastUpdatedAt(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sensorData?.lastUpdated, selectedDeviceId, selectedExternalKey]);
+
+  const updatedAt = formatUpdatedAt(lastUpdatedAt);
+
   const formatTime = () => {
     return currentTime.toLocaleTimeString([], {
       hour: "2-digit",
@@ -201,38 +239,9 @@ function CustomHeader({ navigation, theme }) {
     });
   };
 
-  const formatDate = () => {
-    return currentTime.toLocaleDateString([], {
-      weekday: "long",
-      month: "long",
-      day: "numeric",
-    });
-  };
-
-  const openWhatsApp = () => {
-    const phoneNumber = "9340389016";
-    const url = `whatsapp://send?phone=${phoneNumber}`;
-
-    Linking.canOpenURL(url)
-      .then((supported) => {
-        if (supported) {
-          return Linking.openURL(url);
-        } else {
-          const webUrl = `https://wa.me/${phoneNumber}`;
-          Linking.openURL(webUrl);
-        }
-      })
-      .catch((err) => {
-        console.error("Error opening WhatsApp:", err);
-        Alert.alert(
-          "WhatsApp Not Available",
-          "Please install WhatsApp to chat with support."
-        );
-      });
-  };
-
   // ✅ Get device ID (external key) for display
   const deviceId = externalKey || 'No Device Selected';
+  const avatarInitial = (user?.name || user_name || "F").trim().charAt(0).toUpperCase() || "F";
 
   return (
     <View
@@ -263,20 +272,24 @@ function CustomHeader({ navigation, theme }) {
         </View>
 
         <View style={styles.headerRightIcons}>
+          <AlertBadge onPress={() => setShowAlerts(true)} />
+
           <TouchableOpacity
-            onPress={() => setShowAlerts(true)}
+            onPress={() => router.push("/(main)/settings")}
             style={styles.headerIconButton}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            activeOpacity={0.7}
           >
-            <AlertBadge onPress={() => setShowAlerts(true)} />
+            <Ionicons name="settings-outline" size={21} color="#FFF" />
           </TouchableOpacity>
 
           <TouchableOpacity
-            onPress={openWhatsApp}
-            style={styles.headerIconButton}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            onPress={() => router.push("/(main)/profile")}
+            style={styles.headerAvatarButton}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            activeOpacity={0.75}
           >
-            <Ionicons name="logo-whatsapp" size={22} color="#25D366" />
+            <Text style={styles.headerAvatarText}>{avatarInitial}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -322,7 +335,14 @@ function CustomHeader({ navigation, theme }) {
               </View>
               <View style={styles.timeInfo}>
                 <Text style={styles.timeText}>{formatTime()}</Text>
-                <Text style={styles.dateText}>{formatDate()}</Text>
+                <Text style={styles.updatedText} numberOfLines={1}>
+                  {updatedAt ? `Updated ${updatedAt.time}` : "Not updated yet"}
+                </Text>
+                {updatedAt ? (
+                  <Text style={styles.updatedDateText} numberOfLines={1}>
+                    {updatedAt.day}
+                  </Text>
+                ) : null}
               </View>
             </View>
 
@@ -921,22 +941,10 @@ const styles = StyleSheet.create({
   weatherInfo: { flexDirection: "row", alignItems: "center", gap: 8 },
   weatherIcon: { fontSize: 28 },
   weatherTemp: { fontSize: 18, fontWeight: "700", color: "#FFF" },
-  weatherCondition: { fontSize: 11, color: "rgba(255,255,255,0.9)" },
   deviceNameRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-  },
-  activeBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-  },
-  activeBadgeText: {
-    color: "#FFF",
-    fontSize: 10,
-    fontWeight: "700",
-    letterSpacing: 0.3,
   },
   macIdText: {
     fontSize: 11,
@@ -946,16 +954,20 @@ const styles = StyleSheet.create({
   },
   timeInfo: { alignItems: "flex-end" },
   timeText: { fontSize: 20, fontWeight: "700", color: "#FFF" },
-  dateText: { fontSize: 11, color: "rgba(255,255,255,0.9)", marginTop: 2 },
-  greetingContainer: { alignItems: "center", marginBottom: 4, marginTop: 10 },
-  greetingText: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#FFF",
-    marginBottom: 2,
+  updatedText: { fontSize: 11, color: "rgba(255,255,255,0.9)", marginTop: 2, fontWeight: "600" },
+  updatedDateText: { fontSize: 10, color: "rgba(255,255,255,0.65)", marginTop: 1 },
+  headerAvatarButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginLeft: 2,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.22)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.35)",
   },
-  greetingSubtext: { fontSize: 11, color: "rgba(255,255,255,0.9)" },
-  
+  headerAvatarText: { color: "#FFF", fontSize: 13, fontWeight: "700" },
   // ── Crop Info Row (horizontal) ──
   cropInfoRowCard: {
     flexDirection: "row",
@@ -1013,12 +1025,6 @@ const styles = StyleSheet.create({
   drawerHeaderDivider: {
     height: 1,
     marginHorizontal: 16,
-  },
-  drawerHeader: {
-    paddingTop: 8,
-    paddingBottom: 12,
-    paddingHorizontal: 4,
-    marginBottom: 4,
   },
   drawerLogoContainer: {
     flexDirection: "row",
@@ -1099,14 +1105,6 @@ const styles = StyleSheet.create({
   },
   footerSection: { marginTop: 12, paddingHorizontal: 12 },
   footerDivider: { height: 1, marginVertical: 8 },
-  logoutButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    gap: 12,
-  },
   logoutText: { fontSize: 13, fontWeight: "600", color: "#F44336" },
   // ── Bottom Tab Bar ──
   bottomBarWrapper: {

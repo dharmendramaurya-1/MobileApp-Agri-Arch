@@ -15,11 +15,7 @@ import {
   TouchableOpacity,
   View
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-
 import { SENSORS } from "../../src/config/sensorConfigs";
-import { useAlerts } from "../../src/context/AlertContext";
-import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useSystemMode } from "../../src/context/SystemModeContext";
@@ -36,7 +32,6 @@ import {
   LightIcon,
   OutletValveIcon,
   PhIcon,
-  StatusDot,
   TemperatureIcon,
   WaterFlowIcon,
   WaterLevelIcon,
@@ -45,10 +40,15 @@ import {
 
 const { width: SCREEN_W } = Dimensions.get("window");
 
+// Exactly 3 cards per row. The card width is derived from the screen so the row
+// fills the full width evenly on every device.
 const SENSOR_COLS = 3;
 const SENSOR_GAP = 10;
 const SENSOR_PAD = 16;
-const SENSOR_CARD_W = "31%";
+// Use Math.floor to prevent floating point rounding issues that cause wrapping
+const SENSOR_CARD_W = Math.floor(
+  (SCREEN_W - SENSOR_PAD * 2 - SENSOR_GAP * (SENSOR_COLS - 1)) / SENSOR_COLS
+);
 
 // ✅ Filter out device-status and soil-moisture
 const SENSOR_CONFIG = SENSORS
@@ -182,26 +182,6 @@ function fmt(value) {
   return String(value);
 }
 
-function formatLastUpdated(date) {
-  if (!date) return null;
-  const timeOpts = { hour: "2-digit", minute: "2-digit" };
-  try {
-    if (typeof date === "string") {
-      const parsed = new Date(date);
-      if (!isNaN(parsed.getTime())) {
-        return parsed.toLocaleTimeString([], timeOpts);
-      }
-      return date;
-    }
-    if (date instanceof Date && !isNaN(date.getTime())) {
-      return date.toLocaleTimeString([], timeOpts);
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 function mergeDefinedValues(cached = {}, live = {}) {
   const result = { ...(cached || {}) };
   Object.keys(live || {}).forEach((key) => {
@@ -213,128 +193,7 @@ function mergeDefinedValues(cached = {}, live = {}) {
 }
 
 /* ============================================================
-   VALVE CARD - Using your SVG icons ✅
-============================================================ */
-
-function ValveCard({ actuatorStatus, theme }) {
-  const inValve = actuatorStatus?.water_ILvalve || false;
-  const outValve = actuatorStatus?.water_OLvalve || false;
-  
-  const inColor = inValve ? "#4CAF50" : "#E0E0E0";
-  const outColor = outValve ? "#FF5722" : "#E0E0E0";
-  const inStatusText = inValve ? "OPEN" : "CLOSED";
-  const outStatusText = outValve ? "OPEN" : "CLOSED";
-  const inStatusColor = inValve ? "#4CAF50" : "#9E9E9E";
-  const outStatusColor = outValve ? "#FF5722" : "#9E9E9E";
-
-  return (
-    <View style={styles.sensorCard}>
-      <View style={styles.sensorCardInner}>
-        <View style={[styles.sensorAccent, { backgroundColor: "#00BCD4" }]} />
-        
-        {/* ✅ Inlet Valve SVG Icon */}
-        <InletValveIcon
-          active={inValve}
-          size={40}
-          color="#00BCD4"
-          status="normal"
-        />
-        
-        <View style={styles.valveStatusContainer}>
-          <View style={styles.valveStatusRow}>
-            <View style={[styles.valveDot, { backgroundColor: inColor }]} />
-            <Text style={[styles.valveLabel, { color: theme.colors.textSecondary }]}>IN</Text>
-            <Text style={[styles.valveStatus, { color: inStatusColor, fontWeight: '700' }]}>
-              {inStatusText}
-            </Text>
-          </View>
-        </View>
-
-        {/* ✅ Outlet Valve SVG Icon */}
-        <OutletValveIcon
-          active={outValve}
-          size={40}
-          color="#FF5722"
-          status="normal"
-        />
-
-        <View style={styles.valveStatusContainer}>
-          <View style={styles.valveStatusRow}>
-            <View style={[styles.valveDot, { backgroundColor: outColor }]} />
-            <Text style={[styles.valveLabel, { color: theme.colors.textSecondary }]}>OUT</Text>
-            <Text style={[styles.valveStatus, { color: outStatusColor, fontWeight: '700' }]}>
-              {outStatusText}
-            </Text>
-          </View>
-        </View>
-
-        <Text style={[styles.sensorLabel, { color: theme.colors.text }]} numberOfLines={1}>
-          Valves
-        </Text>
-      </View>
-    </View>
-  );
-}
-
-/* ============================================================
-   PUMP CARD - Using your SVG icon ✅
-============================================================ */
-
-function PumpCard({ actuatorStatus, theme }) {
-  const pumpStatus = actuatorStatus?.water_pump || false;
-  const nutrientPump = actuatorStatus?.nutrient_pump || false;
-  
-  const pumpColor = pumpStatus ? "#2196F3" : "#E0E0E0";
-  const pumpText = pumpStatus ? "ON" : "OFF";
-  const pumpTextColor = pumpStatus ? "#2196F3" : "#9E9E9E";
-  
-  const nutrientColor = nutrientPump ? "#4CAF50" : "#E0E0E0";
-  const nutrientText = nutrientPump ? "ON" : "OFF";
-  const nutrientTextColor = nutrientPump ? "#4CAF50" : "#9E9E9E";
-
-  return (
-    <View style={styles.sensorCard}>
-      <View style={styles.sensorCardInner}>
-        <View style={[styles.sensorAccent, { backgroundColor: "#2196F3" }]} />
-        
-        {/* ✅ Water Pump SVG Icon */}
-        <WaterPumpIcon
-          active={pumpStatus}
-          size={40}
-          color="#2196F3"
-          status="normal"
-        />
-
-        <View style={styles.valveStatusContainer}>
-          <View style={styles.valveStatusRow}>
-            <View style={[styles.valveDot, { backgroundColor: pumpColor }]} />
-            <Text style={[styles.valveLabel, { color: theme.colors.textSecondary }]}>PUMP</Text>
-            <Text style={[styles.valveStatus, { color: pumpTextColor, fontWeight: '700' }]}>
-              {pumpText}
-            </Text>
-          </View>
-        </View>
-
-        <View style={styles.valveStatusContainer}>
-          <View style={styles.valveStatusRow}>
-            <View style={[styles.valveDot, { backgroundColor: nutrientColor }]} />
-            <Text style={[styles.valveLabel, { color: theme.colors.textSecondary }]}>NUT</Text>
-            <Text style={[styles.valveStatus, { color: nutrientTextColor, fontWeight: '700' }]}>
-              {nutrientText}
-            </Text>
-          </View>
-        </View>
-
-        <Text style={[styles.sensorLabel, { color: theme.colors.text }]} numberOfLines={1}>
-          Pumps
-        </Text>
-      </View>
-    </View>
-  );
-}
-
-/* ============================================================
-   SENSOR TILE - Using your SVG icons
+   SENSOR TILE
 ============================================================ */
 
 function SensorTile({
@@ -345,6 +204,7 @@ function SensorTile({
   theme,
   onPress,
   deviceStatusFlags,
+  isLastColumn,
 }) {
   const liveValue = sensorData?.[sensor.dataKey];
   const hasValue = liveValue !== null && liveValue !== undefined;
@@ -366,49 +226,84 @@ function SensorTile({
     statusLabel = isDeviceWaiting ? "..." : "--";
   }
 
-  // ✅ Get your SVG icon
   const IconComponent = getSensorIcon(sensor.id);
 
   return (
-    <View style={styles.sensorCard}>
+    <View style={[styles.sensorCard, !isLastColumn && styles.sensorCardGap]}>
       <TouchableOpacity
-        style={styles.sensorCardInner}
+        style={[
+          styles.sensorCardInner,
+          { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+        ]}
         onPress={onPress}
-        activeOpacity={0.7}
+        activeOpacity={0.75}
       >
         <View style={[styles.sensorAccent, { backgroundColor: valueColor }]} />
-        
-        {/* ✅ Your SVG Icon */}
-        <IconComponent
-          active={active}
-          size={40}
-          color={sensor.color}
-          status={active ? status.level : 'normal'}
-        />
-        
-        <View style={{ flexDirection: "row", alignItems: "flex-center", marginTop: 4 }}>
-          <Text style={[styles.sensorValue, { color: valueColor }]}>
-          {hasValue ? fmt(liveValue) : isDeviceWaiting ? "..." : "--"}
-        </Text>
-        
-        <Text style={[styles.sensorUnit, { color: valueColor }]}>
-          {hasValue ? sensor.unit : ""}
-        </Text>
+
+        <View style={[styles.iconWrap, { backgroundColor: `${sensor.color}12` }]}>
+          <IconComponent
+            active={active}
+            size={22}
+            color={active ? sensor.color : theme.colors.textSecondary}
+            status={active ? status.level : 'normal'}
+          />
         </View>
-        
-        {hasValue && active && status.level !== 'unknown' && (
-          <View style={styles.statusContainer}>
-            <StatusDot active={true} status={status.level} size={8} />
-            <Text style={[styles.statusText, { color: status.color }]}>
-              {statusLabel}
-            </Text>
-          </View>
-        )}
-        
-        <Text style={[styles.sensorLabel, { color: hasValue ? theme.colors.text : "#9E9E9E" }]}>
+
+        <View style={styles.valueRow}>
+          <Text style={[styles.sensorValue, { color: valueColor }]} numberOfLines={1}>
+            {hasValue ? fmt(liveValue) : isDeviceWaiting ? "..." : "--"}
+          </Text>
+          {hasValue && sensor.unit ? (
+            <Text style={[styles.sensorUnit, { color: valueColor }]}>{sensor.unit}</Text>
+          ) : null}
+        </View>
+
+        <View style={[styles.statusPill, { backgroundColor: `${valueColor}15` }]}>
+          <View style={[styles.statusDot, { backgroundColor: valueColor }]} />
+          <Text style={[styles.statusText, { color: valueColor }]} numberOfLines={1}>
+            {statusLabel}
+          </Text>
+        </View>
+
+        <Text
+          style={[
+            styles.sensorLabel,
+            { color: hasValue ? theme.colors.text : theme.colors.textSecondary },
+          ]}
+          numberOfLines={2}
+        >
           {sensor.name}
         </Text>
       </TouchableOpacity>
+    </View>
+  );
+}
+
+function ActuatorSummaryCard({ icon: Icon, label, state, active, theme, accentColor }) {
+  const stateLabel = active ? state.active : state.inactive;
+  const iconColor = active ? accentColor : theme.colors.textSecondary;
+  const progressColors = active
+    ? [accentColor, `${accentColor}CC`, `${accentColor}99`, `${accentColor}66`, `${accentColor}35`]
+    : [`${theme.colors.textSecondary}35`, `${theme.colors.textSecondary}28`, `${theme.colors.textSecondary}20`, `${theme.colors.textSecondary}16`, `${theme.colors.textSecondary}10`];
+
+  return (
+    <View style={[styles.actuatorSummaryCard, {  borderColor: active ? `${accentColor}55` : theme.colors.border }]}>
+      <View style={[styles.actuatorSummaryTopAccent, { backgroundColor: accentColor }]} />
+      <View style={[styles.actuatorSummaryIcon, { backgroundColor: active ? `${accentColor}18` : `${theme.colors.textSecondary}12` }]}>
+        <Icon active={active} size={28} color={iconColor} status="normal" />
+      </View>
+      <View style={styles.actuatorSummaryInfo}>
+        <Text style={[styles.actuatorSummaryLabel, { color: theme.colors.text }]} numberOfLines={2}>{label}</Text>
+        <View style={styles.actuatorSummaryStateRow}>
+          <View style={[styles.actuatorSummaryDot, { backgroundColor: active ? accentColor : theme.colors.border }]} />
+          <Text style={[styles.actuatorSummaryState, { color: active ? accentColor : theme.colors.textSecondary }]}>{stateLabel}</Text>
+        </View>
+      </View>
+      <View style={styles.actuatorSummaryProgress}>
+        {progressColors.map((color, index) => (
+          <View key={`${label}-progress-${index}`} style={[styles.actuatorSummaryProgressSegment, { backgroundColor: color }]} />
+        ))}
+      </View>
     </View>
   );
 }
@@ -418,8 +313,7 @@ function SensorTile({
 ============================================================ */
 
 export default function Dashboard() {
-  const insets = useSafeAreaInsets();
-  const { onScroll, headerHeight, scrollY } = useScroll();
+  const { headerHeight, scrollY } = useScroll();
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
 
@@ -441,18 +335,15 @@ export default function Dashboard() {
   }, []);
 
   const { theme } = useTheme();
-  const { user } = useAuth();
 
   const {
     getSelectedDeviceSensorData,
     getSelectedDeviceActuatorStatus,
-    getSelectedDeviceName,
     selectedDeviceId,
     selectedExternalKey,
     isConnected,
     hasReceivedData,
     isLiveData,
-    toggleDeviceStatus,
     deviceStatusFlags,
     connectionState,
     externalKey,
@@ -461,16 +352,12 @@ export default function Dashboard() {
     deviceInitialLoadComplete,
   } = useMqtt();
 
-  const { addAlert } = useAlerts();
   const {
     isManualMode,
-    isAutoMode,
     isModeLoaded,
     isSwitching: isModeSwitching,
     modeLocked,
-    checkBeforeActuator,
     toggleMode,
-    getModeIcon,
     getModeColor,
   } = useSystemMode();
 
@@ -491,10 +378,6 @@ export default function Dashboard() {
     return !isInitialLoadComplete;
   }, [deviceKey, isInitialLoadComplete]);
 
-  const isDeviceOffline = useMemo(() => {
-    return isInitialLoadComplete && !isDeviceOnline;
-  }, [isInitialLoadComplete, isDeviceOnline]);
-
   const isDeviceWaiting = useMemo(() => {
     return (!isInitialLoadComplete && !isLoading) || 
       connectionState === "connecting" || 
@@ -508,7 +391,6 @@ export default function Dashboard() {
 
   const liveSensorData = getSelectedDeviceSensorData();
   const liveActuatorStatus = getSelectedDeviceActuatorStatus();
-  const selectedDeviceName = getSelectedDeviceName();
 
   const cacheDeviceKey = selectedDeviceId || selectedExternalKey;
   const sensorCacheKey = cacheDeviceKey
@@ -622,14 +504,6 @@ export default function Dashboard() {
 
   const hasData = hasReceivedData || isLiveData || hasCachedData;
 
-  const modeIcon = isModeSwitching
-    ? "⏳"
-    : getModeIcon
-    ? getModeIcon()
-    : isManualMode
-    ? "🔧"
-    : "🤖";
-
   const modeColor = isModeSwitching
     ? "#FF9800"
     : getModeColor
@@ -663,13 +537,6 @@ export default function Dashboard() {
     router.push("/(main)/devices");
   };
 
-  const formattedTime = formatLastUpdated(sensorData?.lastUpdated);
-  const lastUpdatedLabel = formattedTime
-    ? isDeviceOnline
-      ? ` ${formattedTime}`
-      : ` ${formattedTime}`
-    : null;
-
   const sensorCount = SENSOR_CONFIG.length;
   const activeSensors = SENSOR_CONFIG.filter(
     (sensor) =>
@@ -684,25 +551,12 @@ export default function Dashboard() {
       <>
         <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
           <View style={styles.header}>
-            <View style={styles.headerLeft}>
-              <Text style={[styles.greeting, { color: theme.colors.text }]}>
-                {u_name}
-              </Text>
-            </View>
-            <View style={styles.headerActions}>
-              <TouchableOpacity
-                onPress={() => router.push("/(main)/settings")}
-                style={styles.headerIconBtn}
-                activeOpacity={0.6}
-              >
-                <Ionicons name="settings-outline" size={20} color={theme.colors.textSecondary} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => router.push("/(main)/profile")}>
-                <View style={[styles.avatar, { backgroundColor: theme.colors.primary }]}>
-                  <Text style={styles.avatarText}>{user?.name?.charAt(0) || "F"}</Text>
-                </View>
-              </TouchableOpacity>
-            </View>
+            <Text style={[styles.greeting, { color: theme.colors.text }]} numberOfLines={1}>
+              {u_name}
+            </Text>
+            <Text style={[styles.greetingSub, { color: theme.colors.textSecondary }]}>
+              Welcome back 👋
+            </Text>
           </View>
           <View style={styles.emptyState}>
             <View style={[styles.emptyIconWrap, { backgroundColor: `${theme.colors.primary}18` }]}>
@@ -743,7 +597,7 @@ export default function Dashboard() {
               </View>
               <Text style={[styles.noDeviceTitle, { color: theme.colors.text }]}>No Devices Found</Text>
               <Text style={[styles.noDeviceDesc, { color: theme.colors.textSecondary }]}>
-                You don't have any devices in your list. Add your first device to start monitoring your farm.
+                You don&apos;t have any devices in your list. Add your first device to start monitoring your farm.
               </Text>
               <View style={styles.noDeviceButtons}>
                 <TouchableOpacity
@@ -775,7 +629,7 @@ export default function Dashboard() {
   return (
     <ScrollView
       ref={scrollRef}
-      contentContainerStyle={{ paddingTop: headerHeight, paddingBottom: 80 }}
+      contentContainerStyle={{ paddingTop: headerHeight, paddingBottom: 10 }}
       onScroll={Animated.event(
         [{ nativeEvent: { contentOffset: { y: scrollY } } }],
         { useNativeDriver: false }
@@ -783,54 +637,28 @@ export default function Dashboard() {
       scrollEventThrottle={16}
     >
       {/* ── HEADER ── */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <Text style={[styles.greeting, { color: theme.colors.text }]}>
-            {u_name}
-          </Text>
-        </View>
-        <View style={styles.headerActions}>
-          {showMode && (
-            <TouchableOpacity
-              style={[styles.modePill, { backgroundColor: `${modeColor}18` }]}
-              onPress={() => {
-                if (!isModeSwitching && !modeLocked && isConnected) {
-                  toggleMode();
-                }
-              }}
-              disabled={isModeSwitching || modeLocked || !isConnected}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.modePillText, { color: isModeSwitching ? "#FF9800" : modeColor }]}>
-                {isModeSwitching ? "⏳" : modeIcon} {isManualMode ? "Manual" : "Auto"}
-              </Text>
-            </TouchableOpacity>
-          )}
-
-          <TouchableOpacity
-            onPress={() => router.push("/(main)/settings")}
-            style={styles.headerIconBtn}
-            activeOpacity={0.6}
-          >
-            <Ionicons name="settings-outline" size={20} color={theme.colors.textSecondary} />
-          </TouchableOpacity>
-
-          <TouchableOpacity onPress={() => router.push("/(main)/profile")}>
-            <View style={[styles.avatar, { backgroundColor: theme.colors.primary }]}>
-              <Text style={styles.avatarText}>{user?.name?.charAt(0) || "F"}</Text>
-            </View>
-          </TouchableOpacity>
-        </View>
-      </View>
+      {/* <View style={styles.header}>
+        <Text style={[styles.greeting, { color: theme.colors.text }]} numberOfLines={1}>
+          {u_name}
+        </Text>
+        <Text style={[styles.greetingSub, { color: theme.colors.textSecondary }]}>
+          Welcome back 👋
+        </Text>
+      </View> */}
 
       {/* ── QUICK SUMMARY CARD ── */}
-      <View style={styles.summaryCard}>
+      <View
+        style={[
+          styles.summaryCard,
+          { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+        ]}
+      >
         <View style={styles.summaryRow}>
           <View style={styles.summaryItem}>
             <View style={[styles.summaryIconWrap, { backgroundColor: "#4CAF5018" }]}>
               <Ionicons name="hardware-chip-outline" size={16} color="#4CAF50" />
             </View>
-            <View>
+            <View style={styles.summaryTextWrap}>
               <Text style={[styles.summaryValue, { color: theme.colors.text }]} numberOfLines={1}>
                 {shortDeviceId}
               </Text>
@@ -838,59 +666,121 @@ export default function Dashboard() {
             </View>
           </View>
 
-          <View style={styles.summarySep} />
+          {/* <View style={[styles.summarySep, { backgroundColor: theme.colors.border }]} /> */}
 
-          <View style={styles.summaryItem}>
+          {/* <View style={styles.summaryItem}>
             <View style={[styles.summaryIconWrap, { backgroundColor: "#2196F318" }]}>
               <Ionicons name="analytics-outline" size={16} color="#2196F3" />
             </View>
-            <View>
-              <Text style={[styles.summaryValue, { color: theme.colors.text }]}>
+            <View style={styles.summaryTextWrap}>
+              <Text style={[styles.summaryValue, { color: theme.colors.text }]} numberOfLines={1}>
                 {activeSensors}/{sensorCount}
               </Text>
               <Text style={[styles.summaryLabel, { color: theme.colors.textSecondary }]}>Sensors</Text>
             </View>
-          </View>
+          </View> */}
 
-          <View style={styles.summarySep} />
+          <View style={[styles.summarySep, { backgroundColor: theme.colors.border }]} />
 
-          <View style={styles.summaryItem}>
-            <View style={[styles.summaryIconWrap, { backgroundColor: isDeviceOnline ? "#4CAF5018" : "#F4433618" }]}>
-              <Ionicons name="time-outline" size={16} color={isDeviceOnline ? "#4CAF50" : "#F44336"} />
+
+          <TouchableOpacity
+            style={styles.summaryItem}
+            onPress={() => {
+              if (!isModeSwitching && !modeLocked && isConnected) {
+                toggleMode();
+              }
+            }}
+            disabled={!showMode || isModeSwitching || modeLocked || !isConnected}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.summaryIconWrap, { backgroundColor: `${modeColor}1F` }]}>
+              <Ionicons
+                name={isManualMode ? "hand-left-outline" : "sync-outline"}
+                size={16}
+                color={showMode ? modeColor : theme.colors.textSecondary}
+              />
             </View>
-            <View>
-              <Text style={[styles.summaryValue, { color: theme.colors.text }]} numberOfLines={1}>
-                {lastUpdatedLabel || "No data"}
+            <View style={styles.summaryTextWrap}>
+              <Text
+                style={[
+                  styles.summaryValue,
+                  { color: showMode ? modeColor : theme.colors.textSecondary },
+                ]}
+                numberOfLines={1}
+              >
+                {!showMode ? "--" : isModeSwitching ? "Switching" : isManualMode ? "Manual" : "Auto"}
               </Text>
-              <Text style={[styles.summaryLabel, { color: theme.colors.textSecondary }]}>Last Updated</Text>
+              <Text style={[styles.summaryLabel, { color: theme.colors.textSecondary }]}>Mode</Text>
             </View>
+          </TouchableOpacity>
+        </View>
+
+        <View style={[styles.summaryActuatorSection, { borderTopColor: theme.colors.border }]}>
+          {/* <View style={styles.summaryActuatorHeading}>
+            <View>
+              <Text style={[styles.summaryActuatorTitle, { color: theme.colors.text }]}>Equipment status</Text>
+              <Text style={[styles.summaryActuatorSubtitle, { color: theme.colors.textSecondary }]}>Pumps and valves</Text>
+            </View>
+            <Ionicons name="pulse-outline" size={19} color={theme.colors.primary} />
+          </View> */}
+          <View style={styles.actuatorSummaryGrid}>
+            <ActuatorSummaryCard
+              icon={WaterPumpIcon}
+              label="Water Pump"
+              state={{ active: "ON", inactive: "OFF" }}
+              active={actuatorStatus?.water_pump === true}
+              accentColor="#2E7D32"
+              theme={theme}
+            />
+            <ActuatorSummaryCard
+              icon={WaterPumpIcon}
+              label="Nutrient Pump"
+              state={{ active: "ON", inactive: "OFF" }}
+              active={actuatorStatus?.nutrient_pump === true}
+              accentColor="#43A047"
+              theme={theme}
+            />
+            <ActuatorSummaryCard
+              icon={InletValveIcon}
+              label="Inlet Valve"
+              state={{ active: "OPEN", inactive: "CLOSED" }}
+              active={actuatorStatus?.water_ILvalve === true}
+              accentColor="#0288D1"
+              theme={theme}
+            />
+            <ActuatorSummaryCard
+              icon={OutletValveIcon}
+              label="Outlet Valve"
+              state={{ active: "OPEN", inactive: "CLOSED" }}
+              active={actuatorStatus?.water_OLvalve === true}
+              accentColor="#1976D2"
+              theme={theme}
+            />
           </View>
         </View>
       </View>
 
+      <View style={styles.sensorSectionHeader}>
+        <View>
+          <Text style={[styles.sensorSectionTitle, { color: theme.colors.text }]}>Live Sensors</Text>
+          {/* <Text style={[styles.sensorSectionSubtitle, { color: theme.colors.textSecondary }]}>Real-time readings from {selectedDeviceName || "your device"}</Text> */}
+        </View>
+        <TouchableOpacity
+          style={[styles.sensorCountBadge, { backgroundColor: `${theme.colors.primary}15` }]}
+          onPress={() => router.push("/(main)/sensor-list")}
+          activeOpacity={0.75}
+          accessibilityRole="button"
+          accessibilityLabel="Open sensor list"
+        >
+          <View style={[styles.sensorCountDot, { backgroundColor: isDeviceOnline ? "#4CAF50" : theme.colors.textSecondary }]} />
+          <Text style={[styles.sensorCountText, { color: theme.colors.primary }]}>{activeSensors}/{sensorCount}</Text>
+          <Ionicons name="arrow-forward" size={13} color={theme.colors.primary} />
+        </TouchableOpacity>
+      </View>
+
       {/* ── SENSOR GRID ── */}
       <View style={styles.sensorGrid}>
-        {SENSOR_CONFIG.map((sensor, index) => {
-          // At position 7 (index 7) show Valve Card and Pump Card
-          if (index === 7) {
-            return (
-              <React.Fragment key={`valve-${index}`}>
-                <ValveCard
-                  actuatorStatus={actuatorStatus}
-                  theme={theme}
-                />
-                <PumpCard
-                  actuatorStatus={actuatorStatus}
-                  theme={theme}
-                />
-              </React.Fragment>
-            );
-          }
-          
-          // Skip the next sensor if we just inserted valve + pump
-          if (index === 8) return null;
-          
-          return (
+        {SENSOR_CONFIG.map((sensor, index) => (
             <SensorTile
               key={sensor.id}
               sensor={sensor}
@@ -899,6 +789,7 @@ export default function Dashboard() {
               isDeviceWaiting={isDeviceWaiting}
               theme={theme}
               deviceStatusFlags={deviceStatusFlags}
+              isLastColumn={index % SENSOR_COLS === SENSOR_COLS - 1}
               onPress={() => {
                 router.push({
                   pathname: "/(main)/sensor/[type]",
@@ -906,8 +797,7 @@ export default function Dashboard() {
                 });
               }}
             />
-          );
-        })}
+        ))}
       </View>
     </ScrollView>
   );
@@ -920,92 +810,127 @@ export default function Dashboard() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
     paddingHorizontal: 16,
     marginBottom: 12,
-    marginTop: 12,
-  },
-  headerLeft: { flex: 1, marginRight: 10 },
-  headerActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
+    marginTop: 10,
   },
   greeting: { fontSize: 22, fontWeight: "700" },
-  modePill: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 12,
-  },
-  modePillText: { fontSize: 12, fontWeight: "600" },
-  headerIconBtn: { padding: 6 },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  avatarText: { color: "#FFF", fontWeight: "700", fontSize: 14 },
+  greetingSub: { fontSize: 12, fontWeight: "500", marginTop: 2 },
 
   summaryCard: {
     marginHorizontal: 16,
-    marginBottom: 16,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 14,
-    padding: 14,
+    marginBottom: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    marginTop: 24,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.07,
+    shadowRadius: 8,
+    elevation: 3,
   },
   summaryRow: { flexDirection: "row", alignItems: "center" },
-  summaryItem: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8 },
+  summaryItem: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    paddingHorizontal: 2,
+  },
   summaryIconWrap: {
     width: 32,
     height: 32,
-    borderRadius: 10,
+    borderRadius: 11,
     justifyContent: "center",
     alignItems: "center",
   },
-  summaryValue: { fontSize: 14, fontWeight: "700" },
-  summaryLabel: { fontSize: 10, fontWeight: "500", marginTop: 1 },
+  summaryTextWrap: { flex: 1 },
+  summaryValue: { fontSize: 13, fontWeight: "800" },
+  summaryLabel: { fontSize: 9.5, fontWeight: "600", marginTop: 1, letterSpacing: 0.2 },
   summarySep: {
     width: 1,
-    height: 30,
-    backgroundColor: "#E0E0E0",
-    marginHorizontal: 4,
+    height: 26,
+    marginHorizontal: 2,
+    opacity: 0.8,
   },
+  summaryActuatorSection: {
+    borderTopWidth: 1,
+    marginTop: 12,
+    paddingTop: 10,
+  },
+  summaryActuatorHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 8 },
+  summaryActuatorTitle: { fontSize: 12, fontWeight: "800" },
+  summaryActuatorSubtitle: { fontSize: 9, marginTop: 2 },
+  actuatorSummaryGrid: { flexDirection: "row", alignItems: "stretch", justifyContent: "space-between" },
+  actuatorSummaryCard: {
+    width: "23.5%",
+    minHeight: 70,
+    position: "relative",
+    alignItems: "center",
+    paddingHorizontal: 3,
+    paddingTop: 10,
+    paddingBottom: 7,
+    borderRadius: 9,
+    borderWidth: 1,
+    overflow: "hidden",
+  },
+  actuatorSummaryTopAccent: { position: "absolute", top: 0, left: "25%", width: "50%", height: 3, borderBottomLeftRadius: 3, borderBottomRightRadius: 3 },
+  actuatorSummaryIcon: { width: 34, height: 34, borderRadius: 11, alignItems: "center", justifyContent: "center", marginBottom: 4 },
+  actuatorSummaryInfo: { width: "100%", minWidth: 0, alignItems: "center" },
+  actuatorSummaryLabel: { fontSize: 8.5, fontWeight: "700", textAlign: "center", lineHeight: 10 },
+  actuatorSummaryStateRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 3 },
+  actuatorSummaryDot: { width: 5, height: 5, borderRadius: 3, marginRight: 4 },
+  actuatorSummaryState: { fontSize: 8, fontWeight: "800", letterSpacing: 0.1 },
+  actuatorSummaryProgress: { flexDirection: "row", width: "82%", gap: 2, marginTop: 6 },
+  actuatorSummaryProgressSegment: { flex: 1, height: 3, borderRadius: 2 },
+
+  sensorSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginHorizontal: SENSOR_PAD,
+    marginBottom: 10,
+  },
+  sensorSectionTitle: { fontSize: 16, fontWeight: "800" },
+  sensorSectionSubtitle: { fontSize: 10, marginTop: 2 },
+  sensorCountBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 10,
+  },
+  sensorCountDot: { width: 6, height: 6, borderRadius: 3 },
+  sensorCountText: { fontSize: 11, fontWeight: "800" },
 
   sensorGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
     paddingHorizontal: SENSOR_PAD,
-    gap: SENSOR_GAP,
+    justifyContent: "flex-start",
   },
   sensorCard: {
     width: SENSOR_CARD_W,
+    marginBottom: SENSOR_GAP,
   },
+  sensorCardGap: { marginRight: SENSOR_GAP },
   sensorCardInner: {
-    backgroundColor: "#FFFFFF",
     borderRadius: 16,
-    paddingTop: 14,
+    borderWidth: 1,
+    paddingTop: 10,
     paddingBottom: 10,
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
     alignItems: "center",
-    position: "relative",
     overflow: "hidden",
-    height: 135,
+    height: 136, // slightly reduced to fit 3 columns comfortably
     justifyContent: "space-between",
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
     elevation: 2,
   },
   sensorAccent: {
@@ -1014,60 +939,49 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 3,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
   },
-  sensorIconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  iconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     justifyContent: "center",
     alignItems: "center",
+    marginBottom: 2,
   },
-  sensorValue: { fontSize: 18, fontWeight: "800" },
-  sensorUnit: { fontSize: 10, fontWeight: "500", marginTop: 1 },
-  sensorLabel: { fontSize: 10, fontWeight: "600", textAlign: "center" },
-  
-  valveStatusContainer: {
+  valueRow: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-end",
     justifyContent: "center",
-    width: "100%",
+    gap: 2,
   },
-  valveStatusRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  valveDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  valveLabel: {
-    fontSize: 9,
+  sensorValue: { fontSize: 16, fontWeight: "800" },
+  sensorUnit: { fontSize: 9, fontWeight: "600", marginBottom: 2 },
+  sensorLabel: {
+    fontSize: 9.5,
     fontWeight: "600",
-    letterSpacing: 0.3,
-  },
-  valveStatus: {
-    fontSize: 10,
-    letterSpacing: 0.3,
+    textAlign: "center",
+    lineHeight: 12,
   },
 
-  statusContainer: {
+  // ── Status pill ──
+  statusPill: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    marginTop: 1,
+    gap: 3,
+    paddingHorizontal: 5,
+    paddingVertical: 1.5,
+    borderRadius: 6,
+  },
+  statusDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
   },
   statusText: {
     fontSize: 8,
     fontWeight: "700",
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
-
-  connDotRow: { flexDirection: "row", alignItems: "center" },
-  connDot: { width: 8, height: 8, borderRadius: 4 },
 
   emptyState: {
     flex: 1,

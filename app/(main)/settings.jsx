@@ -4,144 +4,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   AppState,
-  Dimensions,
   Pressable,
   ScrollView,
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { useMqtt } from "../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
 
-const SCREEN_HEIGHT = Dimensions.get("window").height;
-
-function formatDuration(seconds) {
-  if (!seconds || seconds < 0) return 'N/A';
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds % 60 === 0) return `${seconds / 60} min`;
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-}
-
-// ── Interval Picker Component ──
-function IntervalPicker({
-  label,
-  value,
-  onSelect,
-  theme,
-  isRequired = false,
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [customText, setCustomText] = useState(String(value || ''));
-
-  const handleTogglePress = () => {
-    setCustomText(String(value || ''));
-    setExpanded((e) => !e);
-  };
-
-  const handleCustomSubmit = () => {
-    const parsed = parseInt(customText, 10);
-    if (!Number.isNaN(parsed) && parsed > 0) {
-      onSelect(parsed);
-      setExpanded(false);
-    } else {
-      Alert.alert("Invalid Value", "Please enter a positive number.");
-    }
-  };
-
-  return (
-    <View>
-      <View style={styles.settingItem}>
-        <Ionicons name="time-outline" size={24} color={theme.colors.primary} />
-        <View style={styles.settingLabelContainer}>
-          <Text style={[styles.settingText, { color: theme.colors.text }]}>
-            {label}
-          </Text>
-          {isRequired && (
-            <Text style={[styles.requiredBadge, { color: '#F44336' }]}>*</Text>
-          )}
-        </View>
-
-        <Pressable
-          onPress={handleTogglePress}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          style={[
-            styles.dropdownTrigger,
-            {
-              borderColor: theme.colors.border,
-            },
-          ]}
-        >
-          <Text style={{ color: theme.colors.text }}>
-            {value ? formatDuration(value) : 'Select'}
-          </Text>
-          <Ionicons
-            name={expanded ? "chevron-up" : "chevron-down"}
-            size={16}
-            color={theme.colors.textSecondary}
-          />
-        </Pressable>
-      </View>
-
-      {expanded && (
-        <View
-          style={[
-            styles.chipPanel,
-            {
-              borderColor: theme.colors.border,
-              backgroundColor: theme.colors.background,
-            },
-          ]}
-        >
-          <View style={styles.customRow}>
-            <Text
-              style={[styles.customLabel, { color: theme.colors.textSecondary }]}
-            >
-              Enter custom value (seconds)
-            </Text>
-            <View style={styles.customInputRow}>
-              <TextInput
-                value={customText}
-                onChangeText={setCustomText}
-                keyboardType="number-pad"
-                placeholder="Enter seconds"
-                placeholderTextColor={theme.colors.textSecondary}
-                style={[
-                  styles.customInput,
-                  {
-                    color: theme.colors.text,
-                    borderColor: theme.colors.border,
-                  },
-                ]}
-                onSubmitEditing={handleCustomSubmit}
-                returnKeyType="done"
-              />
-              <Pressable
-                onPress={handleCustomSubmit}
-                style={[
-                  styles.customApplyButton,
-                  { backgroundColor: theme.colors.primary },
-                ]}
-              >
-                <Text style={styles.customApplyText}>Set</Text>
-              </Pressable>
-            </View>
-            <Text
-              style={[styles.hintText, { color: theme.colors.textSecondary }]}
-            >
-              Current: {value ? formatDuration(value) : 'Not set'}
-            </Text>
-          </View>
-        </View>
-      )}
-    </View>
-  );
-}
-
-// ── Main Config Screen ──
+// â”€â”€ Main Config Screen â”€â”€
 export default function ConfigScreen() {
   const { theme, isDark, toggleTheme } = useTheme();
   const { onScroll, headerHeight } = useScroll();
@@ -158,22 +32,24 @@ export default function ConfigScreen() {
     deviceOnlineStatus,
     deviceInitialLoadComplete,
     connectionState,
-    addAlert,
   } = useMqtt();
   
   const deviceConfig = getSelectedDeviceConfig();
 
   const [notifications, setNotifications] = useState(true);
   const [config, setConfig] = useState({
-    report_interval: null,
-    sampling_interval: null,
+    report_interval: 180,
+    sampling_interval: 30,
     auto_mode: false,
   });
   const [publishing, setPublishing] = useState(false);
-  const [showError, setShowError] = useState(false);
   const [publishError, setPublishError] = useState(null);
+  const autoModePendingRef = useRef(null);
+  const autoModeTimerRef = useRef(null);
+  const confirmedAutoModeRef = useRef(null);
+  const autoModeLockUntilRef = useRef(0);
 
-  // ── App resume state tracking ──
+  // â”€â”€ App resume state tracking â”€â”€
   const [isResuming, setIsResuming] = useState(false);
   const appStateRef = useRef(AppState.currentState);
   const resumeTimeoutRef = useRef(null);
@@ -183,7 +59,7 @@ export default function ConfigScreen() {
   const selectedDeviceName = getSelectedDeviceName();
   const deviceKey = externalKey;
 
-  // ── ✅ STABLE STATUS DERIVATION (SAME AS LAYOUT) ──
+  // â”€â”€ âœ… STABLE STATUS DERIVATION (SAME AS LAYOUT) â”€â”€
   const isDeviceOnline = useMemo(() => {
     if (!deviceKey) return false;
     return deviceOnlineStatus[deviceKey] === true;
@@ -194,13 +70,13 @@ export default function ConfigScreen() {
     return deviceInitialLoadComplete[deviceKey] === true;
   }, [deviceKey, deviceInitialLoadComplete]);
 
-  // ── Loading state (show NOTHING) ──
+  // â”€â”€ Loading state (show NOTHING) â”€â”€
   const isLoading = useMemo(() => {
     if (!deviceKey) return false;
     return !isInitialLoadComplete;
   }, [deviceKey, isInitialLoadComplete]);
 
-  // ── Waiting state ──
+  // â”€â”€ Waiting state â”€â”€
   const isWaiting = useMemo(() => {
     return (!isInitialLoadComplete && !isLoading) ||
       connectionState === "connecting" ||
@@ -208,46 +84,46 @@ export default function ConfigScreen() {
       connectionState === "idle";
   }, [isInitialLoadComplete, isLoading, connectionState]);
 
-  // ── Offline state (only when confirmed) ──
+  // â”€â”€ Offline state (only when confirmed) â”€â”€
   const isDeviceOffline = useMemo(() => {
     return isInitialLoadComplete && !isDeviceOnline;
   }, [isInitialLoadComplete, isDeviceOnline]);
 
-  // ── Not connected state ──
+  // â”€â”€ Not connected state â”€â”€
   const isNotConnected = useMemo(() => {
     return connectionState === "idle" || connectionState === "disconnected" || connectionState === "error";
   }, [connectionState]);
 
-  // ── ✅ SINGLE SOURCE OF TRUTH for device status ──
+  // â”€â”€ âœ… SINGLE SOURCE OF TRUTH for device status â”€â”€
   const deviceStatus = useMemo(() => {
     // If not connected, show nothing
     if (isNotConnected || !isConnected) {
       return { type: 'unknown' };
     }
     
-    // ✅ When loading or waiting, show NOTHING
+    // âœ… When loading or waiting, show NOTHING
     if (isLoading || isWaiting) {
       return { type: 'loading' };
     }
     
-    // ✅ Only show status when we have a definitive state
+    // âœ… Only show status when we have a definitive state
     if (isDeviceOnline) {
-      return { type: 'online', text: '● Online', color: '#4CAF50' };
+      return { type: 'online', text: 'Online', color: '#4CAF50' };
     }
     
     if (isDeviceOffline) {
-      return { type: 'offline', text: '● Offline', color: '#f44336' };
+      return { type: 'offline', text: 'Offline', color: '#f44336' };
     }
     
     return { type: 'unknown' };
   }, [isNotConnected, isConnected, isLoading, isWaiting, isDeviceOnline, isDeviceOffline]);
 
-  // ── ✅ DEVICE READY STATE (stable, no flicker) ──
+  // â”€â”€ âœ… DEVICE READY STATE (stable, no flicker) â”€â”€
   const isDeviceReady = useMemo(() => {
     return isConnected && isInitialLoadComplete && isDeviceOnline && !isResuming && !isLoading && !isWaiting;
   }, [isConnected, isInitialLoadComplete, isDeviceOnline, isResuming, isLoading, isWaiting]);
 
-  // ── AppState listener for resume handling ──
+  // â”€â”€ AppState listener for resume handling â”€â”€
   useEffect(() => {
     isMountedRef.current = true;
     
@@ -255,7 +131,7 @@ export default function ConfigScreen() {
       const previousAppState = appStateRef.current;
       
       if (nextAppState === "active" && previousAppState !== "active") {
-        console.log("📱 Config: App resumed");
+        console.log("ðŸ“± Config: App resumed");
         setIsResuming(true);
         
         if (resumeTimeoutRef.current) {
@@ -271,7 +147,7 @@ export default function ConfigScreen() {
       }
       
       if (nextAppState === "background") {
-        console.log("📱 Config: App backgrounded");
+        console.log("ðŸ“± Config: App backgrounded");
         if (resumeTimeoutRef.current) {
           clearTimeout(resumeTimeoutRef.current);
           resumeTimeoutRef.current = null;
@@ -297,32 +173,59 @@ export default function ConfigScreen() {
   // Load device config from context
   useEffect(() => {
     if (deviceConfig) {
-      setConfig((prev) => ({
-        report_interval: deviceConfig.report_interval ?? prev.report_interval,
-        sampling_interval: deviceConfig.sampling_interval ?? prev.sampling_interval,
-        auto_mode: deviceConfig.auto_mode ?? prev.auto_mode,
-      }));
+      setConfig((prev) => {
+        const pendingMode = autoModePendingRef.current;
+        const deviceMode = deviceConfig.auto_mode;
+
+        if (typeof deviceMode !== "boolean") {
+          return {
+            ...prev,
+            report_interval: deviceConfig.report_interval ?? prev.report_interval,
+            sampling_interval: deviceConfig.sampling_interval ?? prev.sampling_interval,
+          };
+        }
+
+        if (pendingMode !== null && deviceMode === pendingMode) {
+          autoModePendingRef.current = null;
+          confirmedAutoModeRef.current = deviceMode;
+          autoModeLockUntilRef.current = Date.now() + 1500;
+        }
+
+        if (
+          pendingMode === null &&
+          autoModeLockUntilRef.current > Date.now() &&
+          confirmedAutoModeRef.current !== null &&
+          deviceMode !== confirmedAutoModeRef.current
+        ) {
+          return {
+            ...prev,
+            report_interval: deviceConfig.report_interval ?? prev.report_interval,
+            sampling_interval: deviceConfig.sampling_interval ?? prev.sampling_interval,
+          };
+        }
+
+        confirmedAutoModeRef.current = deviceMode;
+        return {
+          report_interval: deviceConfig.report_interval ?? prev.report_interval,
+          sampling_interval: deviceConfig.sampling_interval ?? prev.sampling_interval,
+          auto_mode: pendingMode !== null && deviceMode !== pendingMode
+            ? prev.auto_mode
+            : deviceMode ?? prev.auto_mode,
+        };
+      });
     }
   }, [deviceConfig]);
+
+  useEffect(() => () => {
+    if (autoModeTimerRef.current) clearTimeout(autoModeTimerRef.current);
+  }, []);
 
   const switchColors = {
     trackColor: { false: theme.colors.border, true: theme.colors.primary },
     thumbColor: "#fff",
   };
 
-  // ── Validate all fields are filled ──
-  const validateConfig = () => {
-    const errors = [];
-    if (!config.report_interval || config.report_interval <= 0) {
-      errors.push("Report Interval");
-    }
-    if (!config.sampling_interval || config.sampling_interval <= 0) {
-      errors.push("Sampling Interval");
-    }
-    return errors;
-  };
-
-  // ── Helper function to handle publish result ──
+  // â”€â”€ Helper function to handle publish result â”€â”€
   const handlePublishResult = (result, action) => {
     // Check if result is a boolean (old format) or object (new format)
     const isSuccess = typeof result === 'boolean' ? result : result?.success;
@@ -337,18 +240,17 @@ export default function ConfigScreen() {
     }
   };
 
-  // ── Auto-publish on auto_mode toggle ──
+  // â”€â”€ Auto-publish on auto_mode toggle â”€â”€
   const handleAutoModePublish = async (autoModeValue) => {
+    if (autoModePendingRef.current !== null) {
+      return;
+    }
     if (!isConnected) {
       Alert.alert("Not Connected", "Please wait for device to connect.");
       return;
     }
     if (!externalKey) {
       Alert.alert("Error", "No device selected.");
-      return;
-    }
-    if (!config.report_interval || !config.sampling_interval) {
-      Alert.alert("Missing Values", "Please set Report and Sampling intervals first.");
       return;
     }
     if (!isDeviceReady) {
@@ -363,63 +265,36 @@ export default function ConfigScreen() {
       return;
     }
 
-    setPublishing(true);
+    autoModePendingRef.current = autoModeValue;
     setPublishError(null);
-    
-    try {
+
+    if (autoModeTimerRef.current) clearTimeout(autoModeTimerRef.current);
+    autoModeTimerRef.current = setTimeout(async () => {
       const configToSend = {
         report_interval: config.report_interval,
         sampling_interval: config.sampling_interval,
         auto_mode: autoModeValue,
       };
 
-      console.log('📤 Publishing auto mode:', {
-        deviceKey: externalKey,
-        config: configToSend,
-        isConnected,
-        isDeviceReady,
-      });
-
-      const result = await publishConfig(externalKey, configToSend);
-      console.log('📥 Auto mode publish result:', result);
-      
-      const { success, error } = handlePublishResult(result, 'auto mode');
-      
-      if (success) {
-        console.log(`✅ Auto mode ${autoModeValue ? 'ON' : 'OFF'} published`);
-        addAlert?.("success", `Auto mode ${autoModeValue ? 'ON' : 'OFF'}`, "Configuration updated successfully");
-      } else {
-        setConfig((c) => ({ ...c, auto_mode: !autoModeValue }));
-        Alert.alert(
-          "Publish Failed", 
-          `Failed to update auto mode: ${error}\nPlease try again.`
-        );
+      try {
+        const result = await publishConfig(externalKey, configToSend);
+        const { success, error } = handlePublishResult(result, 'auto mode');
+        if (!success) {
+          autoModePendingRef.current = null;
+          setPublishError(error);
+        }
+      } catch (error) {
+        console.error('Auto mode publish error:', error);
+        autoModePendingRef.current = null;
+        setPublishError(error.message || "Failed to publish auto mode.");
+      } finally {
+        autoModeTimerRef.current = null;
       }
-    } catch (error) {
-      console.error('Auto mode publish error:', error);
-      setConfig((c) => ({ ...c, auto_mode: !autoModeValue }));
-      Alert.alert(
-        "Error", 
-        error.message || "Failed to publish auto mode. Please try again."
-      );
-    } finally {
-      setPublishing(false);
-    }
+    }, 500);
   };
 
-  // ── Publish configuration ──
+  // â”€â”€ Publish configuration â”€â”€
   const handlePublish = async () => {
-    const errors = validateConfig();
-    if (errors.length > 0) {
-      setShowError(true);
-      Alert.alert(
-        "⚠️ Missing Configuration",
-        `Please set the following parameters:\n\n• ${errors.join('\n• ')}\n\nAll three parameters are required.`,
-        [{ text: "OK" }]
-      );
-      return;
-    }
-
     if (!isConnected) {
       Alert.alert(
         "Not Connected",
@@ -451,7 +326,6 @@ export default function ConfigScreen() {
     }
 
     setPublishing(true);
-    setShowError(false);
     setPublishError(null);
     
     try {
@@ -461,7 +335,7 @@ export default function ConfigScreen() {
         auto_mode: config.auto_mode,
       };
 
-      console.log('📤 Publishing config:', {
+      console.log('ðŸ“¤ Publishing config:', {
         deviceKey: externalKey,
         config: configToSend,
         isConnected,
@@ -471,34 +345,30 @@ export default function ConfigScreen() {
       });
 
       const result = await publishConfig(externalKey, configToSend);
-      console.log('📥 Publish result:', result);
+      console.log('ðŸ“¥ Publish result:', result);
       
       const { success, error } = handlePublishResult(result, 'config');
 
       if (success) {
-        const summary =
-          `Report Interval: ${formatDuration(configToSend.report_interval)}\n` +
-          `Sampling Interval: ${formatDuration(configToSend.sampling_interval)}\n` +
-          `Auto Mode: ${configToSend.auto_mode ? "ON" : "OFF"}\n\n` +
-          `✅ Configuration sent to: ${selectedDeviceName || externalKey}`;
-
-        Alert.alert("✅ Configuration Published", summary);
+        Alert.alert(
+          "Configuration Published",
+          `Mode updated for ${selectedDeviceName || externalKey}.`
+        );
         setPublishError(null);
       } else {
         Alert.alert(
-          "❌ Publish Failed", 
-          `${error}\n\nPlease check:\n• Device is online\n• Connection is stable\n• Try again in a moment`
+          "Publish Failed",
+          `${error}\n\nPlease check:\n- Device is online\n- Connection is stable\n- Try again in a moment`
         );
       }
     } catch (error) {
       console.error("Publish error details:", {
         message: error.message,
         stack: error.stack,
-        config: configToSend,
       });
-      
+
       Alert.alert(
-        "❌ Publish Error", 
+        "Publish Error",
         error.message || "An unexpected error occurred. Please try again."
       );
     } finally {
@@ -506,7 +376,7 @@ export default function ConfigScreen() {
     }
   };
 
-  // ── Show loading state ──
+  // â”€â”€ Show loading state â”€â”€
   if (!isReady) {
     return (
       <View style={[styles.container, { 
@@ -519,9 +389,8 @@ export default function ConfigScreen() {
     );
   }
 
-  // ✅ Determine what to show
+  // âœ… Determine what to show
   const showStatusBadge = deviceStatus.type === 'online' || deviceStatus.type === 'offline';
-  const showDeviceDot = deviceStatus.type === 'online' || deviceStatus.type === 'offline';
   const showWarning = deviceStatus.type === 'offline';
 
   return (
@@ -535,7 +404,7 @@ export default function ConfigScreen() {
       onScroll={onScroll}
       scrollEventThrottle={16}
     >
-      {/* ── Header ── */}
+      {/* â”€â”€ Header â”€â”€ */}
       <View style={styles.headerRow}>
         <View>
           <Text style={[styles.title, { color: theme.colors.text }]}>
@@ -559,7 +428,7 @@ export default function ConfigScreen() {
         )}
       </View>
 
-      {/* ── Device Info ── */}
+      {/* â”€â”€ Device Info â”€â”€ */}
       {/* {externalKey && (
         <View style={[
           styles.deviceInfo,
@@ -581,7 +450,7 @@ export default function ConfigScreen() {
         </View>
       )} */}
 
-      {/* ── Device Configuration Section ── */}
+      {/* â”€â”€ Device Configuration Section â”€â”€ */}
       <View
         style={[
           styles.section,
@@ -598,32 +467,16 @@ export default function ConfigScreen() {
         </Text>
 
         <Text style={[styles.sectionSubtitle, { color: theme.colors.textSecondary }]}>
-          All fields are required. Please configure each parameter.
+          Choose how the selected device should operate.
         </Text>
-
-        <IntervalPicker
-          label="Report Interval"
-          value={config.report_interval}
-          onSelect={(v) => setConfig((c) => ({ ...c, report_interval: v }))}
-          theme={theme}
-          isRequired={true}
-        />
-
-        <IntervalPicker
-          label="Sampling Interval"
-          value={config.sampling_interval}
-          onSelect={(v) => setConfig((c) => ({ ...c, sampling_interval: v }))}
-          theme={theme}
-          isRequired={true}
-        />
 
         <View style={styles.settingItem}>
           <Ionicons name="sync-outline" size={24} color={theme.colors.primary} />
           <View style={styles.settingLabelContainer}>
-            <Text style={[styles.settingText, { color: theme.colors.text }]}>
-              Auto Mode
+            <Text style={[styles.settingText, { color: theme.colors.text }]}>Auto Mode</Text>
+            <Text style={[styles.settingDescription, { color: theme.colors.textSecondary }]}>
+              Let the device manage its operating cycle automatically.
             </Text>
-            <Text style={[styles.requiredBadge, { color: '#F44336' }]}>*</Text>
           </View>
           <Switch
             value={config.auto_mode}
@@ -635,63 +488,38 @@ export default function ConfigScreen() {
           />
         </View>
 
-        {/* ── Current Values ── */}
-        <View style={[styles.currentValuesContainer, { 
-          backgroundColor: showError && (!config.report_interval || !config.sampling_interval) 
-            ? 'rgba(244,67,54,0.08)' 
-            : 'rgba(0,0,0,0.05)'
-        }]}>
-          <Text style={[styles.currentValuesLabel, { color: theme.colors.textSecondary }]}>
-            Current Configuration:
-          </Text>
-          <View style={styles.currentValuesRow}>
-            <View style={styles.currentValueItem}>
-              <Text style={[styles.currentValueLabel, { color: theme.colors.textSecondary }]}>
-                Report:
-              </Text>
-              <Text style={[styles.currentValueText, { 
-                color: config.report_interval ? theme.colors.text : '#F44336',
-                fontWeight: config.report_interval ? '500' : '700',
-              }]}>
-                {config.report_interval ? formatDuration(config.report_interval) : '⚠️ Required'}
-              </Text>
-            </View>
-            <View style={styles.currentValueItem}>
-              <Text style={[styles.currentValueLabel, { color: theme.colors.textSecondary }]}>
-                Sampling:
-              </Text>
-              <Text style={[styles.currentValueText, { 
-                color: config.sampling_interval ? theme.colors.text : '#F44336',
-                fontWeight: config.sampling_interval ? '500' : '700',
-              }]}>
-                {config.sampling_interval ? formatDuration(config.sampling_interval) : '⚠️ Required'}
-              </Text>
-            </View>
-            <View style={styles.currentValueItem}>
-              <Text style={[styles.currentValueLabel, { color: theme.colors.textSecondary }]}>
-                Auto:
-              </Text>
-              <Text style={[styles.currentValueText, { 
-                color: theme.colors.text,
-                fontWeight: '500',
-              }]}>
-                {config.auto_mode ? 'ON' : 'OFF'}
-              </Text>
-            </View>
-          </View>
-          {showError && (!config.report_interval || !config.sampling_interval) && (
-            <Text style={[styles.errorText, { color: '#F44336' }]}>
-              ⚠️ Please set all required fields before publishing.
+        <View style={[styles.modeSummary, { backgroundColor: `${theme.colors.primary}0D`, borderColor: `${theme.colors.primary}25` }]}>
+          <Ionicons
+            name={config.auto_mode ? "sync-circle-outline" : "hand-left-outline"}
+            size={22}
+            color={theme.colors.primary}
+          />
+          <View style={styles.modeSummaryText}>
+            <Text style={[styles.modeSummaryTitle, { color: theme.colors.text }]}>
+              {config.auto_mode ? "Automatic control" : "Manual control"}
             </Text>
-          )}
+            <Text style={[styles.modeSummarySubtitle, { color: theme.colors.textSecondary }]}>
+              {config.auto_mode ? "The device manages its cycle." : "You control the device from the app."}
+            </Text>
+          </View>
+        </View>
+
+        <View style={[styles.internalConfigNote, { backgroundColor: `${theme.colors.textSecondary}0D` }]}>
+          <Ionicons name="information-circle-outline" size={16} color={theme.colors.textSecondary} />
+          <Text style={[styles.internalConfigText, { color: theme.colors.textSecondary }]}>
+            Device timing settings are managed automatically.
+          </Text>
+        </View>
+
+        <View>
           {publishError && (
             <Text style={[styles.errorText, { color: '#F44336' }]}>
-              ❌ Error: {publishError}
+              Error: {publishError}
             </Text>
           )}
         </View>
 
-        {/* ── Publish Button ── */}
+        {/* â”€â”€ Publish Button â”€â”€ */}
         <Pressable
           onPress={handlePublish}
           disabled={publishing || !isDeviceReady}
@@ -709,21 +537,21 @@ export default function ConfigScreen() {
           </Text>
         </Pressable>
 
-        {/* ── Warnings (ONLY when definitive) ── */}
+        {/* â”€â”€ Warnings (ONLY when definitive) â”€â”€ */}
         {showWarning && (
           <Text style={[styles.warningText, { color: '#f44336' }]}>
-            ⚠️ Device is offline. Please wait for device to connect.
+            Device is offline. Please wait for device to connect.
           </Text>
         )}
         {isResuming && !showWarning && (
           <Text style={[styles.warningText, { color: '#FF9800' }]}>
-            ⏳ App is resuming. Please wait a moment...
+            App is resuming. Please wait a moment...
           </Text>
         )}
       </View>
 
-      {/* ── Notifications Section ── */}
-      <View
+      {/* â”€â”€ Notifications Section â”€â”€ */}
+      {/* <View
         style={[
           styles.section,
           {
@@ -768,9 +596,9 @@ export default function ConfigScreen() {
             {...switchColors}
           />
         </View>
-      </View>
+      </View> */}
 
-      {/* ── Appearance Section ── */}
+      {/* â”€â”€ Appearance Section â”€â”€ */}
       <View
         style={[
           styles.section,
@@ -888,23 +716,10 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   settingLabelContainer: {
-    flexDirection: "row",
-    alignItems: "center",
     flex: 1,
-    gap: 4,
   },
   settingText: { fontSize: 16, fontWeight: "500" },
-  requiredBadge: {
-    fontSize: 16,
-    fontWeight: "700",
-    marginLeft: 2,
-  },
-  hintText: {
-    fontSize: 12,
-    paddingHorizontal: 16,
-    marginTop: -8,
-    marginBottom: 12,
-  },
+  settingDescription: { fontSize: 12, marginTop: 4, lineHeight: 17 },
   warningText: {
     fontSize: 12,
     textAlign: 'center',
@@ -917,43 +732,30 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontWeight: '600',
   },
-  dropdownTrigger: {
+  modeSummary: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderWidth: 1,
-    borderRadius: 8,
-  },
-  chipPanel: {
     marginHorizontal: 16,
-    marginBottom: 16,
-    padding: 12,
+    marginBottom: 10,
+    padding: 14,
     borderRadius: 10,
     borderWidth: 1,
   },
-  customRow: { gap: 6 },
-  customLabel: { fontSize: 12, fontWeight: "600" },
-  customInputRow: {
+  modeSummaryText: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  modeSummaryTitle: { fontSize: 14, fontWeight: "700" },
+  modeSummarySubtitle: { fontSize: 12, marginTop: 3 },
+  internalConfigNote: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-  },
-  customInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    fontSize: 14,
-  },
-  customApplyButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
+    marginHorizontal: 16,
+    marginBottom: 4,
+    padding: 10,
     borderRadius: 8,
   },
-  customApplyText: { color: "#fff", fontWeight: "600", fontSize: 13 },
+  internalConfigText: { flex: 1, fontSize: 11, marginLeft: 7, lineHeight: 16 },
   publishButton: {
     flexDirection: "row",
     justifyContent: "center",
@@ -965,34 +767,4 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   publishButtonText: { color: "#fff", fontWeight: "600", fontSize: 15 },
-  currentValuesContainer: {
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginHorizontal: 16,
-    marginVertical: 8,
-    borderRadius: 10,
-  },
-  currentValuesLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  currentValuesRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  currentValueItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  currentValueLabel: {
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  currentValueText: {
-    fontSize: 13,
-  },
 });

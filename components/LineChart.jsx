@@ -1,7 +1,7 @@
 // components/LineChart.jsx
-import { StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 
-const PAD = { top: 20, right: 14, bottom: 32, left: 48 };
+const PAD = { top: 30, right: 18, bottom: 52, left: 68 };
 const LINE_WIDTH = 2.5;
 
 /**
@@ -20,6 +20,8 @@ export default function LineChart({
   yTitle = "",
   showGradient = true,
   showDots = true,
+  onPointPress,
+  selectedPoint,
 }) {
   if (!data || data.length === 0) return null;
 
@@ -77,10 +79,10 @@ export default function LineChart({
     return { v, y: y(v), key: `y-${i}` };
   });
 
-  // X-axis: show up to 5 labels (first, 25%, 50%, 75%, last)
+  // X-axis: keep three labels so timestamps remain readable on mobile.
   const xTickPcts = data.length <= 5
     ? data.map((_, i) => i / Math.max(data.length - 1, 1))
-    : [0, 0.25, 0.5, 0.75, 1];
+    : [0, 0.5, 1];
   const xTicks = xTickPcts.map((pct, i) => {
     const idx = Math.round(pct * (points.length - 1));
     const t = points[idx].time;
@@ -193,14 +195,38 @@ export default function LineChart({
       {/* ── Data point dots ── */}
       {showDots &&
         points.map((p, i) => (
-          <View
+          <TouchableOpacity
             key={`dot-${i}`}
             style={[
-              styles.dot,
-              { left: p.px - 3.5, top: p.py - 3.5, backgroundColor: color },
+              styles.dotHitArea,
+              { left: p.px - 14, top: p.py - 14 },
             ]}
-          />
+            onPress={() => onPointPress?.(p)}
+            disabled={!onPointPress}
+            activeOpacity={0.8}
+          >
+            <View style={[styles.dot, { backgroundColor: color }]} />
+          </TouchableOpacity>
         ))}
+
+      {selectedPoint && (
+        <View
+          pointerEvents="none"
+          style={[
+            styles.pointTooltip,
+            {
+              left: Math.max(50, Math.min(selectedPoint.px - 54, width - 120)),
+              top: Math.max(4, selectedPoint.py - 58),
+              borderColor: color,
+            },
+          ]}
+        >
+          <Text style={[styles.pointTooltipValue, { color }]}>{fmt(selectedPoint.value)}{unit ? ` ${unit}` : ""}</Text>
+          <Text style={styles.pointTooltipTime}>
+            {new Date(selectedPoint.time).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+          </Text>
+        </View>
+      )}
 
       {/* ── Min marker ── */}
       {points[minIdx] && (
@@ -242,10 +268,7 @@ export default function LineChart({
             styles.xLabel,
             { color: labelColor, top: height - PAD.bottom + 8 },
             {
-              left: Math.max(
-                0,
-                Math.min(tick.px - 24, width - PAD.right - 48)
-              ),
+              left: Math.max(0, Math.min(tick.px - 30, width - PAD.right - 60)),
             },
           ]}
           numberOfLines={1}
@@ -259,7 +282,7 @@ export default function LineChart({
         <Text
           style={[
             styles.axisTitle,
-            { color: labelColor, top: height - 6, left: PAD.left + plotW / 2 - 15 },
+            { color: labelColor, top: height - 18, left: PAD.left + plotW / 2 - 24 },
           ]}
         >
           {xTitle}
@@ -273,9 +296,8 @@ export default function LineChart({
             styles.axisTitle,
             {
               color: labelColor,
-              top: PAD.top + plotH / 2,
-              left: 0,
-              transform: [{ rotate: "-90deg" }, { translateX: -10 }, { translateY: -20 }],
+              top: 7,
+              left: 6,
             },
           ]}
         >
@@ -302,7 +324,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
   },
-  axisLabel: { width: PAD.left - 10, fontSize: 9, textAlign: "right" },
+  axisLabel: { width: PAD.left - 12, fontSize: 10, textAlign: "right" },
   gridLine: {
     flex: 1,
     height: StyleSheet.hairlineWidth,
@@ -317,9 +339,32 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: "#FFF",
   },
+  dotHitArea: {
+    position: "absolute",
+    width: 28,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pointTooltip: {
+    position: "absolute",
+    minWidth: 108,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    backgroundColor: "#FFFFFF",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  pointTooltipValue: { fontSize: 12, fontWeight: "800", textAlign: "center" },
+  pointTooltipTime: { fontSize: 9, color: "#666", marginTop: 2, textAlign: "center" },
   xLabel: {
     position: "absolute",
-    width: 48,
+    width: 60,
     fontSize: 9,
     textAlign: "center",
   },

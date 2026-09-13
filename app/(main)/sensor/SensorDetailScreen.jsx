@@ -35,8 +35,8 @@ const { width, height: screenHeight } = Dimensions.get("window");
 const PAGE_SIZE = 10;
 const MAX_GRAPH_POINTS = 200;
 const MAX_TABLE_ROWS = 100;
-const RANGE_DAYS = { "1h": 1/24, "1d": 1, "7d": 7, "30d": 30 };
-const RANGE_LABELS = { "1h": "Last 1h", "1d": "Last 24h", "7d": "Last 7d", "30d": "Last 30d" };
+const RANGE_DAYS = { "1d": 1, "7d": 7, "30d": 30 };
+const RANGE_LABELS = { "1d": "Last 24h", "7d": "Last 7d", "30d": "Last 30d" };
 // The fullscreen chart is drawn wider than the screen; pinch to zoom in and
 // swipe to pan across the whole time range.
 const ZOOM_CHART_WIDTH = screenHeight - 100;
@@ -183,14 +183,15 @@ export default function SensorDetailScreen({
 
   const config = (sensorKey ? getSensorByKey(sensorKey) : null) || configProp || SENSORS[0];
 
-  const [timeRange, setTimeRange] = useState("7d");
+  const [timeRange, setTimeRange] = useState("1d");
   const [activeTab, setActiveTab] = useState("table");
   const [allTableData, setAllTableData] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [isTableLoading, setIsTableLoading] = useState(false);
-  const [graphData, setGraphData] = useState([]);
+    const [graphData, setGraphData] = useState([]); // Keep track of graph data
   const [isGraphLoading, setIsGraphLoading] = useState(false);
   const [isZoomed, setIsZoomed] = useState(false);
+  const [selectedPoint, setSelectedPoint] = useState(null);
 
   const liveValue = sensorData[config.dataKey];
   const selectedDevId = getSelectedDeviceId();
@@ -297,6 +298,7 @@ export default function SensorDetailScreen({
 
   useEffect(() => {
     setCurrentPage(1);
+    setSelectedPoint(null);
     fetchAllTableData();
     fetchGraphData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -342,30 +344,6 @@ export default function SensorDetailScreen({
   const tableData = allTableData.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
   const startIndex = tableTotal > 0 ? (safePage - 1) * PAGE_SIZE + 1 : 0;
   const endIndex = Math.min(safePage * PAGE_SIZE, tableTotal);
-
-  // ── Prepare graph data for LineChart ──
-  const graphPoints = useMemo(() => graphData, [graphData]);
-
-  // ── X‑axis labels: show a few representative timestamps ──
-  const getAxisLabels = () => {
-    if (graphPoints.length < 2) return { xLabels: [], yLabels: [] };
-    const minVal = Math.min(...graphPoints.map((p) => p.value));
-    const maxVal = Math.max(...graphPoints.map((p) => p.value));
-    const range = maxVal - minVal || 1;
-    const yStep = range / 4;
-    const yLabels = [];
-    for (let i = 0; i <= 4; i++) {
-      yLabels.push(minVal + i * yStep);
-    }
-    const indices = [0, Math.floor(graphPoints.length / 2), graphPoints.length - 1];
-    const xLabels = indices.map((i) => {
-      const d = new Date(graphPoints[i].time);
-      return timeRange === "1d" ? d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : d.toLocaleDateString();
-    });
-    return { xLabels, yLabels };
-  };
-
-  const { xLabels, yLabels } = getAxisLabels();
 
   // ✅ Check if data is loading
   const isLoading = isTableLoading || isGraphLoading || isHistoricalLoading;
@@ -447,7 +425,7 @@ export default function SensorDetailScreen({
         </View>
 
         <View style={styles.timeRangeContainer}>
-          {["1h", "1d", "7d", "30d"].map((range) => (
+          {["1d", "7d", "30d"].map((range) => (
             <TouchableOpacity
               key={range}
               style={[
@@ -462,7 +440,7 @@ export default function SensorDetailScreen({
                   { color: timeRange === range ? "#FFF" : theme.colors.textSecondary },
                 ]}
               >
-                {range === "1h" ? "1h" : range === "1d" ? "24h" : range === "7d" ? "7d" : "30d"}
+                {range === "1d" ? "24h" : range}
               </Text>
             </TouchableOpacity>
           ))}
@@ -653,29 +631,25 @@ export default function SensorDetailScreen({
                   </TouchableOpacity>
                 </View>
 
-                {/* ── Axis title labels ── */}
-                <View style={styles.axisTitleRow}>
-                  <Text style={[styles.axisTitleText, { color: theme.colors.textSecondary }]}>↑ {config.unit || "Value"}</Text>
-                  <Text style={[styles.axisTitleText, { color: theme.colors.textSecondary }]}>Time →</Text>
-                </View>
-
                 {/* ── Chart ── */}
                 <View style={styles.graphWithAxis}>
                   <View style={styles.chartAndXAxis}>
-                    <View style={styles.chartArea}>
-                      <LineChart
-                        data={graphData}
-                        color={config.color}
-                        unit=""
-                        width={width - 50}
-                        height={220}
-                        labelColor={theme.colors.textSecondary}
-                        xTitle="Time"
-                        yTitle={config.unit}
-                        showGradient={true}
-                        showDots={graphData.length <= 50}
-                      />
-                    </View>
+                      <View style={styles.chartArea}>
+                        <LineChart
+                          data={graphData}
+                          color={config.color}
+                          unit={config.unit}
+                          width={width - 34}
+                          height={245}
+                          labelColor={theme.colors.textSecondary}
+                          xTitle="Time"
+                          yTitle={config.unit ? `Value (${config.unit})` : "Value"}
+                          showGradient={true}
+                          showDots={graphData.length <= 50}
+                          onPointPress={setSelectedPoint}
+                          selectedPoint={selectedPoint}
+                        />
+                      </View>
                   </View>
                 </View>
               </View>
@@ -774,9 +748,11 @@ export default function SensorDetailScreen({
                 height={ZOOM_CHART_HEIGHT}
                 labelColor={theme.colors.textSecondary}
                 xTitle="Time"
-                yTitle={config.unit}
+                yTitle={config.unit ? `Value (${config.unit})` : "Value"}
                 showGradient={true}
                 showDots={graphData.length <= 80}
+                onPointPress={setSelectedPoint}
+                selectedPoint={selectedPoint}
               />
             </ZoomableChart>
             <Text style={[styles.zoomAxisTitle, { color: theme.colors.textSecondary }]}>Time →</Text>
