@@ -287,10 +287,19 @@ function ActuatorSummaryCard({ icon: Icon, label, state, active, theme, accentCo
     : [`${theme.colors.textSecondary}35`, `${theme.colors.textSecondary}28`, `${theme.colors.textSecondary}20`, `${theme.colors.textSecondary}16`, `${theme.colors.textSecondary}10`];
 
   return (
-    <View style={[styles.actuatorSummaryCard, {  borderColor: active ? `${accentColor}55` : theme.colors.border }]}>
-      <View style={[styles.actuatorSummaryTopAccent, { backgroundColor: accentColor }]} />
-      <View style={[styles.actuatorSummaryIcon, { backgroundColor: active ? `${accentColor}18` : `${theme.colors.textSecondary}12` }]}>
-        <Icon active={active} size={28} color={iconColor} status="normal" />
+    <View style={[
+      styles.actuatorSummaryCard,
+      {
+        borderColor: active ? `${accentColor}55` : theme.colors.border,
+        backgroundColor: theme.colors.surface,
+      },
+    ]}>
+      <View style={[styles.actuatorSummaryTopAccent, { backgroundColor: active ? accentColor : `${accentColor}40` }]} />
+      <View style={[
+        styles.actuatorSummaryIcon,
+        { backgroundColor: active ? `${accentColor}18` : (theme.dark ? "rgba(255,255,255,0.06)" : `${theme.colors.textSecondary}12`) }
+      ]}>
+        <Icon active={active} size={24} color={iconColor} status="normal" />
       </View>
       <View style={styles.actuatorSummaryInfo}>
         <Text style={[styles.actuatorSummaryLabel, { color: theme.colors.text }]} numberOfLines={2}>{label}</Text>
@@ -334,7 +343,7 @@ export default function Dashboard() {
     return () => { mounted = false; };
   }, []);
 
-  const { theme } = useTheme();
+  const { theme, isDark } = useTheme();
 
   const {
     getSelectedDeviceSensorData,
@@ -629,6 +638,7 @@ export default function Dashboard() {
   return (
     <ScrollView
       ref={scrollRef}
+      style={{ backgroundColor: theme.colors.background }}
       contentContainerStyle={{ paddingTop: headerHeight, paddingBottom: 10 }}
       onScroll={Animated.event(
         [{ nativeEvent: { contentOffset: { y: scrollY } } }],
@@ -827,7 +837,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.07,
+    shadowOpacity: 0.10,
     shadowRadius: 8,
     elevation: 3,
   },
@@ -877,7 +887,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   actuatorSummaryTopAccent: { position: "absolute", top: 0, left: "25%", width: "50%", height: 3, borderBottomLeftRadius: 3, borderBottomRightRadius: 3 },
-  actuatorSummaryIcon: { width: 34, height: 34, borderRadius: 11, alignItems: "center", justifyContent: "center", marginBottom: 4 },
+  actuatorSummaryIcon: { width: 34, height: 34, borderRadius: 11, alignItems: "center", justifyContent: "center", marginBottom: 4, overflow: "hidden" },
   actuatorSummaryInfo: { width: "100%", minWidth: 0, alignItems: "center" },
   actuatorSummaryLabel: { fontSize: 8.5, fontWeight: "700", textAlign: "center", lineHeight: 10 },
   actuatorSummaryStateRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", marginTop: 3 },
@@ -925,11 +935,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     alignItems: "center",
     overflow: "hidden",
-    height: 136, // slightly reduced to fit 3 columns comfortably
+    height: 136,
     justifyContent: "space-between",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
+    shadowOpacity: 0.08,
     shadowRadius: 6,
     elevation: 2,
   },

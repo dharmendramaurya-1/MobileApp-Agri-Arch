@@ -13,7 +13,7 @@ let connectionCallbacks = [];
 let callbackIds = 0;
 let isAppInBackground = false;
 let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 10;
+const MAX_RECONNECT_ATTEMPTS = 20;   // more attempts before giving up
 let isMqttPersistent = false;
 
 // ── Track App State ──────────────────────────────────────────────────────────
@@ -90,13 +90,31 @@ const getConnectionOptions = async () => {
     clientId,
     username: "external",
     password: password,
-    reconnectPeriod: 3000,              // ✅ Auto-reconnect if disconnected
-    connectTimeout: 15000,
-    keepalive: 20,                      // ✅ Keep connection alive
-    clean: false,                       // ✅ Maintain session
+
+    // ─── Keepalive ────────────────────────────────────────────────────────
+    // MUST be long enough that Android's Doze / radio-sleep can never cause
+    // a ping to miss its deadline.  20 s was too short — the OS throttles
+    // background network precisely in that window, producing:
+    //   ❌ MQTT Error: [Error: Keepalive timeout]
+    // 60 s is the industry-standard safe floor for mobile WebSocket clients.
+    keepalive: 60,
+
+    // ─── Reconnect ────────────────────────────────────────────────────────
+    // Start retrying after 5 s (not 3 s) to give the radio time to wake up.
+    reconnectPeriod: 5000,
+
+    // ─── Connect timeout ──────────────────────────────────────────────────
+    // 30 s gives enough headroom on slow / congested Wi-Fi / 4G.
+    connectTimeout: 30000,
+
+    clean: false,                       // Maintain session across reconnects
     protocolVersion: 4,
     rejectUnauthorized: false,
+
+    // reschedulePing: reschedules the PINGREQ timer after any outbound
+    // packet, so actively publishing never triggers a false timeout.
     reschedulePing: true,
+
     queueQoSZero: false,
     will: {
       topic: '/messages/status',
@@ -201,10 +219,10 @@ export const getMqttClient = async () => {
 
     client.on("reconnect", () => {
       reconnectAttempts++;
-      console.log(`🔄 MQTT Reconnecting... (attempt ${reconnectAttempts})`);
+      console.log(`🔄 MQTT Reconnecting... (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
 
       if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-        console.log('⚠️ Too many reconnect attempts - resetting client');
+        console.log('⚠️ Too many reconnect attempts - resetting client and will retry fresh');
         try {
           client.removeAllListeners();
           client.end(true);
@@ -213,6 +231,18 @@ export const getMqttClient = async () => {
         isConnecting = false;
         reconnectAttempts = 0;
         isMqttPersistent = false;
+        // Schedule a fresh connection attempt after a longer back-off
+        setTimeout(() => {
+          console.log('🔄 Attempting fresh MQTT connection after back-off...');
+          getMqttClient().catch(e => console.error('❌ Fresh reconnect failed:', e));
+        }, 10000);
+      }
+    });
+
+    // Log ping events so you can see keepalive is working in logs
+    client.on("packetreceive", (packet) => {
+      if (packet.cmd === 'pingresp') {
+        console.log('🏓 MQTT PINGRESP received — connection alive');
       }
     });
 

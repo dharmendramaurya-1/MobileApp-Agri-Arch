@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, {
   createContext,
   ReactNode,
@@ -28,22 +29,23 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const theme = isDark ? DarkTheme : LightTheme;
 
   useEffect(() => {
-    try {
-      const val = localStorage.getItem("theme");
-      if (val === "dark") setIsDark(true);
-    } catch (e) {
-      // ignore
-    }
+    // ✅ Use AsyncStorage instead of localStorage (localStorage doesn't exist in React Native)
+    const loadTheme = async () => {
+      try {
+        const val = await AsyncStorage.getItem("theme");
+        if (val === "dark") setIsDark(true);
+      } catch (e) {
+        // ignore
+      }
+    };
+    loadTheme();
   }, []);
 
   const toggleTheme = () => {
     const newVal = !isDark;
     setIsDark(newVal);
-    try {
-      localStorage.setItem("theme", newVal ? "dark" : "light");
-    } catch (e) {
-      // ignore
-    }
+    // ✅ Use AsyncStorage instead of localStorage
+    AsyncStorage.setItem("theme", newVal ? "dark" : "light").catch(() => {});
   };
 
   return (

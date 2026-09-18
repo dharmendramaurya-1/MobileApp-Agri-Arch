@@ -859,23 +859,14 @@ function MainDrawer({ theme }) {
           <Drawer.Screen name="sensor-tabs" options={{ title: "Environmental Sensors" }} />
           
           {/* ── ENVIRONMENT SENSORS ── */}
-          <Drawer.Screen name="ambient-temperature" options={{ title: "Ambient Temperature" }} />
-          <Drawer.Screen name="ambient-humidity" options={{ title: "Ambient Humidity" }} />
-          <Drawer.Screen name="light-level" options={{ title: "Light Level" }} />
+          {/* co2.jsx exists as a standalone file */}
           <Drawer.Screen name="co2" options={{ title: "CO₂ Level" }} />
-          
-          {/* ── WATER & SOIL SENSORS ── */}
-          <Drawer.Screen name="water-temperature" options={{ title: "Water Temperature" }} />
-          <Drawer.Screen name="water-level" options={{ title: "Water Level" }} />
-          <Drawer.Screen name="ec-value" options={{ title: "EC Value" }} />
-          <Drawer.Screen name="ph-level" options={{ title: "pH Level" }} />
-          
-          {/* ── INDIVIDUAL SENSOR DETAILS ── */}
-          <Drawer.Screen name="sensor/[id]" options={{ title: "Sensor Details" }} />
-          <Drawer.Screen name="sensor/ambient-temperature" options={{ title: "Temperature Details" }} />
-          <Drawer.Screen name="sensor/ambient-humidity" options={{ title: "Humidity Details" }} />
-          <Drawer.Screen name="sensor/ph-level" options={{ title: "pH Details" }} />
-          <Drawer.Screen name="sensor/ec-value" options={{ title: "EC Details" }} />
+
+          {/* ── SENSOR DETAIL (dynamic) ── */}
+          {/* sensor/[type].jsx handles all per-sensor detail pages */}
+          <Drawer.Screen name="sensor/[type]" options={{ title: "Sensor Details" }} />
+          {/* sensor/SensorDetailScreen.jsx is the full detail screen */}
+          <Drawer.Screen name="sensor/SensorDetailScreen" options={{ title: "Sensor Details" }} />
         </Drawer>
       </View>
       <DrawerBottomBar theme={theme} />

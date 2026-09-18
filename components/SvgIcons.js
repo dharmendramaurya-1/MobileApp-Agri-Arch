@@ -22,12 +22,8 @@ import Svg, {
 
 const styles = StyleSheet.create({
   iconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
     justifyContent: 'center',
     alignItems: 'center',
-    overflow: 'hidden',
   },
   dotContainer: {
     justifyContent: 'center',
@@ -71,11 +67,11 @@ const PowerBadge = ({ active }) => {
   );
 };
 
-// Shared badge wrapper — circular tinted background + centered SVG.
-const IconBadge = ({ size = 40, active, tint, children }) => {
-  const bg = active ? `${tint}18` : '#F5F5F5';
+// Shared badge wrapper — transparent by default, sized to match icon, dark/light theme safe
+const IconBadge = ({ size = 40, active, tint, bg, children }) => {
+  const backgroundColor = bg !== undefined ? bg : 'transparent';
   return (
-    <View style={[styles.iconContainer, { backgroundColor: bg }]}>
+    <View style={[styles.iconContainer, { width: size, height: size, backgroundColor }]}>
       <Svg width={size} height={size} viewBox="0 0 24 24">
         {children}
       </Svg>

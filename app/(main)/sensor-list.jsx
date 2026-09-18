@@ -2,11 +2,11 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useMemo, useRef } from "react";
 import {
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from "react-native";
 import { SENSORS } from "../../src/config/sensorConfigs";
 import { useMqtt } from "../../src/context/MqttContext";
@@ -95,7 +95,7 @@ export default function SensorList() {
           <Ionicons name="arrow-back" size={21} color={theme.colors.text} />
         </TouchableOpacity>
         <View style={styles.headerCopy}>
-          <Text style={[styles.eyebrow, { color: theme.colors.primary }]}>DEVICE HEALTH</Text>
+          {/* <Text style={[styles.eyebrow, { color: theme.colors.primary }]}>DEVICE HEALTH</Text> */}
           <Text style={[styles.title, { color: theme.colors.text }]}>Sensor List</Text>
           <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]} numberOfLines={1}>
             {selectedDeviceName || "Selected device"}
@@ -168,7 +168,7 @@ export default function SensorList() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   content: { paddingHorizontal: 16, paddingBottom: 36 },
-  header: { flexDirection: "row", alignItems: "center", marginBottom: 18 },
+  header: { flexDirection: "row", alignItems: "center", marginBottom: 18, marginTop: 10 },
   backButton: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", elevation: 2 },
   headerCopy: { flex: 1, marginLeft: 12 },
   eyebrow: { fontSize: 10, fontWeight: "800", letterSpacing: 1 },

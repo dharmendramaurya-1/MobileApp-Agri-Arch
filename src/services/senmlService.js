@@ -92,7 +92,7 @@ export const searchSenML = async (params) => {
 
     console.log("✅ SenML search successful");
     console.log("   Response status:", response.status);
-    
+
     const data = response.data;
     const messages = data?.messages || [];
     const total = data?.total || 0;
@@ -164,7 +164,7 @@ export const getAllSensorData = async (from, to, limit = 1000) => {
     if (!groupedData[sensorName]) {
       groupedData[sensorName] = [];
     }
-    
+
     groupedData[sensorName].push({
       time: msg.timeMs,
       value: msg.value !== undefined ? msg.value : (msg.bool_value ? 1 : 0),
@@ -213,7 +213,7 @@ export const getSensorDataByTimeRange = async (from, to, limit = 500, sensorKey 
     if (!groupedData[sensorName]) {
       groupedData[sensorName] = [];
     }
-    
+
     groupedData[sensorName].push({
       time: msg.timeMs,
       value: msg.value !== undefined ? msg.value : (msg.bool_value ? 1 : 0),
@@ -503,11 +503,6 @@ export const fetchSensorHistorical = async ({
       unit: msg.unit || "",
       sensorName: msg.name ? msg.name.split(":").pop() : null,
     }));
-
-    console.log(`📡 API Response for ${fullName}:`);
-    console.log(`   messages count: ${messages.length}`);
-    console.log(`   API total: ${data.total}`);
-    console.log(`   API limit: ${data.limit}, offset: ${data.offset}`);
 
     return {
       success: true,

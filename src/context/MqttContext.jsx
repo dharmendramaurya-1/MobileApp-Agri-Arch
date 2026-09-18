@@ -1124,7 +1124,19 @@ export const MqttProvider = ({ children }) => {
     const isSelected = currentSelectedKey === deviceKey;
 
     if (isSelected) {
-      updateLegacyState(parsed);
+      // ✅ FIX 2: updateDeviceData already synced auto_mode inside devicesData.
+      // updateLegacyState duplicates the sync into the flat sensorData/deviceConfig
+      // state, which causes SystemModeContext to fire twice with potentially
+      // different values → mode flicker.  We still call updateLegacyState for
+      // everything EXCEPT the auto_mode / deviceConfig sync — we neutralise that
+      // by stripping the deviceStatus bitmask that carries the mode bit before
+      // passing to legacy state, so only pure sensor & actuator values go through.
+      const parsedForLegacy = { ...parsed };
+      // Remove deviceStatus to prevent duplicate auto_mode sync in updateLegacyState.
+      // The flags (waterPump, valves, etc.) are still updated via the bitmask
+      // actuator keys that processDeviceData already wrote into devicesData.
+      delete parsedForLegacy.deviceStatus;
+      updateLegacyState(parsedForLegacy);
       if (isStatusResponse) {
         setConnectionState('online');
         setHasEverBeenOnline(true);
@@ -1206,8 +1218,11 @@ export const MqttProvider = ({ children }) => {
         const requestId = parsed._requestId || parsed.ReqID;
         const expectedId = pendingRequestIds.current[deviceKey];
 
+        // ✅ FIX 1: Reject stale responses — only process if requestId matches
+        // or there is no pending requestId (bare data message on status topic).
         if (requestId && expectedId && requestId !== expectedId) {
-          console.log(`⚠️ Request ID mismatch for ${deviceKey}`);
+          console.log(`⚠️ Stale status response for ${deviceKey}: got ${requestId}, expected ${expectedId}. DISCARDING.`);
+          return; // ← drop the stale message, don't update UI
         }
 
         lastGetStatResponseTime.current[deviceKey] = Date.now();
@@ -2128,6 +2143,13 @@ export const MqttProvider = ({ children }) => {
   };
 
   // ── persistTimer ──
+  // ✅ FIX 3: Debounce increased from 600 ms → 5 000 ms.
+  // Before, every incoming MQTT message (every ~30 s per device, but with 2
+  // devices and both data + status topics that's several writes/minute) was
+  // triggering an AsyncStorage write after only 600 ms of silence.  The write
+  // itself is cheap but it was spamming the "🗂️ saved" log and causing
+  // unnecessary I/O churn.  5 s is still short enough that we never lose more
+  // than one reporting interval of data on a hard kill.
   const persistTimer = useRef(null);
   useEffect(() => {
     const hasRealData = Object.keys(devicesData).length > 0;
@@ -2140,7 +2162,7 @@ export const MqttProvider = ({ children }) => {
         savedAt: Date.now(),
       };
       saveLastData(cacheData);
-    }, 600);
+    }, 5000); // was 600 ms — now 5 s to avoid per-message writes
 
     return () => {
       if (persistTimer.current) clearTimeout(persistTimer.current);

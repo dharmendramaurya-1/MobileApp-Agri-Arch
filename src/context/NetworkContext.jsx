@@ -140,8 +140,6 @@ export const NetworkProvider = ({ children }) => {
       }}
     >
       {children}
-      
-      {/* ── Google Style Network Modal ── */}
       <Modal
         visible={showModal}
         transparent
@@ -150,34 +148,26 @@ export const NetworkProvider = ({ children }) => {
         onRequestClose={dismissModal}
       >
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalContainer, { backgroundColor: theme.colors.surface }]}>
-            
-            {/* ── Google Style Icon ── */}
+          <View style={[styles.modalContainer, { backgroundColor: theme?.colors?.surface ?? '#FFFFFF' }]}>
             <View style={styles.iconWrapper}>
-              <View style={[styles.iconCircle, { backgroundColor: `${theme.colors.error}12` }]}>
-                <Ionicons name="wifi-outline" size={48} color={theme.colors.error} />
-                <View style={[styles.slashLine, { backgroundColor: theme.colors.error }]} />
+              <View style={[styles.iconCircle, { backgroundColor: `${theme?.colors?.error ?? '#D32F2F'}12` }]}>
+                <Ionicons name="wifi-outline" size={48} color={theme?.colors?.error ?? '#D32F2F'} />
+                <View style={[styles.slashLine, { backgroundColor: theme?.colors?.error ?? '#D32F2F' }]} />
               </View>
             </View>
-
-            {/* ── Title ── */}
-            <Text style={[styles.title, { color: theme.colors.text }]}>
+            <Text style={[styles.title, { color: theme?.colors?.text ?? '#1B5E20' }]}>
               No internet connection
             </Text>
-
-            {/* ── Description ── */}
-            <Text style={[styles.description, { color: theme.colors.textSecondary }]}>
+            <Text style={[styles.description, { color: theme?.colors?.textSecondary ?? '#558B2F' }]}>
               Looks like you're not connected to the internet. Please check your connection and try again.
             </Text>
-
-            {/* ── Try Again Button (Google Style) ── */}
             <TouchableOpacity
               style={styles.retryButton}
               onPress={handleRetry}
               disabled={isChecking}
               activeOpacity={0.7}
             >
-              <Text style={[styles.retryButtonText, { color: theme.colors.primary }]}>
+              <Text style={[styles.retryButtonText, { color: theme?.colors?.primary ?? '#4CAF50' }]}>
                 {isChecking ? 'Checking...' : 'Try again'}
               </Text>
             </TouchableOpacity>

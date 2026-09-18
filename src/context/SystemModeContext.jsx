@@ -134,8 +134,8 @@ export const SystemModeProvider = ({ children }) => {
     // Check if we have a valid mode value (not null/undefined)
     if (deviceStatusFlags && deviceStatusFlags.mode !== null && deviceStatusFlags.mode !== undefined) {
       
-      // ✅ Check if this is real data by looking at the timestamp
-      const hasRealData = sensorData?.lastUpdated || deviceStatusFlags._timestamp;
+      // ✅ Check if this is real data: rawStatus must be non-zero (0 = default/empty)
+      const hasRealData = deviceStatusFlags.rawStatus && deviceStatusFlags.rawStatus !== 0;
       
       if (hasRealData) {
         const newMode = deviceStatusFlags.mode ? 'auto' : 'manual';
@@ -169,7 +169,11 @@ export const SystemModeProvider = ({ children }) => {
         }
       }
     }
-  }, [deviceStatusFlags, sensorData]);
+  // ✅ FIX: Only depend on deviceStatusFlags (not sensorData). sensorData
+  // changes on every MQTT message causing this to re-run and log spurious
+  // mode syncs on every tick even when flags haven't changed.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deviceStatusFlags]);
 
   // ── Update mode display based on device status ──────────────────────────
   useEffect(() => {
