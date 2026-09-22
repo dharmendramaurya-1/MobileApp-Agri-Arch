@@ -11,6 +11,7 @@ import { HistoricalDataProvider } from "../src/context/HistoricalDataContext";
 import { MqttProvider } from "../src/context/MqttContext";
 import { NetworkProvider } from "../src/context/NetworkContext"; // ✅ Import
 import { SystemModeProvider } from "../src/context/SystemModeContext";
+import { TankSafetyProvider } from "../src/context/TankSafetyContext";
 import { ThemeProvider } from "../src/context/ThemContext";
 
 function RootNav() {
@@ -224,13 +225,13 @@ export default function RootLayout() {
           <AuthProvider>
             <MqttProvider>
               <SystemModeProvider>
-                
-                <AlertProvider>
-                  <HistoricalDataProvider>
-                    <RootNav />
-                  </HistoricalDataProvider>
-                </AlertProvider>
-
+                <TankSafetyProvider>
+                  <AlertProvider>
+                    <HistoricalDataProvider>
+                      <RootNav />
+                    </HistoricalDataProvider>
+                  </AlertProvider>
+                </TankSafetyProvider>
               </SystemModeProvider>
             </MqttProvider>
           </AuthProvider>

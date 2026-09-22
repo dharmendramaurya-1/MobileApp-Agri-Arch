@@ -13,15 +13,57 @@ import { useMqtt } from "../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
 
-const SENSOR_BITS = {
-  co2: 0x01,
-  "water-level": 0x02,
-  "light-level": 0x04,
-  "ec-value": 0x08,
-  "ph-level": 0x10,
-  "water-temperature": 0x20,
-  "ambient-temperature": 0x40,
-  "ambient-humidity": 0x80,
+import { parseDeviceStatus } from "../../src/utils/deviceStatusParser";
+
+const SENSOR_ALERT_MAP = {
+  "ambient-temperature": {
+    highFlag: "airTempHigh",
+    lowFlag: "airTempLow",
+    min: -10,
+    max: 60,
+  },
+  "ambient-humidity": {
+    highFlag: "humidityHigh",
+    lowFlag: "humidityLow",
+    min: 0,
+    max: 100,
+  },
+  co2: {
+    highFlag: "co2High",
+    lowFlag: "co2Low",
+    min: 0,
+    max: 5000,
+  },
+  "light-level": {
+    highFlag: "luxHigh",
+    lowFlag: "luxLow",
+    min: 0,
+    max: 200000,
+  },
+  "ph-level": {
+    highFlag: "phHigh",
+    lowFlag: "phLow",
+    min: 0,
+    max: 14,
+  },
+  "ec-value": {
+    highFlag: "ecHigh",
+    lowFlag: "ecLow",
+    min: 0,
+    max: 8000,
+  },
+  "water-temperature": {
+    highFlag: "waterTempHigh",
+    lowFlag: "waterTempLow",
+    min: -5,
+    max: 50,
+  },
+  "water-level": {
+    highFlag: "tankHigh",
+    lowFlag: "tankLow",
+    min: 0,
+    max: 100,
+  },
 };
 
 const SENSOR_ICONS = {
@@ -46,10 +88,105 @@ const SENSOR_COLORS = {
   "water-level": "#2E7D32",
 };
 
-function getRawStatus(deviceStatusFlags) {
-  if (typeof deviceStatusFlags === "number") return deviceStatusFlags >>> 0;
-  if (typeof deviceStatusFlags?.rawStatus === "number") return deviceStatusFlags.rawStatus >>> 0;
-  return null;
+// Firmware Sensor_Fault_t exact bit contract: Bit 1 = Fault, Bit 0 = OK
+const SENSOR_FAULT_BITS = {
+  co2: 0x01,                   // Bit 0: co2_sensor_fault
+  "water-level": 0x02,         // Bit 1: level_sensor_fault
+  "light-level": 0x04,         // Bit 2: light_sensor_fault
+  "ec-value": 0x08,            // Bit 3: ec_sensor_fault
+  "ph-level": 0x10,            // Bit 4: ph_sensor_fault
+  "water-temperature": 0x20,   // Bit 5: water_temp_fault
+  "ambient-temperature": 0x40, // Bit 6: ambient_temp_fault
+  "ambient-humidity": 0x80,    // Bit 7: ambient_humidity_fault
+};
+
+function getSensorHealth(sensorKey, value, flags, isDeviceOnline, isDataAvailable, faultBitmask) {
+  const hasValue = value !== null && value !== undefined && value !== "" && !isNaN(Number(value));
+  const numVal = hasValue ? Number(value) : null;
+  const alertConfig = SENSOR_ALERT_MAP[sensorKey];
+
+  // 1. Direct firmware Sensor_Fault_t bit check from SensFlt (Bit 1 = Fault, Bit 0 = OK)
+  if (typeof faultBitmask === "number") {
+    const faultBit = SENSOR_FAULT_BITS[sensorKey];
+    if (faultBit !== undefined) {
+      const isFault = (faultBitmask & faultBit) !== 0; // Bit 1 = Fault, Bit 0 = OK
+      if (isFault) {
+        return {
+          status: "fault",
+          label: "Fault",
+          color: "#D84315",
+          icon: "close",
+          isOk: false,
+        };
+      }
+    }
+  }
+
+  // 2. If no data received yet and device is not online
+  if (!hasValue && !isDataAvailable && !isDeviceOnline) {
+    return {
+      status: "unknown",
+      label: "Unknown",
+      color: "#9E9E9E",
+      icon: "help",
+      isOk: null,
+    };
+  }
+
+  // 3. If device is active/online, but reading is missing
+  if (!hasValue) {
+    return {
+      status: "fault",
+      label: "Fault",
+      color: "#D84315",
+      icon: "close",
+      isOk: false,
+    };
+  }
+
+  // 4. If firmware reported global sensor fault bit (Bit 23 of deviceStatus), check if this reading is out of physical range
+  if (flags?.sensorFault) {
+    if (alertConfig && (numVal < alertConfig.min || numVal > alertConfig.max)) {
+      return {
+        status: "fault",
+        label: "Fault",
+        color: "#D84315",
+        icon: "close",
+        isOk: false,
+      };
+    }
+  }
+
+  // 5. Check specific threshold alert bits for this sensor
+  if (alertConfig && flags) {
+    if (flags[alertConfig.highFlag]) {
+      return {
+        status: "alert",
+        label: "High",
+        color: "#E65100",
+        icon: "arrow-up",
+        isOk: false,
+      };
+    }
+    if (flags[alertConfig.lowFlag]) {
+      return {
+        status: "alert",
+        label: "Low",
+        color: "#1976D2",
+        icon: "arrow-down",
+        isOk: false,
+      };
+    }
+  }
+
+  // 6. Reading is valid and no faults or alerts
+  return {
+    status: "ok",
+    label: "OK",
+    color: "#2E7D32",
+    icon: "checkmark",
+    isOk: true,
+  };
 }
 
 export default function SensorList() {
@@ -57,24 +194,51 @@ export default function SensorList() {
   const { headerHeight } = useScroll();
   const scrollRef = useRef(null);
   useScrollReset(scrollRef);
-  const { getSelectedDeviceName, getSelectedDeviceSensorData, deviceStatusFlags } = useMqtt();
+  const {
+    getSelectedDeviceName,
+    getSelectedDeviceSensorData,
+    getSelectedDeviceOnlineStatus,
+    deviceStatusFlags,
+    hasReceivedData,
+    isLiveData,
+  } = useMqtt();
 
   const selectedDeviceName = getSelectedDeviceName();
   const sensorData = getSelectedDeviceSensorData();
-  const rawStatus = getRawStatus(deviceStatusFlags);
+  const isDeviceOnline = getSelectedDeviceOnlineStatus ? getSelectedDeviceOnlineStatus() : false;
+  const isDataAvailable = Boolean(hasReceivedData || isLiveData || isDeviceOnline);
+
+  const faultBitmask =
+    typeof sensorData?.SensFlt === "number"
+      ? sensorData.SensFlt
+      : typeof sensorData?.sensorFaultStatus === "number"
+      ? sensorData.sensorFaultStatus
+      : typeof sensorData?.sensFlt === "number"
+      ? sensorData.sensFlt
+      : typeof sensorData?.sensor_fault === "number"
+      ? sensorData.sensor_fault
+      : typeof sensorData?.sensorFault === "number"
+      ? sensorData.sensorFault
+      : null;
+
+  const flags = useMemo(() => {
+    if (!deviceStatusFlags) return null;
+    if (typeof deviceStatusFlags === "number") return parseDeviceStatus(deviceStatusFlags);
+    return deviceStatusFlags;
+  }, [deviceStatusFlags]);
+
   const sensors = SENSORS.filter((sensor) => sensor.key !== "device-status" && sensor.key !== "soil-moisture");
 
   const sensorStates = useMemo(() => sensors.map((sensor) => {
-    const bit = SENSOR_BITS[sensor.key];
-    const hasStatus = rawStatus !== null && bit !== undefined;
-    // Firmware contract supplied for this screen: bit 1 = sensor OK, bit 0 = fault.
-    const isOk = hasStatus ? (rawStatus & bit) !== 0 : null;
+    const value = sensorData?.[sensor.dataKey];
+    const health = getSensorHealth(sensor.key, value, flags, isDeviceOnline, isDataAvailable, faultBitmask);
     return {
       ...sensor,
-      isOk,
-      value: sensorData?.[sensor.dataKey],
+      isOk: health.isOk,
+      health,
+      value,
     };
-  }), [rawStatus, sensorData, sensors]);
+  }), [sensorData, flags, isDeviceOnline, isDataAvailable, faultBitmask, sensors]);
 
   const okCount = sensorStates.filter((sensor) => sensor.isOk === true).length;
   const faultCount = sensorStates.filter((sensor) => sensor.isOk === false).length;
@@ -122,7 +286,7 @@ export default function SensorList() {
       <View style={styles.sectionHeader}>
         <View>
           <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>All sensors</Text>
-          <Text style={[styles.sectionSubtitle, { color: theme.colors.textSecondary }]}>Bit status and latest reading</Text>
+          <Text style={[styles.sectionSubtitle, { color: theme.colors.textSecondary }]}>Status and latest reading</Text>
         </View>
         <Text style={[styles.sectionCount, { color: theme.colors.primary }]}>{sensorStates.length} sensors</Text>
       </View>
@@ -130,8 +294,9 @@ export default function SensorList() {
       <View style={styles.list}>
         {sensorStates.map((sensor) => {
           const accent = SENSOR_COLORS[sensor.key] || theme.colors.primary;
-          const statusColor = sensor.isOk === true ? "#2E7D32" : sensor.isOk === false ? "#D84315" : theme.colors.textSecondary;
-          const statusLabel = sensor.isOk === true ? "OK" : sensor.isOk === false ? "Fault" : "Unknown";
+          const statusColor = sensor.health.color;
+          const statusLabel = sensor.health.label;
+          const statusIcon = sensor.health.icon;
           const value = sensor.value === null || sensor.value === undefined ? "--" : String(sensor.value);
           return (
             <TouchableOpacity
@@ -152,7 +317,7 @@ export default function SensorList() {
               </View>
               <View style={styles.sensorStatusWrap}>
                 <View style={[styles.statusIcon, { backgroundColor: `${statusColor}16` }]}>
-                  <Ionicons name={sensor.isOk === false ? "close" : sensor.isOk === true ? "checkmark" : "help"} size={14} color={statusColor} />
+                  <Ionicons name={statusIcon} size={14} color={statusColor} />
                 </View>
                 <Text style={[styles.statusLabel, { color: statusColor }]}>{statusLabel}</Text>
               </View>

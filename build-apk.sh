@@ -16,7 +16,7 @@ echo "app/build/outputs/apk/release/app-release.apk"
 # /////////////Development Build//////////////////////
 
 
-#!/bin/bash
+# !/bin/bash
 
 # set -e
 

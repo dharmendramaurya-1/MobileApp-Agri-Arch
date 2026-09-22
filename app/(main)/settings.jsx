@@ -2,6 +2,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   AppState,
   Pressable,
@@ -14,6 +15,7 @@ import {
 import { useMqtt } from "../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useTheme } from "../../src/context/ThemContext";
+import { parseDeviceStatus } from "../../src/utils/deviceStatusParser";
 
 // â”€â”€ Main Config Screen â”€â”€
 export default function ConfigScreen() {
@@ -23,7 +25,8 @@ export default function ConfigScreen() {
   useScrollReset(scrollRef);
   
   const { 
-    externalKey, 
+    externalKey,
+    selectedExternalKey, 
     isConnected, 
     publishConfig, 
     getSelectedDeviceConfig,
@@ -32,6 +35,7 @@ export default function ConfigScreen() {
     deviceOnlineStatus,
     deviceInitialLoadComplete,
     connectionState,
+    subscribeToLiveData,
   } = useMqtt();
   
   const deviceConfig = getSelectedDeviceConfig();
@@ -43,11 +47,10 @@ export default function ConfigScreen() {
     auto_mode: false,
   });
   const [publishing, setPublishing] = useState(false);
+  const [isAutoModePending, setIsAutoModePending] = useState(false);
   const [publishError, setPublishError] = useState(null);
-  const autoModePendingRef = useRef(null);
-  const autoModeTimerRef = useRef(null);
-  const confirmedAutoModeRef = useRef(null);
-  const autoModeLockUntilRef = useRef(0);
+  const pendingTargetModeRef = useRef(null);
+  const autoModeTimeoutRef = useRef(null);
 
   // â”€â”€ App resume state tracking â”€â”€
   const [isResuming, setIsResuming] = useState(false);
@@ -57,7 +60,7 @@ export default function ConfigScreen() {
 
   // Get selected device info
   const selectedDeviceName = getSelectedDeviceName();
-  const deviceKey = externalKey;
+  const deviceKey = selectedExternalKey || externalKey;
 
   // â”€â”€ âœ… STABLE STATUS DERIVATION (SAME AS LAYOUT) â”€â”€
   const isDeviceOnline = useMemo(() => {
@@ -170,131 +173,158 @@ export default function ConfigScreen() {
     };
   }, []);
 
-  // Load device config from context
+  // ── Sync deviceConfig from MQTT context ──
   useEffect(() => {
     if (deviceConfig) {
-      setConfig((prev) => {
-        const pendingMode = autoModePendingRef.current;
-        const deviceMode = deviceConfig.auto_mode;
+      const devAutoMode = typeof deviceConfig.auto_mode === "boolean" ? deviceConfig.auto_mode : null;
+      setConfig((prev) => ({
+        ...prev,
+        report_interval: deviceConfig.report_interval ?? prev.report_interval,
+        sampling_interval: deviceConfig.sampling_interval ?? prev.sampling_interval,
+        // While pending /data response, keep existing switch value; otherwise sync with confirmed deviceConfig
+        auto_mode: isAutoModePending ? prev.auto_mode : (devAutoMode ?? prev.auto_mode),
+      }));
 
-        if (typeof deviceMode !== "boolean") {
-          return {
-            ...prev,
-            report_interval: deviceConfig.report_interval ?? prev.report_interval,
-            sampling_interval: deviceConfig.sampling_interval ?? prev.sampling_interval,
-          };
+      // If pending target matches updated deviceConfig, device has confirmed!
+      if (isAutoModePending && pendingTargetModeRef.current !== null && devAutoMode === pendingTargetModeRef.current) {
+        console.log(`🎉 Confirmed AutoMode = ${devAutoMode} via deviceConfig sync`);
+        if (autoModeTimeoutRef.current) {
+          clearTimeout(autoModeTimeoutRef.current);
+          autoModeTimeoutRef.current = null;
         }
-
-        if (pendingMode !== null && deviceMode === pendingMode) {
-          autoModePendingRef.current = null;
-          confirmedAutoModeRef.current = deviceMode;
-          autoModeLockUntilRef.current = Date.now() + 1500;
-        }
-
-        if (
-          pendingMode === null &&
-          autoModeLockUntilRef.current > Date.now() &&
-          confirmedAutoModeRef.current !== null &&
-          deviceMode !== confirmedAutoModeRef.current
-        ) {
-          return {
-            ...prev,
-            report_interval: deviceConfig.report_interval ?? prev.report_interval,
-            sampling_interval: deviceConfig.sampling_interval ?? prev.sampling_interval,
-          };
-        }
-
-        confirmedAutoModeRef.current = deviceMode;
-        return {
-          report_interval: deviceConfig.report_interval ?? prev.report_interval,
-          sampling_interval: deviceConfig.sampling_interval ?? prev.sampling_interval,
-          auto_mode: pendingMode !== null && deviceMode !== pendingMode
-            ? prev.auto_mode
-            : deviceMode ?? prev.auto_mode,
-        };
-      });
+        pendingTargetModeRef.current = null;
+        setIsAutoModePending(false);
+        setConfig((prev) => ({ ...prev, auto_mode: devAutoMode }));
+      }
     }
-  }, [deviceConfig]);
+  }, [deviceConfig, isAutoModePending]);
 
-  useEffect(() => () => {
-    if (autoModeTimerRef.current) clearTimeout(autoModeTimerRef.current);
-  }, []);
+  // ── Listen for direct /data confirmation from the device ──
+  useEffect(() => {
+    if (typeof subscribeToLiveData !== 'function') return;
+
+    const unsubscribe = subscribeToLiveData(({ deviceKey: msgDeviceKey, parsed, isStatusResponse }) => {
+      const targetDeviceKey = selectedExternalKey || externalKey;
+      if (!targetDeviceKey || msgDeviceKey !== targetDeviceKey) return;
+
+      if (parsed && parsed.deviceStatus !== undefined && parsed.deviceStatus !== null) {
+        const flags = parseDeviceStatus(parsed.deviceStatus);
+        if (flags.mode !== null && flags.mode !== undefined) {
+          console.log(`📥 [${msgDeviceKey}] ${isStatusResponse ? 'STATUS' : 'DATA'} mode = ${flags.mode}`);
+
+          if (pendingTargetModeRef.current !== null && flags.mode === pendingTargetModeRef.current) {
+            console.log(`🎉 Confirmed AutoMode = ${flags.mode} from /data message for ${msgDeviceKey}!`);
+            if (autoModeTimeoutRef.current) {
+              clearTimeout(autoModeTimeoutRef.current);
+              autoModeTimeoutRef.current = null;
+            }
+            pendingTargetModeRef.current = null;
+            setIsAutoModePending(false);
+            setConfig((prev) => ({ ...prev, auto_mode: flags.mode }));
+          }
+        }
+      }
+    });
+
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+      if (autoModeTimeoutRef.current) {
+        clearTimeout(autoModeTimeoutRef.current);
+        autoModeTimeoutRef.current = null;
+      }
+    };
+  }, [selectedExternalKey, externalKey, subscribeToLiveData]);
 
   const switchColors = {
     trackColor: { false: theme.colors.border, true: theme.colors.primary },
     thumbColor: "#fff",
   };
 
-  // â”€â”€ Helper function to handle publish result â”€â”€
-  const handlePublishResult = (result, action) => {
-    // Check if result is a boolean (old format) or object (new format)
-    const isSuccess = typeof result === 'boolean' ? result : result?.success;
-    const errorMsg = typeof result === 'object' ? result?.error : null;
-    
-    if (isSuccess) {
-      setPublishError(null);
-      return { success: true };
-    } else {
-      setPublishError(errorMsg || 'Unknown error occurred');
-      return { success: false, error: errorMsg || 'Unknown error occurred' };
-    }
-  };
-
-  // â”€â”€ Auto-publish on auto_mode toggle â”€â”€
+  // ── Auto-publish on auto_mode toggle (Wait for device /data confirmation) ──
   const handleAutoModePublish = async (autoModeValue) => {
-    if (autoModePendingRef.current !== null) {
-      return;
-    }
+    const targetDeviceKey = selectedExternalKey || externalKey;
+
     if (!isConnected) {
       Alert.alert("Not Connected", "Please wait for device to connect.");
       return;
     }
-    if (!externalKey) {
+    if (!targetDeviceKey) {
       Alert.alert("Error", "No device selected.");
       return;
     }
     if (!isDeviceReady) {
-      Alert.alert(
-        "Device Not Ready",
-        isDeviceOffline
-          ? "Device is offline. Please wait for device to connect."
-          : isResuming
-          ? "App is resuming. Please wait a moment."
-          : "Device is still connecting. Please wait."
-      );
+      Alert.alert("Device Not Ready", "Please wait for the device to come online.");
+      return;
+    }
+    if (isAutoModePending || publishing) {
       return;
     }
 
-    autoModePendingRef.current = autoModeValue;
+    // Do NOT update config.auto_mode yet!
+    // The switch button stays in its original state until /messages/{deviceKey}/data arrives.
+    setIsAutoModePending(true);
     setPublishError(null);
+    pendingTargetModeRef.current = autoModeValue;
 
-    if (autoModeTimerRef.current) clearTimeout(autoModeTimerRef.current);
-    autoModeTimerRef.current = setTimeout(async () => {
-      const configToSend = {
-        report_interval: config.report_interval,
-        sampling_interval: config.sampling_interval,
-        auto_mode: autoModeValue,
-      };
-
-      try {
-        const result = await publishConfig(externalKey, configToSend);
-        const { success, error } = handlePublishResult(result, 'auto mode');
-        if (!success) {
-          autoModePendingRef.current = null;
-          setPublishError(error);
-        }
-      } catch (error) {
-        console.error('Auto mode publish error:', error);
-        autoModePendingRef.current = null;
-        setPublishError(error.message || "Failed to publish auto mode.");
-      } finally {
-        autoModeTimerRef.current = null;
+    // Timeout after 25s if device does not send /data confirming the mode
+    if (autoModeTimeoutRef.current) clearTimeout(autoModeTimeoutRef.current);
+    autoModeTimeoutRef.current = setTimeout(() => {
+      if (pendingTargetModeRef.current !== null) {
+        console.warn(`⏰ AutoMode switch timed out waiting for /data response from ${targetDeviceKey}`);
+        setIsAutoModePending(false);
+        pendingTargetModeRef.current = null;
+        Alert.alert(
+          "Timeout",
+          `Mode command was sent, but the device did not confirm in /data telemetry within 25 seconds.\nThe switch remains in its current state.`
+        );
       }
-    }, 500);
+    }, 25000);
+
+    const configToSend = {
+      report_interval: config.report_interval || 180,
+      sampling_interval: config.sampling_interval || 30,
+      auto_mode: autoModeValue,
+    };
+
+    try {
+      console.log(`📡 [${targetDeviceKey}] Publishing /cfg for AutoMode = ${autoModeValue}:`, configToSend);
+      const result = await publishConfig(targetDeviceKey, configToSend);
+      const isSuccess = typeof result === 'boolean' ? result : result?.success;
+
+      if (isSuccess) {
+        console.log(`✅ AutoMode = ${autoModeValue} /cfg published. Waiting for device confirmation in /data topic...`);
+        // Do NOT setConfig or clear isAutoModePending here!
+        // We strictly wait until /messages/{targetDeviceKey}/data confirms flags.mode === autoModeValue
+      } else {
+        if (autoModeTimeoutRef.current) {
+          clearTimeout(autoModeTimeoutRef.current);
+          autoModeTimeoutRef.current = null;
+        }
+        setIsAutoModePending(false);
+        pendingTargetModeRef.current = null;
+        const errorMsg = typeof result === 'object' && result?.error ? result.error : "Failed to send mode command to device.";
+        console.warn(`⚠️ AutoMode publish unsuccessful:`, errorMsg);
+        setPublishError(errorMsg);
+        Alert.alert("Publish Failed", errorMsg);
+      }
+    } catch (error) {
+      if (autoModeTimeoutRef.current) {
+        clearTimeout(autoModeTimeoutRef.current);
+        autoModeTimeoutRef.current = null;
+      }
+      setIsAutoModePending(false);
+      pendingTargetModeRef.current = null;
+      console.error('❌ Auto mode publish error:', error);
+      const errorMsg = error.message || "Failed to publish auto mode.";
+      setPublishError(errorMsg);
+      Alert.alert("Error", errorMsg);
+    }
   };
 
-  // â”€â”€ Publish configuration â”€â”€
+  // ── Publish configuration ──
   const handlePublish = async () => {
+    const targetDeviceKey = selectedExternalKey || externalKey;
+
     if (!isConnected) {
       Alert.alert(
         "Not Connected",
@@ -303,24 +333,10 @@ export default function ConfigScreen() {
       return;
     }
 
-    if (!externalKey) {
+    if (!targetDeviceKey) {
       Alert.alert(
         "No Device ID",
-        "External key not found. Please restart the app."
-      );
-      return;
-    }
-
-    if (!isDeviceReady) {
-      Alert.alert(
-        "Device Not Ready",
-        isDeviceOffline
-          ? "Device is offline. Please make sure the device is connected and try again."
-          : isResuming
-          ? "App is resuming. Please wait a moment and try again."
-          : isLoading || isWaiting
-          ? "Device is still connecting. Please wait for the device to come online."
-          : "Device is not ready. Please wait."
+        "Device key not found. Please restart the app or select a device."
       );
       return;
     }
@@ -330,35 +346,31 @@ export default function ConfigScreen() {
     
     try {
       const configToSend = {
-        report_interval: config.report_interval,
-        sampling_interval: config.sampling_interval,
+        report_interval: config.report_interval || 180,
+        sampling_interval: config.sampling_interval || 30,
         auto_mode: config.auto_mode,
       };
 
-      console.log('ðŸ“¤ Publishing config:', {
-        deviceKey: externalKey,
+      console.log('📤 Publishing config:', {
+        deviceKey: targetDeviceKey,
         config: configToSend,
         isConnected,
-        isDeviceReady,
-        connectionState,
-        isDeviceOnline,
       });
 
-      const result = await publishConfig(externalKey, configToSend);
-      console.log('ðŸ“¥ Publish result:', result);
-      
-      const { success, error } = handlePublishResult(result, 'config');
+      const result = await publishConfig(targetDeviceKey, configToSend);
+      const isSuccess = typeof result === 'boolean' ? result : result?.success;
 
-      if (success) {
+      if (isSuccess) {
         Alert.alert(
           "Configuration Published",
-          `Mode updated for ${selectedDeviceName || externalKey}.`
+          `Mode updated for ${selectedDeviceName || targetDeviceKey}.`
         );
         setPublishError(null);
       } else {
+        const errorMsg = typeof result === 'object' && result?.error ? result.error : "Unknown error occurred";
         Alert.alert(
           "Publish Failed",
-          `${error}\n\nPlease check:\n- Device is online\n- Connection is stable\n- Try again in a moment`
+          `${errorMsg}\n\nPlease check:\n- Device is online\n- Connection is stable\n- Try again in a moment`
         );
       }
     } catch (error) {
@@ -478,14 +490,24 @@ export default function ConfigScreen() {
               Let the device manage its operating cycle automatically.
             </Text>
           </View>
-          <Switch
-            value={config.auto_mode}
-            onValueChange={(v) => {
-              handleAutoModePublish(v);
-            }}
-            disabled={publishing || !isDeviceReady}
-            {...switchColors}
-          />
+          <View style={styles.switchWrapper}>
+            {isAutoModePending && (
+              <ActivityIndicator
+                size="small"
+                color={theme.colors.primary}
+                style={{ marginRight: 8 }}
+              />
+            )}
+            <Switch
+              value={config.auto_mode}
+              onValueChange={(v) => {
+                handleAutoModePublish(v);
+              }}
+              disabled={isAutoModePending || publishing || !isDeviceReady}
+              style={styles.largeSwitch}
+              {...switchColors}
+            />
+          </View>
         </View>
 
         <View style={[styles.modeSummary, { backgroundColor: `${theme.colors.primary}0D`, borderColor: `${theme.colors.primary}25` }]}>
@@ -638,11 +660,14 @@ export default function ConfigScreen() {
               Dark Mode
             </Text>
           </View>
-          <Switch
-            value={isDark}
-            onValueChange={toggleTheme}
-            {...switchColors}
-          />
+          <View style={styles.switchWrapper}>
+            <Switch
+              value={isDark}
+              onValueChange={toggleTheme}
+              style={styles.largeSwitch}
+              {...switchColors}
+            />
+          </View>
         </View>
       </View>
     </ScrollView>
@@ -720,6 +745,15 @@ const styles = StyleSheet.create({
   },
   settingText: { fontSize: 16, fontWeight: "500" },
   settingDescription: { fontSize: 12, marginTop: 4, lineHeight: 17 },
+  switchWrapper: {
+    paddingHorizontal: 6,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  largeSwitch: {
+    transform: [{ scaleX: 1.25 }, { scaleY: 1.25 }],
+  },
   warningText: {
     fontSize: 12,
     textAlign: 'center',

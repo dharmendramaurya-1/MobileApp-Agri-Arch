@@ -401,6 +401,7 @@ function CustomDrawerContent({ navigation }) {
     externalKey,
     // ✅ Get the device status sync function
     getDeviceStatusSync,
+    deviceOnlineStatus,
   } = useMqtt();
 
   const selectedDeviceName = getSelectedDeviceName();
@@ -417,34 +418,16 @@ function CustomDrawerContent({ navigation }) {
     return getDeviceStatusSync(deviceKey);
   }, [deviceKey, getDeviceStatusSync]);
 
-  // ✅ Get status display for drawer - handles loading state correctly
+  // ── Status display for drawer: Directly Active or Offline (no loading/connecting on reopen) ──
   const getDrawerStatusDisplay = () => {
-    // If no device key, show offline
     if (!deviceKey) {
       return { text: 'Offline', color: '#F44336', dotColor: '#F44336', isLoading: false };
     }
-
-    // ✅ Check if still loading initial data
-    const isLoading = deviceStatusSync.isLoading || 
-                     deviceStatusSync.isChecking || 
-                     !deviceStatusSync.isInitialLoadComplete;
-
-    // If still loading, show "Connecting..."
-    if (isLoading) {
-      return { text: 'Connecting...', color: '#FFC107', dotColor: '#FFC107', isLoading: true };
+    const isOnline = deviceOnlineStatus[deviceKey] === true;
+    if (isOnline) {
+      return { text: 'Active', color: '#4CAF50', dotColor: '#4CAF50', isLoading: false };
     }
-
-    // If load is complete, show online/offline based on actual status
-    if (deviceStatusSync.isInitialLoadComplete) {
-      if (deviceStatusSync.isOnline) {
-        return { text: 'Active', color: '#4CAF50', dotColor: '#4CAF50', isLoading: false };
-      } else {
-        return { text: 'Offline', color: '#F44336', dotColor: '#F44336', isLoading: false };
-      }
-    }
-
-    // Default to connecting
-    return { text: 'Connecting...', color: '#FFC107', dotColor: '#FFC107', isLoading: true };
+    return { text: 'Offline', color: '#F44336', dotColor: '#F44336', isLoading: false };
   };
 
   const drawerStatus = getDrawerStatusDisplay();
@@ -481,6 +464,8 @@ function CustomDrawerContent({ navigation }) {
         { name: "Dashboard", icon: "grid-outline", route: "/(main)/dashboard" },
         { name: "Devices", icon: "hardware-chip-outline", route: "/(main)/devices" },
         { name: "System Control", icon: "options-outline", route: "/(main)/system-control" },
+        { name: "System Timings", icon: "timer-outline", route: "/(main)/timings" },
+        { name: "Clean Tank", icon: "water-outline", route: "/(main)/clean-tank" },
         { name: "Add Crops", icon: "leaf-outline", route: "/(main)/add_crops" },
         { name: "Profile", icon: "person-outline", route: "/(main)/profile" },
       ],
@@ -845,6 +830,8 @@ function MainDrawer({ theme }) {
           <Drawer.Screen name="dashboard" options={{ title: "Dashboard" }} />
           <Drawer.Screen name="devices" options={{ title: "Devices" }} />
           <Drawer.Screen name="system-control" options={{ title: "System Control" }} />
+          <Drawer.Screen name="timings" options={{ title: "System Timings" }} />
+          <Drawer.Screen name="clean-tank" options={{ title: "Clean Tank" }} />
           <Drawer.Screen name="add_crops" options={{ title: "Add Crops" }} />
           <Drawer.Screen name="profile" options={{ title: "Profile" }} />
           

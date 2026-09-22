@@ -163,11 +163,23 @@ export const AlertList = ({ onClose }) => {
               <Text style={[styles.alertTitle, { color: colors.text }]}>
                 {alert.title}
               </Text>
+              {alert.message ? (
+                <Text style={[styles.alertMessage, { color: colors.textSecondary }]}>
+                  {alert.message}
+                </Text>
+              ) : null}
               <Text style={[styles.alertTime, { color: colors.textSecondary }]}>
                 {getTimeDisplay(alert.timestamp)}
               </Text>
             </View>
             <View style={[styles.statusDot, { backgroundColor: alertColor }]} />
+            <TouchableOpacity
+              onPress={() => removeAlertById(alert.id)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={styles.dismissBtn}
+            >
+              <Ionicons name="close-circle-outline" size={20} color={colors.textSecondary} />
+            </TouchableOpacity>
           </View>
         </View>
 
@@ -335,6 +347,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginBottom: 2,
   },
+  alertMessage: {
+    fontSize: 12,
+    lineHeight: 16,
+    marginBottom: 3,
+  },
   alertTime: {
     fontSize: 11,
   },
@@ -343,6 +360,12 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 4,
     marginLeft: 8,
+  },
+  dismissBtn: {
+    padding: 4,
+    marginLeft: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   deleteBackground: {
     position: 'absolute',

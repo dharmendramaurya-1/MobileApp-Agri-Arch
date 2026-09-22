@@ -38,51 +38,28 @@ function DeviceCard({
   onDelete,
   theme,
   isOnline,
-  isDeviceLoading,
-  isDeviceWaiting,  // ✅ NEW: Waiting state (connecting but no status yet)
   canDelete = true,
 }) {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
 
-  // ── ✅ STATUS DISPLAY - SAME AS LAYOUT ──
-  // Shows NOTHING during loading/waiting, only shows Online or Offline
+  // ── Status Display: Directly shows Online if connected, and Offline otherwise (no loading spinner) ──
   const getStatusDisplay = useCallback(() => {
-    // ✅ When loading (actively fetching), show nothing
-    if (isDeviceLoading) {
-      return null;
-    }
-    // ✅ When waiting (initial connection), show nothing
-    if (isDeviceWaiting) {
-      return null;
-    }
-    // ✅ When online, show Online
     if (isOnline === true) {
       return { text: 'Online', color: '#4CAF50', bg: 'rgba(76,175,80,0.12)' };
     }
-    // ✅ When offline (confirmed), show Offline
-    if (isOnline === false) {
-      return { text: 'Offline', color: '#f44336', bg: 'rgba(244,67,54,0.10)' };
-    }
-    // ✅ Default: show nothing for unknown states
-    return null;
-  }, [isDeviceLoading, isDeviceWaiting, isOnline]);
+    return { text: 'Offline', color: '#f44336', bg: 'rgba(244,67,54,0.10)' };
+  }, [isOnline]);
 
   const statusDisplay = getStatusDisplay();
 
-  // ── ✅ Get status dot color - hidden when loading/waiting ──
   const getStatusDotColor = useCallback(() => {
-    if (isDeviceLoading || isDeviceWaiting) return 'transparent';
-    if (isOnline === true) return '#4CAF50';
-    return '#F44336';
-  }, [isDeviceLoading, isDeviceWaiting, isOnline]);
+    return isOnline === true ? '#4CAF50' : '#F44336';
+  }, [isOnline]);
 
-  // ── ✅ Get status label - hidden when loading/waiting ──
   const getStatusLabel = useCallback(() => {
-    if (isDeviceLoading || isDeviceWaiting) return '';
-    if (isOnline === true) return 'Online';
-    return 'Offline';
-  }, [isDeviceLoading, isDeviceWaiting, isOnline]);
+    return isOnline === true ? 'Online' : 'Offline';
+  }, [isOnline]);
 
   const statusDotColor = getStatusDotColor();
   const statusLabel = getStatusLabel();
@@ -107,29 +84,24 @@ function DeviceCard({
     ? `${typeLabel} · ${keyOrId.length > 16 ? keyOrId.slice(0, 16) + "…" : keyOrId}`
     : `${typeLabel} · ID ${device.id?.slice(0, 8) || "—"}`;
 
-  // ── ✅ Get card border color - neutral when loading/waiting ──
+  // ── Card border color ──
   const getCardBorderColor = useCallback(() => {
     if (isSelected) return theme.colors.primary;
-    if (isDeviceLoading || isDeviceWaiting) return theme.colors.border;
     if (isOnline === true) return "#4CAF50";
     return "#F4433644";
-  }, [isSelected, isDeviceLoading, isDeviceWaiting, isOnline, theme.colors.primary, theme.colors.border]);
+  }, [isSelected, isOnline, theme.colors.primary]);
 
-  const cardOpacity = (isDeviceLoading || isDeviceWaiting) ? 1 : (isOnline === false ? 0.7 : 1);
+  const cardOpacity = isOnline === false ? 0.85 : 1;
 
-  // ── ✅ Get icon color - neutral when loading/waiting ──
+  // ── Icon color ──
   const getIconColor = useCallback(() => {
-    if (isDeviceLoading || isDeviceWaiting) return theme.colors.textSecondary;
-    if (isOnline === true) return '#4CAF50';
-    return '#F44336';
-  }, [isDeviceLoading, isDeviceWaiting, isOnline, theme.colors.textSecondary]);
+    return isOnline === true ? '#4CAF50' : '#F44336';
+  }, [isOnline]);
 
-  // ── ✅ Get icon background - transparent when loading/waiting ──
+  // ── Icon background ──
   const getIconBg = useCallback(() => {
-    if (isDeviceLoading || isDeviceWaiting) return 'transparent';
-    if (isOnline === true) return 'rgba(76,175,80,0.12)';
-    return 'rgba(244,67,54,0.10)';
-  }, [isDeviceLoading, isDeviceWaiting, isOnline]);
+    return isOnline === true ? 'rgba(76,175,80,0.12)' : 'rgba(244,67,54,0.10)';
+  }, [isOnline]);
 
   const iconColor = getIconColor();
   const iconBg = getIconBg();
@@ -145,11 +117,9 @@ function DeviceCard({
             borderColor: getCardBorderColor(),
             borderLeftColor: isSelected
               ? theme.colors.primary
-              : (isDeviceLoading || isDeviceWaiting)
-              ? theme.colors.border
               : isOnline === true
               ? "#4CAF50"
-              : theme.colors.border,
+              : "#F44336",
             opacity: cardOpacity,
           },
         ]}
@@ -180,7 +150,7 @@ function DeviceCard({
               styles.iconChip,
               {
                 backgroundColor: iconBg,
-                borderColor: (isDeviceLoading || isDeviceWaiting) ? theme.colors.border : (isOnline === true ? '#4CAF5033' : '#F4433633'),
+                borderColor: isOnline === true ? '#4CAF5033' : '#F4433633',
               },
             ]}
           >
@@ -212,9 +182,19 @@ function DeviceCard({
             </Text>
           </View>
 
-          {/* ✅ Status Badge - Show NOTHING when loading/waiting (SAME AS LAYOUT) */}
+          {/* Status Badge - Shows Online or Offline directly */}
           {statusDisplay && (
-            <View style={[styles.statusBadge, { backgroundColor: statusDisplay.bg }]}>
+            <View
+              style={[
+                styles.statusBadge,
+                {
+                  backgroundColor: statusDisplay.bg,
+                  minHeight: 24,
+                  justifyContent: "center",
+                  paddingHorizontal: 9,
+                },
+              ]}
+            >
               <View style={[styles.statusDot, { backgroundColor: statusDotColor }]} />
               <Text style={[styles.statusBadgeText, { color: statusDisplay.color }]}>
                 {statusDisplay.text}
@@ -368,35 +348,25 @@ export default function Devices() {
   const [refreshing, setRefreshing] = useState(false);
   const isDeletingRef = useRef(false);
 
-  // ── ✅ STABLE STATUS DERIVATION (SAME AS LAYOUT) ──
+  // ── Stable Status Derivation: Directly Online or Offline ──
   const deviceStatusMap = useMemo(() => {
     const map = {};
     registeredDevices.forEach((device) => {
       const key = device?.external_key || device?.id;
       if (!key) {
-        map[device.id] = { isOnline: false, isLoading: false, isWaiting: false };
+        map[device.id] = { isOnline: false };
         return;
       }
       
-      // ✅ Directly read from context - same as Layout
       const isOnline = deviceOnlineStatus[key] === true;
-      const isLoadComplete = deviceInitialLoadComplete[key] === true;
-      const isLoading = !isLoadComplete && deviceInitialLoadStatus[key] === true;
-      
-      // ✅ Waiting state - same as Layout
-      const isWaiting = (!isLoadComplete && !isLoading) ||
-        connectionState === "connecting" ||
-        connectionState === "waiting" ||
-        connectionState === "idle";
-      
-      map[device.id] = { isOnline, isLoading, isWaiting };
+      map[device.id] = { isOnline };
     });
     return map;
-  }, [registeredDevices, deviceOnlineStatus, deviceInitialLoadComplete, deviceInitialLoadStatus, connectionState]);
+  }, [registeredDevices, deviceOnlineStatus]);
 
-  // ── ✅ Helper: Get device status from the map ──
+  // ── Helper: Get device status from the map ──
   const getDeviceStatus = useCallback((device) => {
-    return deviceStatusMap[device.id] || { isOnline: false, isLoading: false, isWaiting: false };
+    return deviceStatusMap[device.id] || { isOnline: false };
   }, [deviceStatusMap]);
 
   // ── Load registered devices ──
@@ -641,8 +611,6 @@ export default function Devices() {
               const isSelected = selectedDevice?.id === item.id;
               const status = getDeviceStatus(item);
               const isOnline = status.isOnline;
-              const isDeviceLoading = status.isLoading;
-              const isDeviceWaiting = status.isWaiting;
 
               return (
                 <DeviceCard
@@ -653,8 +621,6 @@ export default function Devices() {
                   onDelete={handleDeleteDevice}
                   theme={theme}
                   isOnline={isOnline}
-                  isDeviceLoading={isDeviceLoading}
-                  isDeviceWaiting={isDeviceWaiting}
                   canDelete={registeredDevices.length > 1 || !isSelected}
                 />
               );

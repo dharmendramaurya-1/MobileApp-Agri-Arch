@@ -88,6 +88,19 @@ const DEFAULT_CROP_SETTINGS = {
   lastUpdated: null,
 };
 
+export const DEFAULT_TIMINGS = {
+  ECA_DI: 3600,
+  ECAP_OT: 10,
+  WPONT: 120,
+  WPINT: 900,
+  ECB_DI: 3600,
+  ECBP_OT: 10,
+  NP_DI: 3600,
+  NP_OT: 10,
+  pHPU_ONT: 5,
+  pHPD_ONT: 5,
+};
+
 const DEFAULT_CONFIG = {
   report_interval: 180,
   sampling_interval: 30,
@@ -145,9 +158,9 @@ const STORAGE_KEYS = {
 };
 
 // ── Constants ──
-const GET_STATUS_RESPONSE_TIMEOUT = 20 * 1000;
+const GET_STATUS_RESPONSE_TIMEOUT = 4 * 1000;
 const OFFLINE_GRACE_PERIOD = 120 * 1000;
-const STATUS_UPDATE_DELAY = 5000;
+const STATUS_UPDATE_DELAY = 0;
 const APP_RESUME_DELAY = 800;
 const MAX_RESUME_WAIT_ATTEMPTS = 30;
 
@@ -201,14 +214,11 @@ function buildActuatorPayload(status, externalKey, previousStatus = {}) {
   const p = (key, def) => status[key] ?? previousStatus[key] ?? def;
   const payload = [
     { n: "WatPmp", vb: p('water_pump', false) },
-    { n: "WPONT", v: p('water_pump_on_time', 10) },
-    { n: "WPINT", v: p('water_pump_interval', 60) },
     { n: "Wat_ILV", vb: p('water_ILvalve', false) },
     { n: "Wat_OLV", vb: p('water_OLvalve', false) },
     { n: "NUT_PMP", vb: p('nutrient_pump', false) },
-    { n: "NP_DI", v: p('nutrient_pump_duration', 120) },
-    { n: "NP_OT", v: p('nutrient_pump_on_time', 5) },
     { n: "AC_Stat", vb: p('ac_stat', false) },
+    { n: "Led", vb: p('led', false) },
   ];
   return payload;
 }
@@ -221,10 +231,6 @@ function buildSettingsPayload(settings, externalKey) {
     { n: "AMTHI", v: settings.tempHigh },
     { n: "HUMLO", v: settings.humidityLow },
     { n: "HUMHI", v: settings.humidityHigh },
-    { n: "WTLO", v: settings.waterTempLow },
-    { n: "WTHI", v: settings.waterTempHigh },
-    { n: "WLLP", v: settings.waterLevelLow || 20 },
-    { n: "WLHP", v: settings.waterLevelHigh || 80 },
     { n: "pHLO", v: settings.phLow },
     { n: "pHHI", v: settings.phHigh },
     { n: "Co2LO", v: settings.co2Low },
@@ -234,6 +240,31 @@ function buildSettingsPayload(settings, externalKey) {
     { n: "ECL", v: settings.ecLow },
     { n: "ECH", v: settings.ecHigh },
     { n: "Dimm", v: settings.dimming || 75 },
+  ];
+}
+
+function buildTimingsPayload(timings = {}) {
+  const t = (key, def) => {
+    const val = timings[key];
+    return (val !== undefined && val !== null && !isNaN(val)) ? Number(val) : def;
+  };
+  return [
+    { n: "ECA_DI", v: t("ECA_DI", 3600) },
+    { n: "ECAP_OT", v: t("ECAP_OT", 10) },
+    { n: "WPONT", v: t("WPONT", 120) },
+    { n: "WPINT", v: t("WPINT", 900) },
+    { n: "ECB_DI", v: t("ECB_DI", 3600) },
+    { n: "ECBP_OT", v: t("ECBP_OT", 10) },
+    { n: "NP_DI", v: t("NP_DI", 3600) },
+    { n: "NP_OT", v: t("NP_OT", 10) },
+    { n: "pHPU_ONT", v: t("pHPU_ONT", 5) },
+    { n: "pHPD_ONT", v: t("pHPD_ONT", 5) },
+  ];
+}
+
+function buildCleanTankPayload(isCleaning) {
+  return [
+    { n: "CleanTank", vb: Boolean(isCleaning) }
   ];
 }
 
@@ -560,26 +591,21 @@ export const MqttProvider = ({ children }) => {
       [deviceKey]: true
     }));
 
-    statusUpdateTimerRef.current[deviceKey] = setTimeout(() => {
-      setDeviceOnlineStatus(prev => {
-        if (prev[deviceKey] === false) return prev;
-        return { ...prev, [deviceKey]: false };
-      });
+    setDeviceOnlineStatus(prev => {
+      if (prev[deviceKey] === false) return prev;
+      return { ...prev, [deviceKey]: false };
+    });
 
-      setDeviceConnectionStatus(prev => {
-        if (prev[deviceKey] === "offline") return prev;
-        return { ...prev, [deviceKey]: "offline" };
-      });
+    setDeviceConnectionStatus(prev => {
+      if (prev[deviceKey] === "offline") return prev;
+      return { ...prev, [deviceKey]: "offline" };
+    });
 
-      if (deviceKey === selectedExternalKeyRef.current) {
-        setConnectionState("offline");
-      }
+    if (deviceKey === selectedExternalKeyRef.current) {
+      setConnectionState("offline");
+    }
 
-      console.log(`🔴 Device ${deviceKey} is OFFLINE`);
-      delete statusUpdateTimerRef.current[deviceKey];
-    }, STATUS_UPDATE_DELAY);
-
-    console.log(`⏳ Device ${deviceKey} will be marked OFFLINE in ${STATUS_UPDATE_DELAY/1000}s`);
+    console.log(`🔴 Device ${deviceKey} is OFFLINE`);
   }, [clearAllTimersForDevice]);
 
   // ── updateDeviceData (only for sensor data, NOT for status) ──
@@ -594,6 +620,8 @@ export const MqttProvider = ({ children }) => {
         actuatorStatus: { ...DEFAULT_ACTUATOR_STATUS },
         cropSettings: { ...DEFAULT_CROP_SETTINGS },
         deviceConfig: { ...DEFAULT_CONFIG },
+        timingSettings: { ...DEFAULT_TIMINGS },
+        cleanTankStatus: false,
         devices: [],
         deviceStatus: null,
         deviceStatusFlags: getDefaultDeviceStatus(),
@@ -618,7 +646,7 @@ export const MqttProvider = ({ children }) => {
 
         if (['ambientTemperature', 'ambientHumidity', 'waterTemperature',
           'co2Level', 'ecValue', 'phValue', 'waterLevel', 'lightLevel',
-          'soilMoisture', 'cropId'].includes(key)) {
+          'soilMoisture', 'cropId', 'sensorFaultStatus', 'SensFlt', 'sensFlt'].includes(key)) {
           updatedSensorData[key] = value;
         }
 
@@ -728,7 +756,7 @@ export const MqttProvider = ({ children }) => {
 
         if (['ambientTemperature', 'ambientHumidity', 'waterTemperature',
           'co2Level', 'ecValue', 'phValue', 'waterLevel', 'lightLevel',
-          'soilMoisture', 'cropId'].includes(key)) {
+          'soilMoisture', 'cropId', 'sensorFaultStatus', 'SensFlt', 'sensFlt'].includes(key)) {
           updatedSensorData[key] = value;
           hasSensorUpdate = true;
         }
@@ -751,6 +779,8 @@ export const MqttProvider = ({ children }) => {
 
         if (key === 'deviceStatusFlags') {
           newDeviceStatusFlagsLocal = value;
+          updatedSensorData.deviceStatusFlags = value;
+          hasSensorUpdate = true;
         }
 
         if (['water_pump', 'water_ILvalve', 'water_OLvalve',
@@ -1085,16 +1115,165 @@ export const MqttProvider = ({ children }) => {
     clearAllTimersForDevice(deviceKey);
 
     const source = isStatusResponse ? 'STATUS' : 'DATA';
-
     const now = Date.now();
     lastOnlineTimePerDevice.current[deviceKey] = now;
 
     if (!isStatusResponse) {
       lastDataReceivedTimePerDevice.current[deviceKey] = now;
-      console.log(`📥 [${source}] Data received for ${deviceKey}`);
-    } else {
-      console.log(`📥 [${source}] Status response received for ${deviceKey}`);
     }
+
+    // ── Rich structured log ──────────────────────────────────────────────────
+    try {
+      const ts = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const sep = '─'.repeat(44);
+
+      // Resolve flags (may come from bitmask or pre-parsed object)
+      let flags = null;
+      if (typeof parsed.deviceStatus === 'number') {
+        flags = parseDeviceStatus(parsed.deviceStatus);
+      } else if (parsed.deviceStatusFlags && typeof parsed.deviceStatusFlags === 'object') {
+        flags = parsed.deviceStatusFlags;
+      }
+
+      // ── Sensors ──
+      const sensorLines = [];
+      if (parsed.ambientTemperature !== undefined) sensorLines.push(`  🌡  Ambient Temp   : ${parsed.ambientTemperature} °C`);
+      if (parsed.ambientHumidity    !== undefined) sensorLines.push(`  💧  Ambient Humid  : ${parsed.ambientHumidity} %`);
+      if (parsed.waterTemperature   !== undefined) sensorLines.push(`  🌊  Water Temp     : ${parsed.waterTemperature} °C`);
+      if (parsed.co2Level           !== undefined) sensorLines.push(`  🌿  CO₂ Level      : ${parsed.co2Level} ppm`);
+      if (parsed.ecValue            !== undefined) sensorLines.push(`  ⚡  EC Value       : ${parsed.ecValue} mS/cm`);
+      if (parsed.phValue            !== undefined) sensorLines.push(`  🧪  pH Value       : ${parsed.phValue}`);
+      if (parsed.waterLevel         !== undefined) sensorLines.push(`  📏  Water Level    : ${parsed.waterLevel} %`);
+      if (parsed.lightLevel         !== undefined) sensorLines.push(`  ☀️   Light Level    : ${parsed.lightLevel} lux`);
+      if (parsed.soilMoisture       !== undefined) sensorLines.push(`  🌱  Soil Moisture  : ${parsed.soilMoisture} %`);
+      if (parsed.cropId             !== undefined) sensorLines.push(`  🌾  Crop ID        : ${parsed.cropId}`);
+
+      // ── Actuators (from flags or direct keys) ──
+      const act = {
+        waterPump:    flags ? flags.waterPump    : parsed.water_pump,
+        inletValve:   flags ? flags.inletValve   : parsed.water_ILvalve,
+        outletValve:  flags ? flags.outletValve  : parsed.water_OLvalve,
+        nutrientPump: flags ? flags.nutrientPump : parsed.nutrient_pump,
+        acStatus:     flags ? flags.acStatus     : parsed.ac_stat,
+      };
+      const on  = (v) => v === true  ? '🟢 ON ' : v === false ? '🔴 OFF' : '⚪ --';
+      const actuatorLines = [];
+      if (act.waterPump    !== undefined) actuatorLines.push(`  💧  Water Pump     : ${on(act.waterPump)}`);
+      if (act.nutrientPump !== undefined) actuatorLines.push(`  🌿  Nutrient Pump  : ${on(act.nutrientPump)}`);
+      if (act.inletValve   !== undefined) actuatorLines.push(`  ⬇️   Inlet Valve    : ${on(act.inletValve)}`);
+      if (act.outletValve  !== undefined) actuatorLines.push(`  ⬆️   Outlet Valve   : ${on(act.outletValve)}`);
+      if (act.acStatus     !== undefined) actuatorLines.push(`  ❄️   AC Status      : ${on(act.acStatus)}`);
+
+      // ── Faults / Alerts ──
+      const alertLines = [];
+      if (flags) {
+        if (flags.buzzer)        alertLines.push(`  🔔  Buzzer         : ACTIVE`);
+        if (flags.tankLow)       alertLines.push(`  ⬇️   Tank           : LOW`);
+        if (flags.tankHigh)      alertLines.push(`  ⬆️   Tank           : HIGH`);
+        if (flags.ecHigh)        alertLines.push(`  ⬆️   EC             : HIGH`);
+        if (flags.ecLow)         alertLines.push(`  ⬇️   EC             : LOW`);
+        if (flags.phHigh)        alertLines.push(`  ⬆️   pH             : HIGH`);
+        if (flags.phLow)         alertLines.push(`  ⬇️   pH             : LOW`);
+        if (flags.co2High)       alertLines.push(`  ⬆️   CO₂            : HIGH`);
+        if (flags.co2Low)        alertLines.push(`  ⬇️   CO₂            : LOW`);
+        if (flags.luxHigh)       alertLines.push(`  ⬆️   Light          : HIGH`);
+        if (flags.luxLow)        alertLines.push(`  ⬇️   Light          : LOW`);
+        if (flags.airTempHigh)   alertLines.push(`  ⬆️   Air Temp       : HIGH`);
+        if (flags.airTempLow)    alertLines.push(`  ⬇️   Air Temp       : LOW`);
+        if (flags.humidityHigh)  alertLines.push(`  ⬆️   Humidity       : HIGH`);
+        if (flags.humidityLow)   alertLines.push(`  ⬇️   Humidity       : LOW`);
+        if (flags.waterTempHigh) alertLines.push(`  ⬆️   Water Temp     : HIGH`);
+        if (flags.waterTempLow)  alertLines.push(`  ⬇️   Water Temp     : LOW`);
+
+        // ── Detailed sensor fault breakdown ────────────────────────────────
+        if (flags.sensorFault) {
+          alertLines.push(`  🚨  SENSOR FAULT BIT SET — individual sensor check:`);
+
+          // Helper: returns ✅ OK or 🚨 FAULT(reason)
+          const chk = (label, val, min, max) => {
+            if (val === null || val === undefined || isNaN(val)) {
+              return `  🚨  ${label.padEnd(20)}: FAULT  (null / no reading)`;
+            }
+            if (val < min || val > max) {
+              return `  🚨  ${label.padEnd(20)}: FAULT  (${val}  — valid ${min}–${max})`;
+            }
+            return `  ✅  ${label.padEnd(20)}: OK     (${val})`;
+          };
+
+          alertLines.push(chk('Ambient Temp',   parsed.ambientTemperature,  -10,  60));
+          alertLines.push(chk('Ambient Humidity',parsed.ambientHumidity,      0, 100));
+          alertLines.push(chk('Water Temp',      parsed.waterTemperature,    -5,  50));
+          alertLines.push(chk('CO₂ Level',       parsed.co2Level,            0, 5000));
+          alertLines.push(chk('EC Value',         parsed.ecValue,             0, 8000));
+          alertLines.push(chk('pH Value',         parsed.phValue,             0,   14));
+          alertLines.push(chk('Water Level',      parsed.waterLevel,          0,  100));
+          alertLines.push(chk('Light Level',      parsed.lightLevel,          0, 200000));
+        }
+
+        // ── SensFlt bitmask breakdown from firmware Sensor_Fault_t ─────────
+        const sensFltVal = typeof parsed.SensFlt === 'number'
+          ? parsed.SensFlt
+          : (typeof parsed.sensorFaultStatus === 'number' ? parsed.sensorFaultStatus : null);
+        if (sensFltVal !== null) {
+          alertLines.push(`  ⚡  SensFlt Bitmask   : ${sensFltVal} (0x${sensFltVal.toString(16).toUpperCase()})`);
+          const SENSOR_BITS_LOG = [
+            { bit: 0x01, name: 'CO₂' },
+            { bit: 0x02, name: 'Water Level' },
+            { bit: 0x04, name: 'Light Level' },
+            { bit: 0x08, name: 'EC Value' },
+            { bit: 0x10, name: 'pH Value' },
+            { bit: 0x20, name: 'Water Temp' },
+            { bit: 0x40, name: 'Ambient Temp' },
+            { bit: 0x80, name: 'Ambient Humid' },
+          ];
+          SENSOR_BITS_LOG.forEach(({ bit, name }) => {
+            const hasFault = (sensFltVal & bit) !== 0;
+            alertLines.push(`  ${hasFault ? '🚨' : '✅'}  ${name.padEnd(16)}: ${hasFault ? 'FAULT' : 'OK'}`);
+          });
+        }
+        // ────────────────────────────────────────────────────────────────────
+      }
+
+      // ── Mode + dimming ──
+      const modeStr  = flags ? (flags.mode ? '🤖 AUTO' : '🔧 MANUAL') : '—';
+      const dimmStr  = flags ? `${flags.dimmingLevel}%`                : '—';
+      const onlineStr = flags ? (flags.online ? '🟢 Online' : '🔴 Offline') : '—';
+      const rawHex   = flags ? `0x${(flags.rawStatus >>> 0).toString(16).toUpperCase().padStart(8, '0')}` : '—';
+
+      console.log(`\n╔══════════════════════════════════════════════╗`);
+      console.log(`║  📡 MQTT ${source.padEnd(8)} │ ${ts}        ║`);
+      console.log(`║  🔑 Device: ${deviceKey.padEnd(32)} ║`);
+      console.log(`╠══════════════════════════════════════════════╣`);
+
+      if (sensorLines.length) {
+        console.log(`║ SENSORS                                      ║`);
+        sensorLines.forEach(l => console.log(l));
+      }
+      if (actuatorLines.length) {
+        console.log(`║ ACTUATORS                                    ║`);
+        actuatorLines.forEach(l => console.log(l));
+      }
+      if (alertLines.length) {
+        console.log(`║ ⚠️  ALERTS / FAULTS                           ║`);
+        alertLines.forEach(l => console.log(l));
+      } else if (flags) {
+        console.log(`║ ✅ No active alerts                           ║`);
+      }
+
+      if (flags) {
+        console.log(`║ SYSTEM                                       ║`);
+        console.log(`  🔘  Mode          : ${modeStr}`);
+        console.log(`  💡  Dimming       : ${dimmStr}`);
+        console.log(`  🌐  Status        : ${onlineStr}`);
+        console.log(`  🔢  Raw Bitmask   : ${rawHex}`);
+      }
+
+      console.log(`╚══════════════════════════════════════════════╝\n`);
+    } catch (logError) {
+      // Never let logging crash the message pipeline
+      console.warn('⚠️ Structured log error:', logError?.message);
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     // Update sensor data
     updateDeviceData(deviceKey, parsed);
@@ -1120,8 +1299,10 @@ export const MqttProvider = ({ children }) => {
       isOnline = parsed.deviceStatusFlags.online;
     }
 
-    const currentSelectedKey = selectedExternalKeyRef.current;
-    const isSelected = currentSelectedKey === deviceKey;
+    const currentSelectedKey = selectedExternalKeyRef.current || externalKeyRef.current || selectedExternalKey || externalKey;
+    const isSelected = !currentSelectedKey || 
+      currentSelectedKey === deviceKey || 
+      (typeof currentSelectedKey === 'string' && typeof deviceKey === 'string' && currentSelectedKey.toLowerCase() === deviceKey.toLowerCase());
 
     if (isSelected) {
       // ✅ FIX 2: updateDeviceData already synced auto_mode inside devicesData.
@@ -1131,7 +1312,30 @@ export const MqttProvider = ({ children }) => {
       // everything EXCEPT the auto_mode / deviceConfig sync — we neutralise that
       // by stripping the deviceStatus bitmask that carries the mode bit before
       // passing to legacy state, so only pure sensor & actuator values go through.
+      let resolvedFlags = null;
+      if (parsed.deviceStatus !== undefined && parsed.deviceStatus !== null) {
+        resolvedFlags = parseDeviceStatus(parsed.deviceStatus);
+        setDeviceStatus(parsed.deviceStatus);
+        setDeviceStatusFlags(resolvedFlags);
+
+        if (resolvedFlags.mode !== null && resolvedFlags.mode !== undefined) {
+          setDeviceConfig(prev => {
+            if (prev.auto_mode !== resolvedFlags.mode) {
+              console.log(`🔄 Syncing flat deviceConfig.auto_mode from device telemetry: ${prev.auto_mode} → ${resolvedFlags.mode}`);
+              return { ...prev, auto_mode: resolvedFlags.mode, lastUpdated: new Date() };
+            }
+            return prev;
+          });
+        }
+      } else if (parsed.deviceStatusFlags && typeof parsed.deviceStatusFlags === 'object') {
+        resolvedFlags = parsed.deviceStatusFlags;
+        setDeviceStatusFlags(resolvedFlags);
+      }
+
       const parsedForLegacy = { ...parsed };
+      if (resolvedFlags) {
+        parsedForLegacy.deviceStatusFlags = resolvedFlags;
+      }
       // Remove deviceStatus to prevent duplicate auto_mode sync in updateLegacyState.
       // The flags (waterPump, valves, etc.) are still updated via the bitmask
       // actuator keys that processDeviceData already wrote into devicesData.
@@ -1177,12 +1381,16 @@ export const MqttProvider = ({ children }) => {
   const handleDataMessage = useCallback((deviceKey, msgStr) => {
     try {
       lastRequestTimeRef.current[deviceKey] = Date.now();
+
+      // ── PRE-PARSE: Raw data topic message exactly as received from MQTT ──
+      console.log(`\n═══════════════════════════════════════════════════════════════`);
+      console.log(`📦 [DATA TOPIC - BEFORE PARSE] Device: ${deviceKey}`);
+      console.log(`📦 RAW PAYLOAD:`, msgStr);
+      console.log(`═══════════════════════════════════════════════════════════════\n`);
       
       const parsed = parseSenMLToObject(msgStr);
 
-      console.log(`\n════════════════════════════════════════════`);
-      console.log(`📥 DATA TOPIC MESSAGE from: ${deviceKey}`);
-      console.log(`📥 Parsed:`, JSON.stringify(parsed, null, 2));
+      console.log(`📥 [DATA TOPIC - AFTER PARSE] ${deviceKey} => ${JSON.stringify(parsed)}`);
 
       processDeviceData(deviceKey, parsed, false);
     } catch (error) {
@@ -1253,8 +1461,59 @@ export const MqttProvider = ({ children }) => {
     }
 
     if (topicType === 'data') {
-      console.log(`📊 Processing data message for ${deviceKey}`);
+      console.log(`📊 [DATA TOPIC RAW] ${topic} => ${msgStr}`);
       handleDataMessage(deviceKey, msgStr);
+      return;
+    }
+
+    if (topicType === 'timings') {
+      console.log(`⏱️ Processing timings message for ${deviceKey}`);
+      try {
+        const records = JSON.parse(msgStr);
+        if (Array.isArray(records)) {
+          const updatedTimings = {};
+          for (const r of records) {
+            if (r.n && r.v !== undefined) {
+              updatedTimings[r.n] = r.v;
+            }
+          }
+          setDevicesData(prev => ({
+            ...prev,
+            [deviceKey]: {
+              ...prev[deviceKey],
+              timingSettings: {
+                ...(prev[deviceKey]?.timingSettings || DEFAULT_TIMINGS),
+                ...updatedTimings,
+                lastUpdated: new Date(),
+              }
+            }
+          }));
+        }
+      } catch (e) {
+        console.error("Failed to parse incoming timings message:", e);
+      }
+      return;
+    }
+
+    if (topicType === 'cleantank') {
+      console.log(`🚰 Processing cleantank message for ${deviceKey}`);
+      try {
+        const records = JSON.parse(msgStr);
+        if (Array.isArray(records)) {
+          const ct = records.find(r => r.n === 'CleanTank');
+          if (ct && ct.vb !== undefined) {
+            setDevicesData(prev => ({
+              ...prev,
+              [deviceKey]: {
+                ...prev[deviceKey],
+                cleanTankStatus: ct.vb,
+              }
+            }));
+          }
+        }
+      } catch (e) {
+        console.error("Failed to parse incoming cleantank message:", e);
+      }
       return;
     }
 
@@ -1288,26 +1547,11 @@ export const MqttProvider = ({ children }) => {
 
   // ── quickStatusCheck ──
   const quickStatusCheck = useCallback(async () => {
-    console.log("📡 Quick status check - ONE TIME ONLY");
+    console.log("📡 Quick status check for all available devices");
     
     if (!isNetworkAvailable) {
       console.log("⏸️ No network - skipping quick status check");
       return { success: false, reason: 'No network' };
-    }
-
-    const devices = availableDevicesRef.current || [];
-    let hasPendingCheck = false;
-    for (const device of devices) {
-      const deviceKey = device.external_key;
-      if (deviceKey && (pendingRequestsRef.current[deviceKey] || statusCheckLockRef.current[deviceKey])) {
-        hasPendingCheck = true;
-        break;
-      }
-    }
-    
-    if (hasPendingCheck) {
-      console.log("⏳ Already have pending requests, skipping quick status check");
-      return { success: true, skipped: true, reason: 'Already checking' };
     }
 
     return await getAllDevicesStatusOnce(false, false);
@@ -1352,16 +1596,8 @@ export const MqttProvider = ({ children }) => {
         await new Promise(resolve => setTimeout(resolve, 1000));
 
         const devices = availableDevicesRef.current || [];
-        
-        // Send GET_STATUS for all devices
-        for (const device of devices) {
-          const key = device.external_key;
-          if (key && !statusCheckLockRef.current[key]) {
-            console.log(`📡 Sending GET_STATUS for ${key}`);
-            await getDeviceStatusOnce(key, true, true);
-            await new Promise(resolve => setTimeout(resolve, 300));
-          }
-        }
+        console.log(`📡 MQTT connected: checking status for ${devices.length} devices in parallel`);
+        await getAllDevicesStatusOnce(true, true);
         
         console.log('📡 Initial setup completed');
       });
@@ -1674,6 +1910,16 @@ export const MqttProvider = ({ children }) => {
     setSelectedExternalKey(extKey);
     await saveSelectedDevice(deviceId, resolvedName, extKey);
 
+    const existingDevData = devicesData[extKey];
+    if (existingDevData?.deviceStatusFlags) {
+      setDeviceStatusFlags(existingDevData.deviceStatusFlags);
+    } else {
+      setDeviceStatusFlags(getDefaultDeviceStatus());
+    }
+    if (existingDevData?.deviceStatus !== undefined) {
+      setDeviceStatus(existingDevData.deviceStatus);
+    }
+
     try {
       await setActiveDevice(deviceId, extKey);
       setActiveDeviceId(deviceId);
@@ -1743,6 +1989,20 @@ export const MqttProvider = ({ children }) => {
     if (!key) return DEFAULT_CONFIG;
     const data = devicesData[key];
     return data?.deviceConfig || DEFAULT_CONFIG;
+  };
+
+  const getSelectedDeviceTimings = () => {
+    const key = selectedExternalKey || externalKey;
+    if (!key) return DEFAULT_TIMINGS;
+    const data = devicesData[key];
+    return data?.timingSettings || DEFAULT_TIMINGS;
+  };
+
+  const getSelectedDeviceCleanTankStatus = () => {
+    const key = selectedExternalKey || externalKey;
+    if (!key) return false;
+    const data = devicesData[key];
+    return data?.cleanTankStatus || false;
   };
 
   // ── getDeviceStatusSync ──
@@ -1875,6 +2135,8 @@ export const MqttProvider = ({ children }) => {
       const externalKey = device.external_key;
       await subscribeToTopic(client, `/messages/${externalKey}/data`);
       await subscribeToTopic(client, `/messages/${externalKey}/status`);
+      await subscribeToTopic(client, `/messages/${externalKey}/timings`);
+      await subscribeToTopic(client, `/messages/${externalKey}/cleantank`);
       console.log(`✅ Subscribed to topics for: ${externalKey}`);
     }
   };
@@ -2055,7 +2317,22 @@ export const MqttProvider = ({ children }) => {
       
       // Set connecting state - we'll determine online/offline from GET_STATUS response
       setConnectionState('connecting');
-      if (storedKey) {
+      if (devices && devices.length > 0) {
+        setDeviceInitialLoadStatus(prev => {
+          const updated = { ...prev };
+          devices.forEach(d => {
+            if (d.external_key) updated[d.external_key] = true;
+          });
+          return updated;
+        });
+        setDeviceInitialLoadComplete(prev => {
+          const updated = { ...prev };
+          devices.forEach(d => {
+            if (d.external_key) updated[d.external_key] = false;
+          });
+          return updated;
+        });
+      } else if (storedKey) {
         setDeviceInitialLoadStatus(prev => ({
           ...prev,
           [storedKey]: true
@@ -2073,13 +2350,11 @@ export const MqttProvider = ({ children }) => {
 
       setIsReady(true);
       
-      // Send GET_STATUS after connection is established
+      // Send GET_STATUS for all devices in parallel after connection is established
       setTimeout(async () => {
-        if (storedKey && !statusCheckLockRef.current[storedKey]) {
-          console.log(`📡 Sending GET_STATUS for ${storedKey} after initialization`);
-          await getDeviceStatusOnce(storedKey, true, true);
-        }
-      }, 2000);
+        console.log("📡 Triggering parallel status check for all devices after initialization");
+        await getAllDevicesStatusOnce(true, true);
+      }, 1000);
     } catch (error) {
       console.error("❌ Error in MQTT initialization:", error);
       setIsReady(true);
@@ -2186,6 +2461,8 @@ export const MqttProvider = ({ children }) => {
           const topics = [
             `/messages/${device.external_key}/data`,
             `/messages/${device.external_key}/status`,
+            `/messages/${device.external_key}/timings`,
+            `/messages/${device.external_key}/cleantank`,
           ];
           for (const topic of topics) {
             mqttClient.unsubscribe(topic, (err) => {
@@ -2368,6 +2645,65 @@ export const MqttProvider = ({ children }) => {
     return success;
   };
 
+  // ── publishTimings ──
+  const publishTimings = async (deviceKey, timings) => {
+    if (!deviceKey) {
+      console.log("⚠️ No device key provided for timings");
+      return false;
+    }
+
+    const previousTimings = devicesData[deviceKey]?.timingSettings || DEFAULT_TIMINGS;
+    const mergedTimings = { ...previousTimings, ...timings };
+    const payload = buildTimingsPayload(mergedTimings);
+    console.log(`📤 Publishing timings to /messages/${deviceKey}/timings:`, JSON.stringify(payload));
+    const success = await publish(`/messages/${deviceKey}/timings`, JSON.stringify(payload));
+
+    if (success) {
+      console.log(`✅ Timings published to ${deviceKey}`);
+      try {
+        await AsyncStorage.setItem(`device_timings_${deviceKey}`, JSON.stringify(mergedTimings));
+      } catch (err) {
+        console.error("Error storing timings:", err);
+      }
+      setDevicesData(prev => ({
+        ...prev,
+        [deviceKey]: {
+          ...prev[deviceKey],
+          timingSettings: { ...mergedTimings, lastUpdated: new Date() },
+        }
+      }));
+    } else {
+      console.log(`❌ Timings publish FAILED to ${deviceKey}`);
+    }
+    return success;
+  };
+
+  // ── publishCleanTank ──
+  const publishCleanTank = async (deviceKey, isCleaning) => {
+    if (!deviceKey) {
+      console.log("⚠️ No device key provided for cleantank");
+      return false;
+    }
+
+    const payload = buildCleanTankPayload(isCleaning);
+    console.log(`📤 Publishing clean tank (${isCleaning ? 'START' : 'STOP'}) to /messages/${deviceKey}/cleantank`);
+    const success = await publish(`/messages/${deviceKey}/cleantank`, JSON.stringify(payload));
+
+    if (success) {
+      console.log(`✅ CleanTank published to ${deviceKey}`);
+      setDevicesData(prev => ({
+        ...prev,
+        [deviceKey]: {
+          ...prev[deviceKey],
+          cleanTankStatus: Boolean(isCleaning),
+        }
+      }));
+    } else {
+      console.log(`❌ CleanTank publish FAILED to ${deviceKey}`);
+    }
+    return success;
+  };
+
   // ── publishConfig ──
   const publishConfig = async (deviceKey, config) => {
     if (!deviceKey) {
@@ -2394,9 +2730,13 @@ export const MqttProvider = ({ children }) => {
         console.error('❌ Error saving report_interval:', error);
       }
 
-      const configWithoutMode = { ...mergedConfig };
-      delete configWithoutMode.auto_mode;
-      configWithoutMode.lastUpdated = new Date();
+      // Keep previous auto_mode: auto_mode is only updated when confirmed by device telemetry (/data or /status)
+      const updatedDeviceConfig = {
+        ...mergedConfig,
+        auto_mode: previousConfig.auto_mode ?? false,
+        report_interval: publishedReportInterval,
+        lastUpdated: new Date()
+      };
 
       setDevicesData(prev => ({
         ...prev,
@@ -2404,8 +2744,7 @@ export const MqttProvider = ({ children }) => {
           ...prev[deviceKey],
           deviceConfig: {
             ...prev[deviceKey]?.deviceConfig,
-            ...configWithoutMode,
-            report_interval: publishedReportInterval
+            ...updatedDeviceConfig,
           },
         }
       }));
@@ -2413,8 +2752,7 @@ export const MqttProvider = ({ children }) => {
       if (deviceKey === selectedExternalKeyRef.current) {
         setDeviceConfig(prev => ({
           ...prev,
-          ...configWithoutMode,
-          report_interval: publishedReportInterval
+          ...updatedDeviceConfig,
         }));
       }
     }
@@ -2572,6 +2910,8 @@ export const MqttProvider = ({ children }) => {
     checkSingleDeviceStatus,
     publishActuatorStatus,
     publishSettings,
+    publishTimings,
+    publishCleanTank,
     publishConfig,
     publishReboot,
     forceRefreshData,
@@ -2592,7 +2932,10 @@ export const MqttProvider = ({ children }) => {
     getSelectedDeviceActuatorStatus,
     getSelectedDeviceCropSettings,
     getSelectedDeviceConfig,
+    getSelectedDeviceTimings,
+    getSelectedDeviceCleanTankStatus,
     getSelectedDeviceOnlineStatus,
+    DEFAULT_TIMINGS,
 
     sensorData,
     actuatorStatus,

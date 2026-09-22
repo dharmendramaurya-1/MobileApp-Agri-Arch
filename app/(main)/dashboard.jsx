@@ -368,6 +368,8 @@ export default function Dashboard() {
     modeLocked,
     toggleMode,
     getModeColor,
+    modeDisplay,
+    isDeviceLoading: isModeDeviceLoading,
   } = useSystemMode();
 
   const deviceKey = useMemo(() => selectedExternalKey || externalKey, [selectedExternalKey, externalKey]);
@@ -513,15 +515,18 @@ export default function Dashboard() {
 
   const hasData = hasReceivedData || isLiveData || hasCachedData;
 
-  const modeColor = isModeSwitching
-    ? "#FF9800"
-    : getModeColor
-    ? getModeColor()
-    : isManualMode
-    ? "#4CAF50"
-    : "#FF9800";
+  // Keep the stable color of the current mode — never change it during switching
+  // to avoid orange flicker while waiting for device confirmation.
+  const modeColor = getModeColor ? getModeColor() : isManualMode ? "#4CAF50" : "#FF9800";
 
-  const showMode = isModeLoaded && (isDeviceOnline || hasData);
+  // Show mode whenever loaded. The label stays frozen on the current mode
+  // even while a switch is in-flight; it only updates once the device confirms.
+  const showMode = isModeLoaded;
+  const modeText = !deviceKey
+    ? "--"
+    : !isModeLoaded
+    ? "--"
+    : modeDisplay || (isManualMode ? "Manual" : "Auto");
 
   const hasNoDevices = availableDevices && availableDevices.length === 0;
 
@@ -700,7 +705,7 @@ export default function Dashboard() {
                 toggleMode();
               }
             }}
-            disabled={!showMode || isModeSwitching || modeLocked || !isConnected}
+            disabled={!isModeLoaded || !isConnected}
             activeOpacity={0.7}
           >
             <View style={[styles.summaryIconWrap, { backgroundColor: `${modeColor}1F` }]}>
@@ -718,7 +723,7 @@ export default function Dashboard() {
                 ]}
                 numberOfLines={1}
               >
-                {!showMode ? "--" : isModeSwitching ? "Switching" : isManualMode ? "Manual" : "Auto"}
+                {modeText}
               </Text>
               <Text style={[styles.summaryLabel, { color: theme.colors.textSecondary }]}>Mode</Text>
             </View>

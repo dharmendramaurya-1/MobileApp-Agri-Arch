@@ -175,26 +175,20 @@ export const SystemModeProvider = ({ children }) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceStatusFlags]);
 
-  // ── Update mode display based on device status ──────────────────────────
+  // ── Update mode display based on current confirmed mode ─────────────────
+  // Never show transient states (Loading / Switching) here — the UI freezes
+  // the label while a switch is in-flight and only updates on device confirm.
   useEffect(() => {
     if (!isMountedRef.current) return;
-    
-    // If device is loading or we don't have a mode yet
-    if (isDeviceLoading || mode === null) {
-      setModeDisplay('Loading...');
-      return;
-    }
-    
-    // If device is offline and we have a mode
-    if (!isDeviceOnline && !isDeviceLoading && mode !== null) {
-      // Show the mode but indicate it's from cached data
-      setModeDisplay(mode === 'auto' ? 'Auto (Offline)' : 'Manual (Offline)');
-      return;
-    }
-    
-    // Device is online and we have a mode
+
+    // No confirmed mode yet — leave the display blank (UI shows "--")
+    if (mode === null) return;
+
+    // Show plain mode name regardless of online/offline state.
+    // Showing "(Offline)" here would flicker on every reconnect.
     setModeDisplay(mode === 'auto' ? 'Auto' : 'Manual');
-  }, [mode, isDeviceOnline, isDeviceLoading]);
+    setIsModeLoaded(true);
+  }, [mode]);
 
   const isManualMode = mode === 'manual';
   const isAutoMode = mode === 'auto';

@@ -34,6 +34,24 @@ const NUMERIC_FIELD_MAP = {
   humidity: "ambientHumidity",
   water_temp: "waterTemperature",
   soil_moisture: "soilMoisture",
+  SensFlt: "sensorFaultStatus",
+  sensFlt: "sensorFaultStatus",
+  SensFLT: "sensorFaultStatus",
+  sensflt: "sensorFaultStatus",
+  SenFlt: "sensorFaultStatus",
+  senFlt: "sensorFaultStatus",
+  SFlt: "sensorFaultStatus",
+  sflt: "sensorFaultStatus",
+  SF: "sensorFaultStatus",
+  sf: "sensorFaultStatus",
+  sensor_fault: "sensorFaultStatus",
+  sensorFault: "sensorFaultStatus",
+  fault_status: "sensorFaultStatus",
+  faultStatus: "sensorFaultStatus",
+  fault: "sensorFaultStatus",
+  Fault: "sensorFaultStatus",
+  flt: "sensorFaultStatus",
+  FLT: "sensorFaultStatus",
 };
 
 // ✅ Status fields - pure mapping only
@@ -276,8 +294,10 @@ const parseSenMLRecords = (records) => {
     if (typeof r.v === "number") {
       if (STATUS_FIELDS[fieldName]) {
         result.deviceStatus = r.v;
+        result[fieldName] = r.v;
       } else if (NUMERIC_FIELD_MAP[fieldName]) {
         result[NUMERIC_FIELD_MAP[fieldName]] = r.v;
+        result[fieldName] = r.v;
       }
     }
 

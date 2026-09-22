@@ -7,8 +7,6 @@ import {
   Alert,
   Animated,
   Dimensions,
-  FlatList,
-  Modal,
   ScrollView,
   StyleSheet,
   Switch,
@@ -20,6 +18,7 @@ import SliderControl from "../../components/SettingsSlider";
 import { useMqtt } from "../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useSystemMode } from "../../src/context/SystemModeContext";
+import { useTankSafety } from "../../src/context/TankSafetyContext";
 import { useTheme } from "../../src/context/ThemContext";
 import { getDisplayStatus } from "../../src/utils/deviceStatusParser";
 
@@ -31,18 +30,6 @@ import {
 } from "../../components/SvgIcons";
 
 const { height } = Dimensions.get("window");
-
-// ── Timing field definitions, grouped by parent device ──
-const TIMING_FIELDS = {
-  water_pump: [
-    { key: "water_pump_on_time", label: "ON Time", shortLabel: "WPONT", unit: "s", min: 1, max: 60, step: 1, defaultVal: 10 },
-    { key: "water_pump_interval", label: "Interval", shortLabel: "WPINT", unit: "s", min: 10, max: 300, step: 10, defaultVal: 60 },
-  ],
-  nutrient_pump: [
-    { key: "nutrient_pump_duration", label: "Duration", shortLabel: "NP_DI", unit: "s", min: 10, max: 600, step: 10, defaultVal: 120 },
-    { key: "nutrient_pump_on_time", label: "ON Time", shortLabel: "NP_OT", unit: "s", min: 1, max: 30, step: 1, defaultVal: 5 },
-  ],
-};
 
 // ── Device configuration with SVG icons ──
 const DEVICE_CONFIG = {
@@ -102,156 +89,11 @@ const CONTROL_COLORS = {
   accent: "#0288D1",
   soft: "#EAF5EC",
 };
-const PICKER_ROW_HEIGHT = 44;
-const PICKER_COLUMN_HEIGHT = 190;
-const PICKER_CENTER_PADDING = (PICKER_COLUMN_HEIGHT - PICKER_ROW_HEIGHT) / 2;
 
-// ── Format seconds ──
-function fmtSec(sec) {
-  if (sec === null || sec === undefined) return "--";
-  if (sec >= 3600) {
-    const hours = Math.floor(sec / 3600);
-    const minutes = Math.floor((sec % 3600) / 60);
-    const seconds = sec % 60;
-    return seconds === 0 && minutes === 0
-      ? `${hours}h`
-      : `${hours}h ${minutes}m${seconds ? ` ${seconds}s` : ""}`;
-  }
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  const rem = sec % 60;
-  return rem === 0 ? `${min}m` : `${min}m ${rem}s`;
-}
 
-function TimePickerModal({ visible, value, max, onClose, onSelect, theme }) {
-  const pickerMax = 24 * 3600 + 60 * 60 + 60;
-  const safeValue = Math.max(0, Math.min(value || 0, pickerMax));
-  const initialHours = Math.floor(safeValue / 3600);
-  const initialMinutes = Math.floor((safeValue % 3600) / 60);
-  const initialSeconds = safeValue % 60;
-  const [hours, setHours] = useState(initialHours);
-  const [minutes, setMinutes] = useState(initialMinutes);
-  const [seconds, setSeconds] = useState(initialSeconds);
-
-  useEffect(() => {
-    if (visible) {
-      setHours(initialHours);
-      setMinutes(initialMinutes);
-      setSeconds(initialSeconds);
-    }
-  }, [visible, initialHours, initialMinutes, initialSeconds]);
-
-  const hourOptions = Array.from({ length: 25 }, (_, index) => index);
-  const minuteOptions = Array.from({ length: 61 }, (_, index) => index);
-  const secondOptions = Array.from({ length: 61 }, (_, index) => index);
-  const choose = (nextHours, nextMinutes, nextSeconds) => {
-    if (nextHours * 3600 + nextMinutes * 60 + nextSeconds <= pickerMax) {
-      setHours(nextHours);
-      setMinutes(nextMinutes);
-      setSeconds(nextSeconds);
-    }
-  };
-
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.pickerOverlay}>
-        <View style={[styles.pickerSheet, { backgroundColor: theme.colors.surface }]}>
-          <View style={styles.pickerHeader}>
-            <View>
-              <Text style={[styles.pickerTitle, { color: theme.colors.text }]}>Set duration</Text>
-              <Text style={[styles.pickerValue, { color: CONTROL_COLORS.primary }]}>{fmtSec(hours * 3600 + minutes * 60 + seconds)}</Text>
-            </View>
-            <TouchableOpacity onPress={onClose} accessibilityLabel="Close time picker">
-              <Ionicons name="close-circle-outline" size={28} color={theme.colors.textSecondary} />
-            </TouchableOpacity>
-          </View>
-          <View style={styles.pickerColumns}>
-            <View style={styles.pickerColumn}>
-              <Text style={[styles.pickerColumnLabel, { color: theme.colors.textSecondary }]}>Hours</Text>
-              <FlatList
-                data={hourOptions}
-                style={styles.pickerList}
-                keyExtractor={(item) => `hour-${item}`}
-                showsVerticalScrollIndicator={false}
-                snapToInterval={PICKER_ROW_HEIGHT}
-                decelerationRate="fast"
-                contentContainerStyle={styles.pickerListContent}
-                initialScrollIndex={hours}
-                getItemLayout={(_, index) => ({ length: PICKER_ROW_HEIGHT, offset: PICKER_ROW_HEIGHT * index, index })}
-                onMomentumScrollEnd={({ nativeEvent }) => {
-                  const selected = Math.max(0, Math.min(24, Math.round(nativeEvent.contentOffset.y / PICKER_ROW_HEIGHT)));
-                  choose(selected, minutes, seconds);
-                }}
-                renderItem={({ item }) => (
-                  <View style={[styles.pickerOption, item === hours && styles.pickerOptionSelected]}>
-                    <Text style={[styles.pickerOptionText, { color: item === hours ? CONTROL_COLORS.primary : theme.colors.textSecondary }]}>{item}</Text>
-                  </View>
-                )}
-              />
-              <View pointerEvents="none" style={styles.pickerSelectionFrame} />
-            </View>
-            <Text style={[styles.pickerColon, { color: theme.colors.textSecondary }]}>:</Text>
-            <View style={styles.pickerColumn}>
-              <Text style={[styles.pickerColumnLabel, { color: theme.colors.textSecondary }]}>Minutes</Text>
-              <FlatList
-                data={minuteOptions}
-                style={styles.pickerList}
-                keyExtractor={(item) => `minute-${item}`}
-                showsVerticalScrollIndicator={false}
-                snapToInterval={PICKER_ROW_HEIGHT}
-                decelerationRate="fast"
-                contentContainerStyle={styles.pickerListContent}
-                initialScrollIndex={minutes}
-                getItemLayout={(_, index) => ({ length: PICKER_ROW_HEIGHT, offset: PICKER_ROW_HEIGHT * index, index })}
-                onMomentumScrollEnd={({ nativeEvent }) => {
-                  const selected = Math.max(0, Math.min(60, Math.round(nativeEvent.contentOffset.y / PICKER_ROW_HEIGHT)));
-                  choose(hours, selected, seconds);
-                }}
-                renderItem={({ item }) => (
-                  <View style={[styles.pickerOption, item === minutes && styles.pickerOptionSelected]}>
-                    <Text style={[styles.pickerOptionText, { color: item === minutes ? CONTROL_COLORS.primary : theme.colors.textSecondary }]}>{item}</Text>
-                  </View>
-                )}
-              />
-              <View pointerEvents="none" style={styles.pickerSelectionFrame} />
-            </View>
-            <Text style={[styles.pickerColon, { color: theme.colors.textSecondary }]}>:</Text>
-            <View style={styles.pickerColumn}>
-              <Text style={[styles.pickerColumnLabel, { color: theme.colors.textSecondary }]}>Seconds</Text>
-              <FlatList
-                data={secondOptions}
-                style={styles.pickerList}
-                keyExtractor={(item) => `second-${item}`}
-                showsVerticalScrollIndicator={false}
-                snapToInterval={PICKER_ROW_HEIGHT}
-                decelerationRate="fast"
-                contentContainerStyle={styles.pickerListContent}
-                initialScrollIndex={seconds}
-                getItemLayout={(_, index) => ({ length: PICKER_ROW_HEIGHT, offset: PICKER_ROW_HEIGHT * index, index })}
-                onMomentumScrollEnd={({ nativeEvent }) => {
-                  const selected = Math.max(0, Math.min(60, Math.round(nativeEvent.contentOffset.y / PICKER_ROW_HEIGHT)));
-                  choose(hours, minutes, selected);
-                }}
-                renderItem={({ item }) => (
-                  <View style={[styles.pickerOption, item === seconds && styles.pickerOptionSelected]}>
-                    <Text style={[styles.pickerOptionText, { color: item === seconds ? CONTROL_COLORS.primary : theme.colors.textSecondary }]}>{String(item).padStart(2, "0")}</Text>
-                  </View>
-                )}
-              />
-              <View pointerEvents="none" style={styles.pickerSelectionFrame} />
-            </View>
-          </View>
-          <TouchableOpacity style={styles.pickerDoneButton} onPress={() => { onSelect(hours * 3600 + minutes * 60 + seconds); onClose(); }}>
-            <Text style={styles.pickerDoneText}>Use {fmtSec(hours * 3600 + minutes * 60 + seconds)}</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
-  );
-}
 
 // ── Dimming Card Component ──
-function DimmingCard({ dimmingLevel, onDimmingChange, locked, theme, cardBg, borderC }) {
+function DimmingCard({ dimmingLevel, onDimmingChange, ledOn, onLedToggle, locked, theme, cardBg, borderC }) {
   const percentage = dimmingLevel !== null && dimmingLevel !== undefined
     ? Math.round((dimmingLevel / 127) * 100)
     : 0;
@@ -271,24 +113,29 @@ function DimmingCard({ dimmingLevel, onDimmingChange, locked, theme, cardBg, bor
   };
 
   const accentColor = CONTROL_COLORS.accent;
+  const ledColor = "#FFC107";
+
   return (
     <View style={[styles.dimmCard, { backgroundColor: cardBg, borderColor: borderC }]}>
+
+      {/* ── Header Row: icon + title + % badge ── */}
       <View style={styles.dimmHeader}>
-        <View style={[styles.iconCircle, { backgroundColor: `${accentColor}15` }]}>
-          <Ionicons name="sunny" size={22} color={accentColor} />
+        <View style={[styles.dimmIconCircle, { backgroundColor: `${accentColor}15` }]}>
+          <Ionicons name="sunny" size={20} color={accentColor} />
         </View>
         <View style={styles.dimmTitleWrap}>
           <Text style={[styles.dimmTitle, { color: theme.colors.text }]}>Light Dimming</Text>
           <Text style={[styles.dimmSubtitle, { color: theme.colors.textSecondary }]}>Adjust grow light intensity</Text>
         </View>
-        <View style={styles.dimmValueBadge}>
+        <View style={[styles.dimmValueBadge, { backgroundColor: `${accentColor}12` }]}>
           <Text style={[styles.dimmValueText, { color: accentColor }]}>{localValue}%</Text>
         </View>
       </View>
 
-      <View style={styles.dimmSliderWrap}>
-        <Ionicons name="sunny-outline" size={14} color={theme.colors.textSecondary} />
-        <View style={{ flex: 1 }}>
+      {/* ── Slider Row ── */}
+      <View style={styles.dimmSliderRow}>
+        <Ionicons name="sunny-outline" size={13} color={theme.colors.textSecondary} style={{ marginTop: 1 }} />
+        <View style={styles.dimmSliderFlex}>
           <SliderControl
             single
             min={0}
@@ -298,51 +145,85 @@ function DimmingCard({ dimmingLevel, onDimmingChange, locked, theme, cardBg, bor
             onChange={handleValueChange}
             tintColor={accentColor}
             thumbColor="#FFFFFF"
-            trackColor={`${accentColor}25`}
+            trackColor={`${accentColor}22`}
             disabled={locked}
             formatValue={(v) => `${Math.round(v)}%`}
           />
         </View>
-        <Text style={[styles.dimmSliderEnd, { color: theme.colors.textSecondary }]}>100%</Text>
+        <Text style={[styles.dimmSliderEndLabel, { color: theme.colors.textSecondary }]}>100%</Text>
       </View>
 
-      <View style={styles.dimmLabels}>
+      {/* ── Quick-select % Pills ── */}
+      <View style={styles.dimmPillsRow}>
         {[0, 25, 50, 75, 100].map((v) => (
           <TouchableOpacity
             key={v}
-            style={[styles.dimmQuickBtn, {
-              backgroundColor: localValue === v ? `${accentColor}20` : "transparent",
-              borderColor: localValue === v ? accentColor : borderC,
-            }]}
+            style={[
+              styles.dimmPill,
+              {
+                backgroundColor: localValue === v ? `${accentColor}18` : theme.dark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
+                borderColor: localValue === v ? accentColor : borderC,
+              },
+            ]}
             onPress={() => handleValueChange(v)}
             disabled={locked}
             activeOpacity={0.7}
           >
-            <Text style={{
-              fontSize: 11,
-              fontWeight: "600",
-              color: localValue === v ? accentColor : theme.colors.textSecondary,
-            }}>{v}%</Text>
+            <Text
+              style={{
+                fontSize: 11,
+                fontWeight: localValue === v ? "700" : "500",
+                color: localValue === v ? accentColor : theme.colors.textSecondary,
+              }}
+            >
+              {v}%
+            </Text>
           </TouchableOpacity>
         ))}
+      </View>
+
+      {/* ── LED Row ── */}
+      <View style={[styles.ledRow, { borderTopColor: borderC }]}>
+        {/* Icon */}
+        <View
+          style={[
+            styles.ledIconCircle,
+            { backgroundColor: ledOn ? `${ledColor}20` : theme.dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" },
+          ]}
+        >
+          <Ionicons
+            name={ledOn ? "bulb" : "bulb-outline"}
+            size={18}
+            color={ledOn ? ledColor : theme.colors.textSecondary}
+          />
+        </View>
+
+        {/* Label */}
+        <View style={styles.ledTextWrap}>
+          <Text style={[styles.ledLabel, { color: theme.colors.text }]}>LED Light</Text>
+          <Text style={[styles.ledSub, { color: ledOn ? ledColor : theme.colors.textSecondary }]}>
+            {ledOn ? "● ON" : "○ OFF"}
+          </Text>
+        </View>
+
+        {/* Switch */}
+        <Switch
+          value={ledOn}
+          onValueChange={(val) => onLedToggle(val)}
+          trackColor={{ false: "#E0E0E0", true: `${ledColor}80` }}
+          thumbColor={ledOn ? ledColor : "#FAFAFA"}
+          disabled={locked}
+          style={styles.ledSwitch}
+        />
       </View>
     </View>
   );
 }
 
-// ── Expandable Actuator Card with SVG Icons ──
-function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggleTime, onToggle, timingValues, onTimingChange, theme, cardBg, borderC }) {
-  const [expanded, setExpanded] = useState(() => {
-    const timingFields = TIMING_FIELDS[device.id] || [];
-    return timingFields.length > 0;
-  });
-  const expandAnim = useRef(new Animated.Value(1)).current;
-  const rotateAnim = useRef(new Animated.Value(1)).current;
+// ── Clean Actuator Card with SVG Icons ──
+function ActuatorCard({ device, isOn, locked, isToggling, toggleTime, onToggle, theme, cardBg, borderC }) {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const accentColor = CONTROL_COLORS.primary;
-  const timingFields = TIMING_FIELDS[device.id] || [];
-  const hasTiming = timingFields.length > 0;
-  const [pickerField, setPickerField] = useState(null);
 
   const prevIsOn = useRef(isOn);
   useEffect(() => {
@@ -355,20 +236,7 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
     }
   }, [isOn, pulseAnim]);
 
-  const toggleExpand = () => {
-    if (!hasTiming) return;
-    const toExpanded = !expanded;
-    setExpanded(toExpanded);
-    Animated.parallel([
-      Animated.spring(expandAnim, { toValue: toExpanded ? 1 : 0, useNativeDriver: false, friction: 8 }),
-      Animated.timing(rotateAnim, { toValue: toExpanded ? 1 : 0, duration: 200, useNativeDriver: true }),
-    ]).start();
-  };
-
-  const chevronRotation = rotateAnim.interpolate({ inputRange: [0, 1], outputRange: ["-90deg", "0deg"] });
   const statusColor = isOn ? accentColor : "#757575";
-
-  // ✅ Get SVG icon component
   const SvgIcon = device.svgIcon;
 
   return (
@@ -378,13 +246,7 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
       borderWidth: isOn ? 1.5 : 1,
       transform: [{ scale: pulseAnim }],
     }]}>
-      <TouchableOpacity
-        style={styles.cardMain}
-        onPress={toggleExpand}
-        activeOpacity={hasTiming ? 0.7 : 1}
-        disabled={locked}
-      >
-        {/* ✅ SVG Icon or Fallback Ionicons */}
+      <View style={styles.cardMain}>
         <View style={[styles.iconCircle, { backgroundColor: `${statusColor}12` }]}>
           {SvgIcon ? (
             <SvgIcon
@@ -419,64 +281,10 @@ function ActuatorCard({ device, actuatorStatus, isOn, locked, isToggling, toggle
             trackColor={{ false: "#E0E0E0", true: `${accentColor}60` }}
             thumbColor={isToggling ? "#BDBDBD" : isOn ? accentColor : "#FAFAFA"}
             disabled={locked || isToggling}
+            style={styles.largeSwitch}
           />
-          {hasTiming && (
-            <Animated.View style={{ transform: [{ rotate: chevronRotation }], marginLeft: 6 }}>
-              <Ionicons name="chevron-down" size={16} color={accentColor} />
-            </Animated.View>
-          )}
         </View>
-      </TouchableOpacity>
-
-      {hasTiming && (
-        <Animated.View style={{
-          maxHeight: expandAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 130] }),
-          opacity: expandAnim,
-          overflow: "hidden",
-        }}>
-          <View style={[styles.timingDivider, { backgroundColor: `${accentColor}15` }]} />
-          <View style={styles.timingSectionInner}>
-            <View style={styles.timingSectionHeader}>
-              <Ionicons name="time-outline" size={13} color={accentColor} />
-              <Text style={[styles.timingSectionLabel, { color: accentColor }]}>Timing Settings</Text>
-              <Text style={[styles.timingSectionUnit, { color: theme.colors.textSecondary }]}>min : sec</Text>
-            </View>
-            <View style={styles.timingRowInline}>
-              {timingFields.map((field) => {
-                const currentValue = timingValues[field.key] ?? actuatorStatus?.[field.key] ?? field.defaultVal;
-                const preview = fmtSec(currentValue ?? field.defaultVal);
-
-                return (
-                  <View key={field.key} style={[styles.timingInputCard, { borderColor: `${accentColor}20`, backgroundColor: `${accentColor}08` }]}>
-                    <View style={styles.timingCardLabelRow}>
-                      <View style={[styles.timingDot, { backgroundColor: accentColor }]} />
-                      <Text style={[styles.timingInputLabel, { color: theme.colors.text }]} numberOfLines={1}>{field.label}</Text>
-                      <Text style={[styles.timingInputPreview, { color: accentColor }]}>{preview}</Text>
-                    </View>
-                    <TouchableOpacity
-                      style={[styles.timingInput, { borderColor: `${accentColor}30`, backgroundColor: theme.colors.surface }]}
-                      onPress={() => setPickerField(field)}
-                      disabled={locked}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Set ${field.label}`}
-                    >
-                      <Text style={{ color: theme.colors.text, fontSize: 14, fontWeight: "700", textAlign: "center" }}>{fmtSec(currentValue)}</Text>
-                    </TouchableOpacity>
-                  </View>
-                );
-              })}
-            </View>
-          </View>
-        </Animated.View>
-      )}
-      <TimePickerModal
-        visible={!!pickerField}
-        value={pickerField ? timingValues[pickerField.key] ?? pickerField.defaultVal : 0}
-        max={pickerField?.max || 600}
-        onClose={() => setPickerField(null)}
-        onSelect={(value) => pickerField && onTimingChange(pickerField.key, value)}
-        theme={theme}
-      />
+      </View>
     </Animated.View>
   );
 }
@@ -490,6 +298,7 @@ export default function SystemControl() {
 
   const {
     getSelectedDeviceActuatorStatus,
+    getSelectedDeviceSensorData,
     getSelectedDeviceName,
     getSelectedDeviceCropSettings,
     selectedExternalKey,
@@ -504,9 +313,11 @@ export default function SystemControl() {
   } = useMqtt();
 
   const actuatorStatus = getSelectedDeviceActuatorStatus();
+  const sensorData = getSelectedDeviceSensorData();
   const cropSettings = getSelectedDeviceCropSettings();
   const selectedDeviceName = getSelectedDeviceName();
   const { isManualMode, toggleMode } = useSystemMode();
+  const { cleanTankActive, currentLevel, canOpenOutletValve, canOpenInletValve } = useTankSafety();
 
   const [toggleTimes, setToggleTimes] = useState({});
   const publishTimerRef = useRef(null);
@@ -577,34 +388,7 @@ export default function SystemControl() {
     return !isConnected || isNotConnected || isOffline;
   }, [isConnected, isNotConnected, isOffline]);
 
-  // ── Timing values — initialized from actuatorStatus ──
-  const [timingValues, setTimingValues] = useState(() => {
-    const init = {};
-    for (const [deviceId, fields] of Object.entries(TIMING_FIELDS)) {
-      for (const f of fields) {
-        init[f.key] = actuatorStatus?.[f.key] ?? f.defaultVal;
-      }
-    }
-    return init;
-  });
 
-  // Sync timing values when actuatorStatus updates
-  useEffect(() => {
-    setTimingValues((prev) => {
-      const updated = { ...prev };
-      let changed = false;
-      for (const [deviceId, fields] of Object.entries(TIMING_FIELDS)) {
-        for (const f of fields) {
-          const deviceVal = actuatorStatus?.[f.key];
-          if (deviceVal !== null && deviceVal !== undefined && deviceVal !== prev[f.key]) {
-            updated[f.key] = deviceVal;
-            changed = true;
-          }
-        }
-      }
-      return changed ? updated : prev;
-    });
-  }, [actuatorStatus]);
 
   // Build device list
   const devices = DEVICE_ORDER.filter((k) => k in DEVICE_CONFIG).map((k) => {
@@ -646,10 +430,7 @@ export default function SystemControl() {
   const rawMode = displayStatus?.mode;
   const modeLabel = rawMode === "AUTO" ? "AUTO" : rawMode === "MANUAL" ? "MANUAL" : null;
 
-  // ── Timing change handler ──
-  const handleTimingChange = useCallback((timingKey, value) => {
-    setTimingValues((prev) => ({ ...prev, [timingKey]: value }));
-  }, []);
+
 
   // ── Dimming handler ──
   const handleDimmingChange = useCallback((firmwareValue) => {
@@ -726,7 +507,8 @@ export default function SystemControl() {
             )}
           </View>
           <View style={styles.headerRightControls}>
-            {statusDisplay && (
+            {/* Only show Online badge when device is online; offline is shown by modePill alone */}
+            {statusDisplay && statusDisplay.text === 'Online' && (
               <View style={[styles.statusBadge, { backgroundColor: statusDisplay.color }]}>
                 <View style={styles.onlineDot} />
                 <Text style={[styles.statusBadgeText, { color: "#FFF" }]}>{statusDisplay.text}</Text>
@@ -773,17 +555,39 @@ export default function SystemControl() {
             <Text style={[styles.bannerText, { color: "#F44336" }]}>Not connected. Check your connection.</Text>
           </View>
         )}
-        {isOffline && !isNotConnected && (
+        {/* {isOffline && !isNotConnected && (
           <View style={[styles.banner, { backgroundColor: "#FF980012" }]}>
             <Ionicons name="alert-circle-outline" size={15} color="#FF9800" />
             <Text style={[styles.bannerText, { color: "#FF9800" }]}>Device offline. Waiting for connection...</Text>
           </View>
-        )}
+        )} */}
 
         {/* ── Dimming Card ── */}
         <DimmingCard
           dimmingLevel={deviceStatusFlags?.dimmingLevel ?? null}
           onDimmingChange={handleDimmingChange}
+          ledOn={actuatorStatus?.led === true}
+          onLedToggle={(nextValue) => {
+            if (!selectedExternalKey) return;
+            if (!isManualMode) {
+              Alert.alert(
+                "🤖 AUTO Mode Active",
+                "Cannot control LED while system is in AUTO mode.\n\nSwitch to MANUAL mode?",
+                [
+                  { text: "No", style: "cancel" },
+                  { text: "Yes, Go to Settings", onPress: () => router.push("/(main)/settings") },
+                ]
+              );
+              return;
+            }
+            if (deviceLocked) return;
+            const fullStatus = {};
+            for (const dev of devices) {
+              fullStatus[dev.actuatorKey] = pendingActuatorValuesRef.current[dev.actuatorKey] ?? dev.vb;
+            }
+            fullStatus['led'] = nextValue;
+            publishActuatorStatus(selectedExternalKey, fullStatus);
+          }}
           locked={deviceLocked}
           theme={theme}
           cardBg={cardBg}
@@ -803,7 +607,6 @@ export default function SystemControl() {
               <ActuatorCard
                 key={device.id}
                 device={device}
-                actuatorStatus={actuatorStatus}
                 isOn={device.vb === true}
                 locked={deviceLocked}
                 isToggling={false}
@@ -837,6 +640,28 @@ export default function SystemControl() {
                     return;
                   }
                   const newVal = nextValue ?? !d.vb;
+
+                  // ── Valve Safety Guards ──
+                  if (d.actuatorKey === "water_OLvalve" && newVal === true) {
+                    if (!canOpenOutletValve()) {
+                      Alert.alert(
+                        "⚠️ Low Water Level",
+                        `Cannot open Outlet Valve: Tank water level is below safe limit (${currentLevel !== null ? Math.round(currentLevel) + "%" : "low"}). Operating below 15% is prohibited in Manual mode for equipment safety.`
+                      );
+                      return;
+                    }
+                  }
+
+                  if (d.actuatorKey === "water_ILvalve" && newVal === true) {
+                    if (!canOpenInletValve()) {
+                      Alert.alert(
+                        "⚠️ Tank Full",
+                        `Cannot open Inlet Valve: Tank is already full (${currentLevel !== null ? Math.round(currentLevel) + "%" : "90%+"}).`
+                      );
+                      return;
+                    }
+                  }
+
                   const nextPending = {
                     ...pendingActuatorValuesRef.current,
                     [d.actuatorKey]: newVal,
@@ -848,11 +673,6 @@ export default function SystemControl() {
                     const fullStatus = {};
                     for (const dev of devices) {
                       fullStatus[dev.actuatorKey] = pendingActuatorValuesRef.current[dev.actuatorKey] ?? dev.vb;
-                    }
-                    for (const fields of Object.values(TIMING_FIELDS)) {
-                      for (const field of fields) {
-                        fullStatus[field.key] = timingValues[field.key] ?? field.defaultVal;
-                      }
                     }
 
                     try {
@@ -873,8 +693,6 @@ export default function SystemControl() {
                     publishTimerRef.current = null;
                   }, 500);
                 }}
-                timingValues={timingValues}
-                onTimingChange={handleTimingChange}
                 theme={theme}
                 cardBg={cardBg}
                 borderC={borderC}
@@ -882,6 +700,57 @@ export default function SystemControl() {
             ))}
           </View>
         ))}
+
+        {/* ── Timings & Clean Tank (1 per row, placed right after AC) ── */}
+        <View style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="options-outline" size={14} color={theme.colors.textSecondary} />
+            <Text style={[styles.sectionTitle, { color: theme.colors.textSecondary }]}>
+              Timings & Maintenance
+            </Text>
+          </View>
+
+          {/* System Timings (Full Row) */}
+          <TouchableOpacity
+            style={[styles.quickActionCardFull, { backgroundColor: cardBg, borderColor: borderC }]}
+            onPress={() => router.push("/(main)/timings")}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.quickActionIconCircle, { backgroundColor: "#2E7D3215" }]}>
+              <Ionicons name="timer-outline" size={22} color="#2E7D32" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.quickActionTitle, { color: theme.colors.text }]}>System Timings</Text>
+              <Text style={[styles.quickActionDesc, { color: theme.colors.textSecondary }]}>Pumps, EC & pH timings</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+
+          {/* Clean Tank (Full Row) */}
+          <TouchableOpacity
+            style={[styles.quickActionCardFull, { backgroundColor: cardBg, borderColor: borderC }]}
+            onPress={() => router.push("/(main)/clean-tank")}
+            activeOpacity={0.7}
+          >
+            <View style={[styles.quickActionIconCircle, { backgroundColor: cleanTankActive ? "#FF980020" : "#0288D115" }]}>
+              <Ionicons name="water-outline" size={22} color={cleanTankActive ? "#FF9800" : "#0288D1"} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Text style={[styles.quickActionTitle, { color: theme.colors.text }]}>Clean Tank</Text>
+                {cleanTankActive && (
+                  <View style={styles.activeTag}>
+                    <Text style={styles.activeTagText}>ACTIVE</Text>
+                  </View>
+                )}
+              </View>
+              <Text style={[styles.quickActionDesc, { color: theme.colors.textSecondary }]}>
+                {cleanTankActive ? "Cycle in progress" : (currentLevel !== null ? `Tank: ${Math.round(currentLevel)}%` : "Automated drain/fill")}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={theme.colors.textSecondary} />
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </View>
   );
@@ -966,126 +835,43 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 10, fontWeight: "600", letterSpacing: 0.3 },
   statusBadgeText: { fontSize: 11, fontWeight: "700" },
   timeText: { fontSize: 9, opacity: 0.5 },
-  cardRight: { flexDirection: "row", alignItems: "center", gap: 6 },
+  cardRight: { flexDirection: "row", alignItems: "center", gap: 6, paddingRight: 6 },
+  largeSwitch: {
+    transform: [{ scaleX: 1.25 }, { scaleY: 1.25 }],
+  },
 
-  // Inline timing section
-  timingDivider: { height: 1, marginHorizontal: 14 },
-  timingSectionInner: { padding: 14, paddingTop: 10 },
-  timingSectionHeader: {
-    flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 10,
-  },
-  timingSectionLabel: { fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.5, flex: 1 },
-  timingSectionUnit: { fontSize: 10, fontWeight: "500" },
-  timingRowInline: { flexDirection: "row", gap: 10 },
-  timingInputCard: {
-    flex: 1,
-    borderRadius: 10,
-    padding: 10,
-    borderWidth: 1,
-    overflow: "hidden",
-  },
-  timingCardLabelRow: {
+  // Quick actions
+  quickActionCardFull: {
+    width: "100%",
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
-    marginBottom: 4,
-  },
-  timingDot: { width: 5, height: 5, borderRadius: 3 },
-  timingInputLabel: { fontSize: 11, fontWeight: "600", flexShrink: 1 },
-  timingInputSub: { fontSize: 9, fontWeight: "600", opacity: 0.5, marginBottom: 6 },
-  timingInput: {
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    fontSize: 14,
-    fontWeight: "700",
-    textAlign: "center",
-  },
-  timingInputPreview: { fontSize: 10, fontWeight: "700", textAlign: "right" },
-  pickerOverlay: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(0,0,0,0.35)",
-  },
-  pickerSheet: {
-    width: "88%",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    borderBottomLeftRadius: 20,
-    borderBottomRightRadius: 20,
-    padding: 20,
-    paddingBottom: 22,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.2,
-    shadowRadius: 18,
-    elevation: 10,
-  },
-  pickerHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 14,
-  },
-  pickerTitle: { fontSize: 17, fontWeight: "700" },
-  pickerValue: { fontSize: 13, fontWeight: "700", marginTop: 3 },
-  pickerColumns: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    height: 190,
+    padding: 13,
     borderRadius: 14,
-    backgroundColor: CONTROL_COLORS.soft,
-    paddingHorizontal: 8,
-  },
-  pickerColumn: {
-    width: 72,
-    height: 190,
-    position: "relative",
     borderWidth: 1,
-    borderColor: `${CONTROL_COLORS.primary}35`,
-    borderRadius: 12,
-    paddingHorizontal: 4,
-    overflow: "hidden",
+    marginBottom: 10,
+    gap: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  pickerColumnLabel: { position: "absolute", top: 0, left: 0, right: 0, height: 24, zIndex: 2, paddingTop: 5, textAlign: "center", fontSize: 11, fontWeight: "600", backgroundColor: CONTROL_COLORS.soft },
-  pickerList: { flex: 1 },
-  pickerListContent: { paddingVertical: PICKER_CENTER_PADDING },
-  pickerOption: { height: PICKER_ROW_HEIGHT, alignItems: "center", justifyContent: "center", borderRadius: 10 },
-  pickerOptionSelected: {
-    backgroundColor: CONTROL_COLORS.soft,
-    borderWidth: 1,
-    borderColor: `${CONTROL_COLORS.primary}55`,
-  },
-  pickerSelectionFrame: {
-    position: "absolute",
-    left: 4,
-    right: 4,
-    top: PICKER_CENTER_PADDING,
-    height: PICKER_ROW_HEIGHT,
-    borderWidth: 2,
-    borderColor: CONTROL_COLORS.primary,
-    borderRadius: 10,
-    zIndex: 3,
-  },
-  pickerOptionText: { fontSize: 18, fontWeight: "700" },
-  pickerColon: { fontSize: 24, fontWeight: "700", marginHorizontal: 8, marginTop: 16 },
-  pickerDoneButton: {
+  quickActionIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: CONTROL_COLORS.primary,
-    borderRadius: 10,
-    paddingVertical: 13,
-    marginTop: 14,
-    shadowColor: CONTROL_COLORS.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 3,
   },
-  pickerDoneText: { color: "#FFF", fontSize: 14, fontWeight: "700" },
+  quickActionTitle: { fontSize: 14, fontWeight: "700" },
+  quickActionDesc: { fontSize: 11, marginTop: 2 },
+  activeTag: {
+    backgroundColor: "#FF9800",
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+  },
+  activeTagText: { color: "#FFFFFF", fontSize: 8, fontWeight: "800" },
 
   // Footer
   footer: {
@@ -1097,32 +883,90 @@ const styles = StyleSheet.create({
   footerDot: { width: 7, height: 7, borderRadius: 4 },
   footerLabel: { fontSize: 11, fontWeight: "500" },
 
-  // Dimming Card
+  // ── Dimming Card ──
   dimmCard: {
-    borderRadius: 14, marginBottom: 14,
-    borderWidth: 1, padding: 16,
-    shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2,
+    borderRadius: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
   },
   dimmHeader: {
-    flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 14,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 12,
   },
-  dimmTitleWrap: { flex: 1 },
-  dimmTitle: { fontSize: 15, fontWeight: "700" },
-  dimmSubtitle: { fontSize: 11, marginTop: 1, opacity: 0.7 },
+  dimmIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+    flexShrink: 0,
+  },
+  dimmTitleWrap: { flex: 1, minWidth: 0 },
+  dimmTitle: { fontSize: 14, fontWeight: "700", letterSpacing: -0.1 },
+  dimmSubtitle: { fontSize: 11, marginTop: 1, opacity: 0.65 },
   dimmValueBadge: {
-    backgroundColor: "rgba(255,193,7,0.12)", borderRadius: 10,
-    paddingHorizontal: 10, paddingVertical: 4, minWidth: 48, alignItems: "center",
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    minWidth: 50,
+    alignItems: "center",
+    flexShrink: 0,
   },
-  dimmValueText: { fontSize: 16, fontWeight: "800" },
-  dimmSliderWrap: {
-    flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12,
+  dimmValueText: { fontSize: 17, fontWeight: "800" },
+
+  // Slider
+  dimmSliderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 10,
   },
-  dimmSliderEnd: { fontSize: 11, fontWeight: "600", minWidth: 32, textAlign: "right" },
-  dimmLabels: {
-    flexDirection: "row", justifyContent: "space-between", gap: 6,
+  dimmSliderFlex: { flex: 1 },
+  dimmSliderEndLabel: { fontSize: 10, fontWeight: "600", minWidth: 30, textAlign: "right" },
+
+  // Quick pills
+  dimmPillsRow: {
+    flexDirection: "row",
+    gap: 5,
+    marginBottom: 12,
   },
-  dimmQuickBtn: {
-    flex: 1, alignItems: "center", paddingVertical: 6,
-    borderRadius: 8, borderWidth: 1,
+  dimmPill: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 7,
+    borderRadius: 9,
+    borderWidth: 1,
   },
+
+  // ── LED Row ──
+  ledRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingTop: 10,
+    paddingBottom: 2,
+    borderTopWidth: 1,
+  },
+  ledIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    justifyContent: "center",
+    alignItems: "center",
+    flexShrink: 0,
+  },
+  ledTextWrap: { flex: 1, minWidth: 0 },
+  ledLabel: { fontSize: 13, fontWeight: "700" },
+  ledSub: { fontSize: 10, marginTop: 1, fontWeight: "600" },
+  ledSwitch: { transform: [{ scaleX: 1.1 }, { scaleY: 1.1 }] },
 });
