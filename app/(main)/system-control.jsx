@@ -509,22 +509,10 @@ export default function SystemControl() {
     return acc;
   }, {});
 
-  // Keep the optimistic switch state until the device confirms the target value.
-  const prevActuatorRef = useRef(actuatorStatus);
+  // When confirmed device status arrives from MQTT, clear all pending overrides
+  // so stale values never override the real hardware state.
   useEffect(() => {
-    prevActuatorRef.current = actuatorStatus;
-
-    const confirmed = { ...pendingActuatorValuesRef.current };
-    let changed = false;
-    Object.entries(confirmed).forEach(([key, expectedValue]) => {
-      if (actuatorStatus?.[key] === expectedValue) {
-        delete confirmed[key];
-        changed = true;
-      }
-    });
-    if (changed) {
-      pendingActuatorValuesRef.current = confirmed;
-    }
+    pendingActuatorValuesRef.current = {};
   }, [actuatorStatus]);
 
   useEffect(() => () => {
@@ -557,15 +545,16 @@ export default function SystemControl() {
 
     const send = async () => {
       try {
+        const currentPending = { ...pendingActuatorValuesRef.current };
+        pendingActuatorValuesRef.current = {};
+
         const fullStatus = {};
         for (const dev of devices) {
-          fullStatus[dev.actuatorKey] = pendingActuatorValuesRef.current[dev.actuatorKey] ?? dev.vb;
+          fullStatus[dev.actuatorKey] = currentPending[dev.actuatorKey] ?? dev.vb;
         }
         const isLightOn = dimmingValue > 0;
         fullStatus['led'] = isLightOn;
         fullStatus['dimming'] = dimmingValue;
-        pendingActuatorValuesRef.current['led'] = isLightOn;
-        pendingActuatorValuesRef.current['dimming'] = dimmingValue;
         await publishActuatorStatus(selectedExternalKey, fullStatus);
       } catch (err) {
         console.error("Light actuator publish error:", err);
@@ -747,28 +736,24 @@ export default function SystemControl() {
                   const time = new Date().toLocaleTimeString();
                   if (publishTimerRef.current) clearTimeout(publishTimerRef.current);
                   publishTimerRef.current = setTimeout(async () => {
+                    const currentPending = { ...pendingActuatorValuesRef.current };
+                    pendingActuatorValuesRef.current = {};
+
                     const fullStatus = {};
                     for (const dev of devices) {
-                      fullStatus[dev.actuatorKey] = pendingActuatorValuesRef.current[dev.actuatorKey] ?? dev.vb;
+                      fullStatus[dev.actuatorKey] = currentPending[dev.actuatorKey] ?? dev.vb;
                     }
 
                     try {
                       const success = await publishActuatorStatus(selectedExternalKey, fullStatus);
                       if (success) {
                         setToggleTimes((prev) => ({ ...prev, [d.id]: time }));
-                      } else {
-                        const failedPending = { ...pendingActuatorValuesRef.current };
-                        delete failedPending[d.actuatorKey];
-                        pendingActuatorValuesRef.current = failedPending;
                       }
                     } catch (error) {
                       console.error(`Failed to toggle ${d.displayName}:`, error);
-                      const failedPending = { ...pendingActuatorValuesRef.current };
-                      delete failedPending[d.actuatorKey];
-                      pendingActuatorValuesRef.current = failedPending;
                     }
                     publishTimerRef.current = null;
-                  }, 500);
+                  }, 350);
                 }}
                 theme={theme}
                 cardBg={cardBg}
