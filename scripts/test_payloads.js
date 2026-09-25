@@ -20,7 +20,7 @@ function buildSettingsPayload(settings, externalKey) {
     { n: "LUXHI", v: settings.luxHigh },
     { n: "ECL", v: settings.ecLow },
     { n: "ECH", v: settings.ecHigh },
-    { n: "Dimm", v: settings.dimming || 75 },
+    { n: "Dimm", v: (settings.dimming !== undefined && settings.dimming !== null && !isNaN(settings.dimming)) ? Number(settings.dimming) : 75 },
   ];
 }
 
@@ -51,7 +51,21 @@ assert(!settingsPayload.some(x => x.n === "WLLP"), "WLLP should NOT be in settin
 assert(!settingsPayload.some(x => x.n === "WLHP"), "WLHP should NOT be in settings payload");
 assert(!settingsPayload.some(x => x.n === "WTLO"), "WTLO should NOT be in settings payload");
 assert(!settingsPayload.some(x => x.n === "WTHI"), "WTHI should NOT be in settings payload");
-console.log("✅ Check 1 PASSED: WLLP, WLHP, WTLO, WTHI removed from Crop settings topic payload");
+assert.strictEqual(settingsPayload.find(x => x.n === "Dimm")?.v, 80, "Dimm should equal 80");
+
+// Test Dimm with 0 (must NOT fallback to 75)
+const zeroDimmPayload = buildSettingsPayload({ ...dummySettings, dimming: 0 }, "MAC_123");
+assert.strictEqual(zeroDimmPayload.find(x => x.n === "Dimm")?.v, 0, "Dimm 0 should NOT fallback to 75");
+
+// Test Dimm with 100
+const hundredDimmPayload = buildSettingsPayload({ ...dummySettings, dimming: 100 }, "MAC_123");
+assert.strictEqual(hundredDimmPayload.find(x => x.n === "Dimm")?.v, 100, "Dimm 100 should be 100");
+
+// Test Dimm with 15
+const customDimmPayload = buildSettingsPayload({ ...dummySettings, dimming: 15 }, "MAC_123");
+assert.strictEqual(customDimmPayload.find(x => x.n === "Dimm")?.v, 15, "Dimm 15 should be 15");
+
+console.log("✅ Check 1 PASSED: WLLP, WLHP, WTLO, WTHI removed, and Dimm correctly preserves 0, 100, and intermediate values");
 
 // 2. CleanTank payload
 function buildCleanTankPayload(isCleaning) {
@@ -97,15 +111,23 @@ const expectedPayload = [{"n":"ECA_DI","v":3600},{"n":"ECAP_OT","v":10},{"n":"WP
 assert.deepStrictEqual(defaultTimingsPayload, expectedPayload, "Timings payload does not match required specification");
 console.log("✅ Check 3 PASSED: Timings payload exactly matches specification");
 
-// 4. Actuator payload: verify no timings
+// 4. Actuator payload: verify no timings and verify Dimm and Led
 function buildActuatorPayload(status, externalKey, previousStatus = {}) {
   const p = (key, def) => status[key] ?? previousStatus[key] ?? def;
+  const rawDim = status.dimming ?? status.Dimm ?? status.dimm ?? previousStatus.dimming ?? previousStatus.Dimm ?? previousStatus.dimm;
+  const ledVal = p('led', false);
+  const dimVal = (rawDim !== undefined && rawDim !== null && !isNaN(rawDim))
+    ? Math.max(0, Math.min(100, Math.round(Number(rawDim))))
+    : (ledVal ? 100 : 0);
+
   const payload = [
     { n: "WatPmp", vb: p('water_pump', false) },
     { n: "Wat_ILV", vb: p('water_ILvalve', false) },
     { n: "Wat_OLV", vb: p('water_OLvalve', false) },
     { n: "NUT_PMP", vb: p('nutrient_pump', false) },
     { n: "AC_Stat", vb: p('ac_stat', false) },
+    { n: "Led", vb: ledVal },
+    { n: "Dimm", v: dimVal },
   ];
   return payload;
 }
@@ -113,7 +135,23 @@ function buildActuatorPayload(status, externalKey, previousStatus = {}) {
 const actPayload = buildActuatorPayload({ water_pump: true }, "MAC_123");
 console.log("Actuator payload:", JSON.stringify(actPayload));
 assert(!actPayload.some(x => ["WPONT", "WPINT", "NP_DI", "NP_OT"].includes(x.n)), "Actuator payload must not include timings");
-console.log("✅ Check 4 PASSED: Actuator payload free of timing fields");
+
+// Verify actuator light OFF: Led = false, Dimm = 0
+const offPayload = buildActuatorPayload({ led: false, dimming: 0 }, "MAC_123");
+assert.strictEqual(offPayload.find(x => x.n === "Led")?.vb, false, "Led should be false on off");
+assert.strictEqual(offPayload.find(x => x.n === "Dimm")?.v, 0, "Dimm should be 0 on off");
+
+// Verify actuator light ON (default): Led = true, Dimm = 100
+const onPayload = buildActuatorPayload({ led: true, dimming: 100 }, "MAC_123");
+assert.strictEqual(onPayload.find(x => x.n === "Led")?.vb, true, "Led should be true on switch on");
+assert.strictEqual(onPayload.find(x => x.n === "Dimm")?.v, 100, "Dimm should be 100 on switch on");
+
+// Verify actuator light slider change: 1 to 100 (e.g. 15): Led = true, Dimm = 15
+const sliderPayload = buildActuatorPayload({ led: true, dimming: 15 }, "MAC_123");
+assert.strictEqual(sliderPayload.find(x => x.n === "Led")?.vb, true, "Led should be true on slider 15");
+assert.strictEqual(sliderPayload.find(x => x.n === "Dimm")?.v, 15, "Dimm should be 15 on slider 15");
+
+console.log("✅ Check 4 PASSED: Actuator payload free of timings, and correctly carries Led and Dimm (0 for off, 100 for switch on, and 1-100 for slider)");
 
 function canOpenOutletValve(waterLevel, isCleanTankActive) {
   if (waterLevel === null || waterLevel === undefined) return true;

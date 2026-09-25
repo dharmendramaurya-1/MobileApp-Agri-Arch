@@ -93,23 +93,124 @@ const CONTROL_COLORS = {
 
 
 // ── Dimming Card Component ──
-function DimmingCard({ dimmingLevel, onDimmingChange, ledOn, onLedToggle, locked, theme, cardBg, borderC }) {
-  const percentage = dimmingLevel !== null && dimmingLevel !== undefined
-    ? Math.round((dimmingLevel / 127) * 100)
-    : 0;
-  const [localValue, setLocalValue] = useState(percentage);
-
-  useEffect(() => {
-    if (dimmingLevel !== null && dimmingLevel !== undefined) {
-      setLocalValue(Math.round((dimmingLevel / 127) * 100));
+function DimmingCard({
+  dimmingLevel,
+  onLightChange,
+  ledOn,
+  locked,
+  theme,
+  cardBg,
+  borderC,
+}) {
+  const parseLevel = (val) => {
+    if (val !== null && val !== undefined && !isNaN(val)) {
+      return Math.max(0, Math.min(100, Math.round(Number(val))));
     }
-  }, [dimmingLevel]);
+    return null;
+  };
 
-  const handleValueChange = (val) => {
-    const rounded = Math.round(val);
+  const confirmedLevel = parseLevel(dimmingLevel);
+  // Confirmed light state strictly from device response:
+  const isConfirmedOn = confirmedLevel !== null ? confirmedLevel > 0 : Boolean(ledOn);
+
+  const initialVal = confirmedLevel ?? (isConfirmedOn ? 100 : 0);
+  const [localValue, setLocalValue] = useState(initialVal);
+  const [isSwitchPending, setIsSwitchPending] = useState(false);
+  const isSlidingRef = useRef(false);
+  const slidingTimerRef = useRef(null);
+
+  // Sync from incoming device status only if user is not actively dragging the slider
+  useEffect(() => {
+    if (!isSlidingRef.current) {
+      const parsed = parseLevel(dimmingLevel);
+      if (parsed !== null) {
+        setLocalValue(parsed);
+      }
+    }
+    // Device response arrived -> clear pending switch state
+    setIsSwitchPending(false);
+  }, [dimmingLevel, ledOn]);
+
+  // Clean up debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (slidingTimerRef.current) {
+        clearTimeout(slidingTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Safety fallback: if no response arrives within 8 seconds, clear pending state
+  useEffect(() => {
+    if (isSwitchPending) {
+      const timer = setTimeout(() => {
+        setIsSwitchPending(false);
+      }, 8000);
+      return () => clearTimeout(timer);
+    }
+  }, [isSwitchPending]);
+
+  // Real-time slider drag: update UI smoothly without spamming MQTT payloads
+  const handleSliderChange = (val) => {
+    const rounded = Math.max(0, Math.min(100, Math.round(val)));
+    isSlidingRef.current = true;
     setLocalValue(rounded);
-    const firmwareValue = Math.round((rounded / 100) * 127);
-    onDimmingChange(firmwareValue);
+
+    // Debounce fallback: if user pauses finger in place for 600ms, send once
+    if (slidingTimerRef.current) {
+      clearTimeout(slidingTimerRef.current);
+    }
+    slidingTimerRef.current = setTimeout(() => {
+      isSlidingRef.current = false;
+      onLightChange(rounded, true);
+    }, 600);
+  };
+
+  // User released touch / stopped sliding: send payload ONCE immediately
+  const handleSlidingComplete = (val) => {
+    if (slidingTimerRef.current) {
+      clearTimeout(slidingTimerRef.current);
+      slidingTimerRef.current = null;
+    }
+    isSlidingRef.current = false;
+    const rounded = Math.max(0, Math.min(100, Math.round(val ?? localValue)));
+    setLocalValue(rounded);
+    onLightChange(rounded, true);
+  };
+
+  // Quick % Pill tap (immediate send)
+  const handlePillSelect = (v) => {
+    if (slidingTimerRef.current) {
+      clearTimeout(slidingTimerRef.current);
+      slidingTimerRef.current = null;
+    }
+    isSlidingRef.current = false;
+    const rounded = Math.max(0, Math.min(100, Math.round(v)));
+    setLocalValue(rounded);
+    onLightChange(rounded, true);
+  };
+
+  // Light Switch toggle: does NOT change UI immediately!
+  // It keeps the SAME state until device response arrives!
+  const handleSwitchToggle = () => {
+    if (locked || isSwitchPending) return;
+    if (slidingTimerRef.current) {
+      clearTimeout(slidingTimerRef.current);
+      slidingTimerRef.current = null;
+    }
+    isSlidingRef.current = false;
+
+    // Target dimming:
+    // If currently confirmed ON -> target is 0 (OFF)
+    // If currently confirmed OFF -> target is 100 (or previous localValue if > 0)
+    const targetDimming = isConfirmedOn ? 0 : (localValue > 0 ? localValue : 100);
+
+    // Keep switch in SAME state and show Sending... until response comes!
+    setIsSwitchPending(true);
+    const ok = onLightChange(targetDimming, true);
+    if (ok === false) {
+      setIsSwitchPending(false);
+    }
   };
 
   const accentColor = CONTROL_COLORS.accent;
@@ -142,7 +243,8 @@ function DimmingCard({ dimmingLevel, onDimmingChange, ledOn, onLedToggle, locked
             max={100}
             minValue={localValue}
             step={1}
-            onChange={handleValueChange}
+            onChange={handleSliderChange}
+            onSlidingComplete={handleSlidingComplete}
             tintColor={accentColor}
             thumbColor="#FFFFFF"
             trackColor={`${accentColor}22`}
@@ -165,7 +267,7 @@ function DimmingCard({ dimmingLevel, onDimmingChange, ledOn, onLedToggle, locked
                 borderColor: localValue === v ? accentColor : borderC,
               },
             ]}
-            onPress={() => handleValueChange(v)}
+            onPress={() => handlePillSelect(v)}
             disabled={locked}
             activeOpacity={0.7}
           >
@@ -182,37 +284,41 @@ function DimmingCard({ dimmingLevel, onDimmingChange, ledOn, onLedToggle, locked
         ))}
       </View>
 
-      {/* ── LED Row ── */}
+      {/* ── Light Switch Row (State updates ONLY when device response arrives) ── */}
       <View style={[styles.ledRow, { borderTopColor: borderC }]}>
         {/* Icon */}
         <View
           style={[
             styles.ledIconCircle,
-            { backgroundColor: ledOn ? `${ledColor}20` : theme.dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" },
+            { backgroundColor: isConfirmedOn ? `${ledColor}20` : theme.dark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)" },
           ]}
         >
           <Ionicons
-            name={ledOn ? "bulb" : "bulb-outline"}
+            name={isConfirmedOn ? "bulb" : "bulb-outline"}
             size={18}
-            color={ledOn ? ledColor : theme.colors.textSecondary}
+            color={isConfirmedOn ? ledColor : theme.colors.textSecondary}
           />
         </View>
 
         {/* Label */}
         <View style={styles.ledTextWrap}>
-          <Text style={[styles.ledLabel, { color: theme.colors.text }]}>LED Light</Text>
-          <Text style={[styles.ledSub, { color: ledOn ? ledColor : theme.colors.textSecondary }]}>
-            {ledOn ? "● ON" : "○ OFF"}
+          <Text style={[styles.ledLabel, { color: theme.colors.text }]}>Light Switch</Text>
+          <Text style={[styles.ledSub, { color: isSwitchPending ? theme.colors.textSecondary : isConfirmedOn ? ledColor : theme.colors.textSecondary }]}>
+            {isSwitchPending
+              ? "Sending..."
+              : isConfirmedOn
+              ? `● ON (${confirmedLevel ?? localValue}%)`
+              : "○ OFF (0%)"}
           </Text>
         </View>
 
-        {/* Switch */}
+        {/* Switch: remains in same state until device response arrives */}
         <Switch
-          value={ledOn}
-          onValueChange={(val) => onLedToggle(val)}
+          value={isConfirmedOn}
+          onValueChange={handleSwitchToggle}
           trackColor={{ false: "#E0E0E0", true: `${ledColor}80` }}
-          thumbColor={ledOn ? ledColor : "#FAFAFA"}
-          disabled={locked}
+          thumbColor={isSwitchPending ? "#BDBDBD" : isConfirmedOn ? ledColor : "#FAFAFA"}
+          disabled={locked || isSwitchPending}
           style={styles.ledSwitch}
         />
       </View>
@@ -432,31 +538,47 @@ export default function SystemControl() {
 
 
 
-  // ── Dimming handler ──
-  const handleDimmingChange = useCallback((firmwareValue) => {
-    if (!selectedExternalKey) return;
+  // ── Light / Dimming handler (publishes via actuator payload to /actuator, NOT /settings) ──
+  const handleLightChange = useCallback((dimmingValue, immediate = false) => {
+    if (!selectedExternalKey) return false;
     if (!isManualMode) {
       Alert.alert(
         "🤖 AUTO Mode Active",
-        "Cannot change dimming while system is in AUTO mode.\n\nSwitch to MANUAL mode?",
+        "Cannot control light while system is in AUTO mode.\n\nSwitch to MANUAL mode?",
         [
           { text: "No", style: "cancel" },
           { text: "Yes, Go to Settings", onPress: () => router.push("/(main)/settings") },
         ]
       );
-      return;
+      return false;
     }
-    if (deviceLocked) return;
+    if (deviceLocked) return false;
     if (publishTimerRef.current) clearTimeout(publishTimerRef.current);
-    publishTimerRef.current = setTimeout(async () => {
+
+    const send = async () => {
       try {
-        const currentCropSettings = cropSettings || {};
-        await publishSettings(selectedExternalKey, { ...currentCropSettings, dimming: firmwareValue });
+        const fullStatus = {};
+        for (const dev of devices) {
+          fullStatus[dev.actuatorKey] = pendingActuatorValuesRef.current[dev.actuatorKey] ?? dev.vb;
+        }
+        const isLightOn = dimmingValue > 0;
+        fullStatus['led'] = isLightOn;
+        fullStatus['dimming'] = dimmingValue;
+        pendingActuatorValuesRef.current['led'] = isLightOn;
+        pendingActuatorValuesRef.current['dimming'] = dimmingValue;
+        await publishActuatorStatus(selectedExternalKey, fullStatus);
       } catch (err) {
-        console.error("Dimming publish error:", err);
+        console.error("Light actuator publish error:", err);
       }
-    }, 500);
-  }, [deviceLocked, selectedExternalKey, cropSettings, publishSettings, isManualMode]);
+    };
+
+    if (immediate) {
+      send();
+    } else {
+      publishTimerRef.current = setTimeout(send, 350);
+    }
+    return true;
+  }, [deviceLocked, selectedExternalKey, devices, publishActuatorStatus, isManualMode]);
 
   // ── ✅ STABLE MODE PILL (SHOW NOTHING DURING LOADING) ──
   const getModePillStyle = useCallback(() => {
@@ -564,30 +686,9 @@ export default function SystemControl() {
 
         {/* ── Dimming Card ── */}
         <DimmingCard
-          dimmingLevel={deviceStatusFlags?.dimmingLevel ?? null}
-          onDimmingChange={handleDimmingChange}
+          dimmingLevel={deviceStatusFlags?.dimmingLevel ?? actuatorStatus?.dimming ?? null}
+          onLightChange={handleLightChange}
           ledOn={actuatorStatus?.led === true}
-          onLedToggle={(nextValue) => {
-            if (!selectedExternalKey) return;
-            if (!isManualMode) {
-              Alert.alert(
-                "🤖 AUTO Mode Active",
-                "Cannot control LED while system is in AUTO mode.\n\nSwitch to MANUAL mode?",
-                [
-                  { text: "No", style: "cancel" },
-                  { text: "Yes, Go to Settings", onPress: () => router.push("/(main)/settings") },
-                ]
-              );
-              return;
-            }
-            if (deviceLocked) return;
-            const fullStatus = {};
-            for (const dev of devices) {
-              fullStatus[dev.actuatorKey] = pendingActuatorValuesRef.current[dev.actuatorKey] ?? dev.vb;
-            }
-            fullStatus['led'] = nextValue;
-            publishActuatorStatus(selectedExternalKey, fullStatus);
-          }}
           locked={deviceLocked}
           theme={theme}
           cardBg={cardBg}

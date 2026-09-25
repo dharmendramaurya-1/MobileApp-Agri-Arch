@@ -212,13 +212,20 @@ function parseActuatorToDevices(raw) {
 
 function buildActuatorPayload(status, externalKey, previousStatus = {}) {
   const p = (key, def) => status[key] ?? previousStatus[key] ?? def;
+  const rawDim = status.dimming ?? status.Dimm ?? status.dimm ?? previousStatus.dimming ?? previousStatus.Dimm ?? previousStatus.dimm;
+  const ledVal = p('led', false);
+  const dimVal = (rawDim !== undefined && rawDim !== null && !isNaN(rawDim))
+    ? Math.max(0, Math.min(100, Math.round(Number(rawDim))))
+    : (ledVal ? 100 : 0);
+
   const payload = [
     { n: "WatPmp", vb: p('water_pump', false) },
     { n: "Wat_ILV", vb: p('water_ILvalve', false) },
     { n: "Wat_OLV", vb: p('water_OLvalve', false) },
     { n: "NUT_PMP", vb: p('nutrient_pump', false) },
     { n: "AC_Stat", vb: p('ac_stat', false) },
-    { n: "Led", vb: p('led', false) },
+    { n: "Led", vb: ledVal },
+    { n: "Dimm", v: dimVal },
   ];
   return payload;
 }
@@ -239,7 +246,7 @@ function buildSettingsPayload(settings, externalKey) {
     { n: "LUXHI", v: settings.luxHigh },
     { n: "ECL", v: settings.ecLow },
     { n: "ECH", v: settings.ecHigh },
-    { n: "Dimm", v: settings.dimming || 75 },
+    { n: "Dimm", v: (settings.dimming !== undefined && settings.dimming !== null && !isNaN(settings.dimming)) ? Number(settings.dimming) : 75 },
   ];
 }
 
@@ -303,7 +310,7 @@ export const MqttProvider = ({ children }) => {
   const [deviceCheckingStatus, setDeviceCheckingStatus] = useState({});
   const [deviceInitialLoadStatus, setDeviceInitialLoadStatus] = useState({});
   const [deviceInitialLoadComplete, setDeviceInitialLoadComplete] = useState({});
-  
+
   const backgroundGraceTimerRef = useRef(null);
   const backgroundGraceActiveRef = useRef(false);
   const liveDataSubscribersRef = useRef(new Set());
@@ -663,6 +670,8 @@ export const MqttProvider = ({ children }) => {
             water_OLvalve: flags.outletValve,
             nutrient_pump: flags.nutrientPump,
             ac_stat: flags.acStatus,
+            led: flags.dimmingLevel > 0,
+            dimming: flags.dimmingLevel,
           };
 
           for (const [actKey, actValue] of Object.entries(bitmaskActuators)) {
@@ -888,7 +897,7 @@ export const MqttProvider = ({ children }) => {
         return false;
       }
 
-      console.log(`⏳ Waiting ${GET_STATUS_RESPONSE_TIMEOUT / 1000}s for response from ${deviceKey}`);
+      // console.log(`⏳ Waiting ${GET_STATUS_RESPONSE_TIMEOUT / 1000}s for response from ${deviceKey}`);
 
       const responseTimer = setTimeout(() => {
         if (statusResponseTimersRef.current[deviceKey] !== responseTimer) {
@@ -964,20 +973,34 @@ export const MqttProvider = ({ children }) => {
 
     const lastRequestTime = lastRequestTimeRef.current[deviceKey] || 0;
     const timeSinceLastRequest = Date.now() - lastRequestTime;
+
+    // Prevent duplicate requests within 3 seconds even if forceRefresh is true
+    if (timeSinceLastRequest < 3000) {
+      console.log(`⏸️ ${deviceKey}: Request throttled (${Math.round(timeSinceLastRequest / 1000)}s since last)`);
+      const cachedData = devicesDataRef.current[deviceKey];
+      return {
+        success: true,
+        data: cachedData || null,
+        fromCache: true,
+      };
+    }
+
     if (timeSinceLastRequest < 5000 && !forceRefresh) {
-      console.log(`⏸️ ${deviceKey}: Request throttled (${Math.round(timeSinceLastRequest/1000)}s since last)`);
+      console.log(`⏸️ ${deviceKey}: Request throttled (${Math.round(timeSinceLastRequest / 1000)}s since last)`);
       const cachedData = devicesDataRef.current[deviceKey];
       if (cachedData?.hasReceivedData) {
-        return { 
-          success: true, 
+        return {
+          success: true,
           data: cachedData,
           fromCache: true,
         };
       }
     }
 
+    lastRequestTimeRef.current[deviceKey] = Date.now();
+
     console.log(`📤 ${deviceKey}: Sending GET_STATUS (forceRefresh: ${forceRefresh}, isInitialLoad: ${isInitialLoad})`);
-    
+
     // Set initial load status
     if (isInitialLoad) {
       setDeviceInitialLoadStatus(prev => ({
@@ -992,16 +1015,16 @@ export const MqttProvider = ({ children }) => {
         setConnectionState('connecting');
       }
     }
-    
+
     const requestPromise = (async () => {
       try {
         lastRequestTimeRef.current[deviceKey] = Date.now();
-        
+
         const success = await requestDeviceStatus(deviceKey, isInitialLoad);
-        
+
         // Wait for response
         await new Promise(resolve => setTimeout(resolve, 1000));
-        
+
         const updatedData = devicesDataRef.current[deviceKey];
 
         if (isInitialLoad) {
@@ -1011,8 +1034,8 @@ export const MqttProvider = ({ children }) => {
           }));
         }
 
-        return { 
-          success, 
+        return {
+          success,
           data: updatedData,
           fromCache: false,
         };
@@ -1029,7 +1052,7 @@ export const MqttProvider = ({ children }) => {
             [deviceKey]: true
           }));
         }
-        
+
         throw error;
       } finally {
         delete pendingRequestsRef.current[deviceKey];
@@ -1056,27 +1079,33 @@ export const MqttProvider = ({ children }) => {
     }
 
     console.log(`📡 Getting status for ${devices.length} devices (forceRefresh: ${forceRefresh}, isInitialLoad: ${isInitialLoad})`);
-    
+
     const devicesToCheck = devices.filter(device => {
       const deviceKey = device.external_key;
       if (!deviceKey) return false;
       if (statusCheckLockRef.current[deviceKey]) return false;
+      // Skip devices that are already confirmed online when not forceRefresh
+      if (!forceRefresh && deviceOnlineStatusRef.current[deviceKey] === true) {
+        return false;
+      }
       return true;
     });
 
     if (devicesToCheck.length === 0) {
       console.log("✅ All devices already have pending checks");
-      return { success: true, results: devices.map(d => ({ 
-        deviceKey: d.external_key, 
-        fromCache: true,
-        success: true,
-        data: devicesDataRef.current[d.external_key]
-      }))};
+      return {
+        success: true, results: devices.map(d => ({
+          deviceKey: d.external_key,
+          fromCache: true,
+          success: true,
+          data: devicesDataRef.current[d.external_key]
+        }))
+      };
     }
 
     const BATCH_SIZE = 3;
     const results = [];
-    
+
     for (let i = 0; i < devicesToCheck.length; i += BATCH_SIZE) {
       const batch = devicesToCheck.slice(i, i + BATCH_SIZE);
       const batchResults = await Promise.allSettled(
@@ -1085,8 +1114,8 @@ export const MqttProvider = ({ children }) => {
       results.push(...batchResults);
     }
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       results: results.map((result, index) => ({
         ...result,
         deviceKey: devicesToCheck[index]?.external_key
@@ -1096,7 +1125,7 @@ export const MqttProvider = ({ children }) => {
 
   // ── Register live-data listener (fires on every processed MQTT message) ──
   const subscribeToLiveData = useCallback((callback) => {
-    if (typeof callback !== "function") return () => {};
+    if (typeof callback !== "function") return () => { };
     liveDataSubscribersRef.current.add(callback);
     console.log(`📡 Subscribed live-data listener (${liveDataSubscribersRef.current.size} total)`);
     return () => {
@@ -1138,52 +1167,52 @@ export const MqttProvider = ({ children }) => {
       // ── Sensors ──
       const sensorLines = [];
       if (parsed.ambientTemperature !== undefined) sensorLines.push(`  🌡  Ambient Temp   : ${parsed.ambientTemperature} °C`);
-      if (parsed.ambientHumidity    !== undefined) sensorLines.push(`  💧  Ambient Humid  : ${parsed.ambientHumidity} %`);
-      if (parsed.waterTemperature   !== undefined) sensorLines.push(`  🌊  Water Temp     : ${parsed.waterTemperature} °C`);
-      if (parsed.co2Level           !== undefined) sensorLines.push(`  🌿  CO₂ Level      : ${parsed.co2Level} ppm`);
-      if (parsed.ecValue            !== undefined) sensorLines.push(`  ⚡  EC Value       : ${parsed.ecValue} mS/cm`);
-      if (parsed.phValue            !== undefined) sensorLines.push(`  🧪  pH Value       : ${parsed.phValue}`);
-      if (parsed.waterLevel         !== undefined) sensorLines.push(`  📏  Water Level    : ${parsed.waterLevel} %`);
-      if (parsed.lightLevel         !== undefined) sensorLines.push(`  ☀️   Light Level    : ${parsed.lightLevel} lux`);
-      if (parsed.soilMoisture       !== undefined) sensorLines.push(`  🌱  Soil Moisture  : ${parsed.soilMoisture} %`);
-      if (parsed.cropId             !== undefined) sensorLines.push(`  🌾  Crop ID        : ${parsed.cropId}`);
+      if (parsed.ambientHumidity !== undefined) sensorLines.push(`  💧  Ambient Humid  : ${parsed.ambientHumidity} %`);
+      if (parsed.waterTemperature !== undefined) sensorLines.push(`  🌊  Water Temp     : ${parsed.waterTemperature} °C`);
+      if (parsed.co2Level !== undefined) sensorLines.push(`  🌿  CO₂ Level      : ${parsed.co2Level} ppm`);
+      if (parsed.ecValue !== undefined) sensorLines.push(`  ⚡  EC Value       : ${parsed.ecValue} mS/cm`);
+      if (parsed.phValue !== undefined) sensorLines.push(`  🧪  pH Value       : ${parsed.phValue}`);
+      if (parsed.waterLevel !== undefined) sensorLines.push(`  📏  Water Level    : ${parsed.waterLevel} %`);
+      if (parsed.lightLevel !== undefined) sensorLines.push(`  ☀️   Light Level    : ${parsed.lightLevel} lux`);
+      if (parsed.soilMoisture !== undefined) sensorLines.push(`  🌱  Soil Moisture  : ${parsed.soilMoisture} %`);
+      if (parsed.cropId !== undefined) sensorLines.push(`  🌾  Crop ID        : ${parsed.cropId}`);
 
       // ── Actuators (from flags or direct keys) ──
       const act = {
-        waterPump:    flags ? flags.waterPump    : parsed.water_pump,
-        inletValve:   flags ? flags.inletValve   : parsed.water_ILvalve,
-        outletValve:  flags ? flags.outletValve  : parsed.water_OLvalve,
+        waterPump: flags ? flags.waterPump : parsed.water_pump,
+        inletValve: flags ? flags.inletValve : parsed.water_ILvalve,
+        outletValve: flags ? flags.outletValve : parsed.water_OLvalve,
         nutrientPump: flags ? flags.nutrientPump : parsed.nutrient_pump,
-        acStatus:     flags ? flags.acStatus     : parsed.ac_stat,
+        acStatus: flags ? flags.acStatus : parsed.ac_stat,
       };
-      const on  = (v) => v === true  ? '🟢 ON ' : v === false ? '🔴 OFF' : '⚪ --';
+      const on = (v) => v === true ? '🟢 ON ' : v === false ? '🔴 OFF' : '⚪ --';
       const actuatorLines = [];
-      if (act.waterPump    !== undefined) actuatorLines.push(`  💧  Water Pump     : ${on(act.waterPump)}`);
+      if (act.waterPump !== undefined) actuatorLines.push(`  💧  Water Pump     : ${on(act.waterPump)}`);
       if (act.nutrientPump !== undefined) actuatorLines.push(`  🌿  Nutrient Pump  : ${on(act.nutrientPump)}`);
-      if (act.inletValve   !== undefined) actuatorLines.push(`  ⬇️   Inlet Valve    : ${on(act.inletValve)}`);
-      if (act.outletValve  !== undefined) actuatorLines.push(`  ⬆️   Outlet Valve   : ${on(act.outletValve)}`);
-      if (act.acStatus     !== undefined) actuatorLines.push(`  ❄️   AC Status      : ${on(act.acStatus)}`);
+      if (act.inletValve !== undefined) actuatorLines.push(`  ⬇️   Inlet Valve    : ${on(act.inletValve)}`);
+      if (act.outletValve !== undefined) actuatorLines.push(`  ⬆️   Outlet Valve   : ${on(act.outletValve)}`);
+      if (act.acStatus !== undefined) actuatorLines.push(`  ❄️   AC Status      : ${on(act.acStatus)}`);
 
       // ── Faults / Alerts ──
       const alertLines = [];
       if (flags) {
-        if (flags.buzzer)        alertLines.push(`  🔔  Buzzer         : ACTIVE`);
-        if (flags.tankLow)       alertLines.push(`  ⬇️   Tank           : LOW`);
-        if (flags.tankHigh)      alertLines.push(`  ⬆️   Tank           : HIGH`);
-        if (flags.ecHigh)        alertLines.push(`  ⬆️   EC             : HIGH`);
-        if (flags.ecLow)         alertLines.push(`  ⬇️   EC             : LOW`);
-        if (flags.phHigh)        alertLines.push(`  ⬆️   pH             : HIGH`);
-        if (flags.phLow)         alertLines.push(`  ⬇️   pH             : LOW`);
-        if (flags.co2High)       alertLines.push(`  ⬆️   CO₂            : HIGH`);
-        if (flags.co2Low)        alertLines.push(`  ⬇️   CO₂            : LOW`);
-        if (flags.luxHigh)       alertLines.push(`  ⬆️   Light          : HIGH`);
-        if (flags.luxLow)        alertLines.push(`  ⬇️   Light          : LOW`);
-        if (flags.airTempHigh)   alertLines.push(`  ⬆️   Air Temp       : HIGH`);
-        if (flags.airTempLow)    alertLines.push(`  ⬇️   Air Temp       : LOW`);
-        if (flags.humidityHigh)  alertLines.push(`  ⬆️   Humidity       : HIGH`);
-        if (flags.humidityLow)   alertLines.push(`  ⬇️   Humidity       : LOW`);
+        if (flags.buzzer) alertLines.push(`  🔔  Buzzer         : ACTIVE`);
+        if (flags.tankLow) alertLines.push(`  ⬇️   Tank           : LOW`);
+        if (flags.tankHigh) alertLines.push(`  ⬆️   Tank           : HIGH`);
+        if (flags.ecHigh) alertLines.push(`  ⬆️   EC             : HIGH`);
+        if (flags.ecLow) alertLines.push(`  ⬇️   EC             : LOW`);
+        if (flags.phHigh) alertLines.push(`  ⬆️   pH             : HIGH`);
+        if (flags.phLow) alertLines.push(`  ⬇️   pH             : LOW`);
+        if (flags.co2High) alertLines.push(`  ⬆️   CO₂            : HIGH`);
+        if (flags.co2Low) alertLines.push(`  ⬇️   CO₂            : LOW`);
+        if (flags.luxHigh) alertLines.push(`  ⬆️   Light          : HIGH`);
+        if (flags.luxLow) alertLines.push(`  ⬇️   Light          : LOW`);
+        if (flags.airTempHigh) alertLines.push(`  ⬆️   Air Temp       : HIGH`);
+        if (flags.airTempLow) alertLines.push(`  ⬇️   Air Temp       : LOW`);
+        if (flags.humidityHigh) alertLines.push(`  ⬆️   Humidity       : HIGH`);
+        if (flags.humidityLow) alertLines.push(`  ⬇️   Humidity       : LOW`);
         if (flags.waterTempHigh) alertLines.push(`  ⬆️   Water Temp     : HIGH`);
-        if (flags.waterTempLow)  alertLines.push(`  ⬇️   Water Temp     : LOW`);
+        if (flags.waterTempLow) alertLines.push(`  ⬇️   Water Temp     : LOW`);
 
         // ── Detailed sensor fault breakdown ────────────────────────────────
         if (flags.sensorFault) {
@@ -1200,14 +1229,14 @@ export const MqttProvider = ({ children }) => {
             return `  ✅  ${label.padEnd(20)}: OK     (${val})`;
           };
 
-          alertLines.push(chk('Ambient Temp',   parsed.ambientTemperature,  -10,  60));
-          alertLines.push(chk('Ambient Humidity',parsed.ambientHumidity,      0, 100));
-          alertLines.push(chk('Water Temp',      parsed.waterTemperature,    -5,  50));
-          alertLines.push(chk('CO₂ Level',       parsed.co2Level,            0, 5000));
-          alertLines.push(chk('EC Value',         parsed.ecValue,             0, 8000));
-          alertLines.push(chk('pH Value',         parsed.phValue,             0,   14));
-          alertLines.push(chk('Water Level',      parsed.waterLevel,          0,  100));
-          alertLines.push(chk('Light Level',      parsed.lightLevel,          0, 200000));
+          alertLines.push(chk('Ambient Temp', parsed.ambientTemperature, -10, 60));
+          alertLines.push(chk('Ambient Humidity', parsed.ambientHumidity, 0, 100));
+          alertLines.push(chk('Water Temp', parsed.waterTemperature, -5, 50));
+          alertLines.push(chk('CO₂ Level', parsed.co2Level, 0, 5000));
+          alertLines.push(chk('EC Value', parsed.ecValue, 0, 8000));
+          alertLines.push(chk('pH Value', parsed.phValue, 0, 14));
+          alertLines.push(chk('Water Level', parsed.waterLevel, 0, 100));
+          alertLines.push(chk('Light Level', parsed.lightLevel, 0, 200000));
         }
 
         // ── SensFlt bitmask breakdown from firmware Sensor_Fault_t ─────────
@@ -1235,10 +1264,10 @@ export const MqttProvider = ({ children }) => {
       }
 
       // ── Mode + dimming ──
-      const modeStr  = flags ? (flags.mode ? '🤖 AUTO' : '🔧 MANUAL') : '—';
-      const dimmStr  = flags ? `${flags.dimmingLevel}%`                : '—';
+      const modeStr = flags ? (flags.mode ? '🤖 AUTO' : '🔧 MANUAL') : '—';
+      const dimmStr = flags ? `${flags.dimmingLevel}%` : '—';
       const onlineStr = flags ? (flags.online ? '🟢 Online' : '🔴 Offline') : '—';
-      const rawHex   = flags ? `0x${(flags.rawStatus >>> 0).toString(16).toUpperCase().padStart(8, '0')}` : '—';
+      const rawHex = flags ? `0x${(flags.rawStatus >>> 0).toString(16).toUpperCase().padStart(8, '0')}` : '—';
 
       console.log(`\n╔══════════════════════════════════════════════╗`);
       console.log(`║  📡 MQTT ${source.padEnd(8)} │ ${ts}        ║`);
@@ -1300,8 +1329,8 @@ export const MqttProvider = ({ children }) => {
     }
 
     const currentSelectedKey = selectedExternalKeyRef.current || externalKeyRef.current || selectedExternalKey || externalKey;
-    const isSelected = !currentSelectedKey || 
-      currentSelectedKey === deviceKey || 
+    const isSelected = !currentSelectedKey ||
+      currentSelectedKey === deviceKey ||
       (typeof currentSelectedKey === 'string' && typeof deviceKey === 'string' && currentSelectedKey.toLowerCase() === deviceKey.toLowerCase());
 
     if (isSelected) {
@@ -1387,7 +1416,7 @@ export const MqttProvider = ({ children }) => {
       console.log(`📦 [DATA TOPIC - BEFORE PARSE] Device: ${deviceKey}`);
       console.log(`📦 RAW PAYLOAD:`, msgStr);
       console.log(`═══════════════════════════════════════════════════════════════\n`);
-      
+
       const parsed = parseSenMLToObject(msgStr);
 
       console.log(`📥 [DATA TOPIC - AFTER PARSE] ${deviceKey} => ${JSON.stringify(parsed)}`);
@@ -1402,7 +1431,7 @@ export const MqttProvider = ({ children }) => {
   const handleStatusResponse = useCallback((deviceKey, msgStr) => {
     try {
       lastRequestTimeRef.current[deviceKey] = Date.now();
-      
+
       let parsed = {};
       let isJsonResponse = false;
 
@@ -1548,7 +1577,7 @@ export const MqttProvider = ({ children }) => {
   // ── quickStatusCheck ──
   const quickStatusCheck = useCallback(async () => {
     console.log("📡 Quick status check for all available devices");
-    
+
     if (!isNetworkAvailable) {
       console.log("⏸️ No network - skipping quick status check");
       return { success: false, reason: 'No network' };
@@ -1576,12 +1605,19 @@ export const MqttProvider = ({ children }) => {
 
       client.on("message", handleIncomingMessage);
 
-      client.on("connect", async () => {
+      let connectTriggered = false;
+      const handleConnect = async () => {
+        if (connectTriggered) {
+          console.log("⏳ Connect handler already triggered, skipping duplicate");
+          return;
+        }
+        connectTriggered = true;
+
         console.log("✅ MQTT Connected (from client.on connect)");
         setIsConnected(true);
-        
+
         const deviceKey = selectedExternalKeyRef.current;
-        
+
         // Set connecting state
         if (deviceKey) {
           setConnectionState('connecting');
@@ -1598,9 +1634,11 @@ export const MqttProvider = ({ children }) => {
         const devices = availableDevicesRef.current || [];
         console.log(`📡 MQTT connected: checking status for ${devices.length} devices in parallel`);
         await getAllDevicesStatusOnce(true, true);
-        
+
         console.log('📡 Initial setup completed');
-      });
+      };
+
+      client.on("connect", handleConnect);
 
       client.on("close", () => {
         if (isMountedRef.current) {
@@ -1616,7 +1654,7 @@ export const MqttProvider = ({ children }) => {
 
       if (client.connected) {
         console.log("✅ Client already connected - triggering connect handler");
-        client.emit('connect');
+        handleConnect();
       }
     } catch (error) {
       console.error('❌ Error in handleMqttConnected:', error);
@@ -1637,24 +1675,24 @@ export const MqttProvider = ({ children }) => {
         if (nextAppState === "background" || nextAppState === "inactive") {
           console.log("⏸️ App entered background");
           setIsAppInBackground(true);
-          
+
           if (appResumeTimeoutRef.current) {
             clearTimeout(appResumeTimeoutRef.current);
             appResumeTimeoutRef.current = null;
           }
-          
+
           appResumeProcessingRef.current = false;
           isResumingRef.current = false;
-          
+
           // Don't reset states, keep showing data
           setConnectionState('idle');
-          
+
           try {
             await disconnectMqtt(true);
           } catch (e) {
             console.log("⚠️ Error disconnecting MQTT on background:", e);
           }
-          
+
           setIsConnected(false);
           console.log("🧹 App backgrounded - MQTT disconnected");
           return;
@@ -1696,7 +1734,7 @@ export const MqttProvider = ({ children }) => {
           appResumeTimeoutRef.current = setTimeout(async () => {
             try {
               console.log("🔄 Re-initializing on resume...");
-              
+
               const deviceKey = selectedExternalKeyRef.current;
               if (!deviceKey) {
                 console.log("⚠️ No device key on resume");
@@ -1750,10 +1788,10 @@ export const MqttProvider = ({ children }) => {
                 isResumingRef.current = false;
                 return;
               }
-              
+
               console.log(`📤 ${deviceKey}: GET_STATUS on app resume`);
               await getDeviceStatusOnce(deviceKey, true, true);
-              
+
             } catch (error) {
               console.error("❌ Error during app resume initialization:", error);
             } finally {
@@ -1798,7 +1836,7 @@ export const MqttProvider = ({ children }) => {
         }
       }));
       setDeviceTimeout(deviceId, 180);
-      
+
       setDeviceCheckingStatus(prev => ({
         ...prev,
         [deviceId]: false
@@ -1929,7 +1967,24 @@ export const MqttProvider = ({ children }) => {
       console.error("Error updating active device:", error);
     }
 
-    // Always send GET_STATUS when selecting a device
+    // If the device is ALREADY confirmed online, do NOT send GET_STATUS
+    const isAlreadyOnline = deviceOnlineStatusRef.current[extKey] === true;
+    if (isAlreadyOnline) {
+      console.log(`✅ ${extKey}: Device is already ONLINE, skipping GET_STATUS on select`);
+      setConnectionState('connected');
+      setDeviceInitialLoadStatus(prev => ({
+        ...prev,
+        [extKey]: false
+      }));
+      setDeviceInitialLoadComplete(prev => ({
+        ...prev,
+        [extKey]: true
+      }));
+      console.log(`✅ Device selected with external key: ${extKey}`);
+      return true;
+    }
+
+    // Only send GET_STATUS if device is not confirmed online
     if (statusCheckLockRef.current[extKey] || pendingRequestsRef.current[extKey]) {
       console.log(`⏳ ${extKey}: Already has pending request, skipping`);
       return true;
@@ -1945,7 +2000,7 @@ export const MqttProvider = ({ children }) => {
       ...prev,
       [extKey]: false
     }));
-    
+
     await getDeviceStatusOnce(extKey, true, true);
 
     console.log(`✅ Device selected with external key: ${extKey}`);
@@ -2061,22 +2116,22 @@ export const MqttProvider = ({ children }) => {
     if (pendingRequestsRef.current[deviceKey]) {
       return true;
     }
-    
+
     return deviceCheckingStatusRef.current[deviceKey] === true;
   }, []);
 
   // ── isDeviceInInitialLoad ──
   const isDeviceInInitialLoad = useCallback((deviceKey) => {
     if (!deviceKey) return false;
-    
+
     if (deviceInitialLoadCompleteRef.current[deviceKey] === true) {
       return false;
     }
-    
+
     if (pendingRequestsRef.current[deviceKey]) {
       return true;
     }
-    
+
     return deviceInitialLoadStatusRef.current[deviceKey] === true;
   }, []);
 
@@ -2307,14 +2362,14 @@ export const MqttProvider = ({ children }) => {
     }
 
     console.log("✅ external_key found, proceeding with MQTT connection");
-    
+
     setIsInitializing(true);
 
     try {
       // Restore cached sensor data ONLY - do NOT mark online/offline from cache
       await restoreAllDevicesData();
       setExternalKey(storedKey);
-      
+
       // Set connecting state - we'll determine online/offline from GET_STATUS response
       setConnectionState('connecting');
       if (devices && devices.length > 0) {
@@ -2342,19 +2397,14 @@ export const MqttProvider = ({ children }) => {
           [storedKey]: false
         }));
       }
-      
+
       await updateMqttPassword(storedKey);
       await cleanupMqtt();
 
       await getMqttClient();
 
       setIsReady(true);
-      
-      // Send GET_STATUS for all devices in parallel after connection is established
-      setTimeout(async () => {
-        console.log("📡 Triggering parallel status check for all devices after initialization");
-        await getAllDevicesStatusOnce(true, true);
-      }, 1000);
+      hasInitializedRef.current = true;
     } catch (error) {
       console.error("❌ Error in MQTT initialization:", error);
       setIsReady(true);
@@ -2375,7 +2425,7 @@ export const MqttProvider = ({ children }) => {
 
       if (cached.devicesData) {
         const restored = {};
-        
+
         for (const [key, dev] of Object.entries(cached.devicesData)) {
           restored[key] = {
             sensorData: dev.sensorData ? {
@@ -2403,7 +2453,7 @@ export const MqttProvider = ({ children }) => {
             isOnline: false, // NEVER set online from cache
           };
         }
-        
+
         setDevicesData(restored);
         console.log("🗂️ Restored sensor data for", Object.keys(restored).length, "devices");
         console.log("📌 NOTE: Online/Offline status will be determined by GET_STATUS response");
@@ -2484,6 +2534,7 @@ export const MqttProvider = ({ children }) => {
 
     isUsingGetStat.current = true;
     getStatStartTime.current = null;
+    hasInitializedRef.current = false;
   };
 
   // ── connectToDevice ──
@@ -2583,9 +2634,9 @@ export const MqttProvider = ({ children }) => {
       if (client && client.connected) {
         setIsConnected(true);
         await subscribeToAllDevices(client);
-        
+
         const result = await getAllDevicesStatusOnce(true, false);
-        
+
         console.log('✅ Force refresh completed');
         return result.success;
       } else {
@@ -2607,7 +2658,7 @@ export const MqttProvider = ({ children }) => {
 
     const previousStatus = devicesData[deviceKey]?.actuatorStatus || {};
     const payload = buildActuatorPayload(status, deviceKey, previousStatus);
-    console.log(`📤 Publishing actuator to /messages/${deviceKey}/actuator`);
+    console.log(`📤 Publishing actuator to /messages/${deviceKey}/actuator:`, JSON.stringify(payload));
     const success = await publish(`/messages/${deviceKey}/actuator`, JSON.stringify(payload));
 
     if (success) {

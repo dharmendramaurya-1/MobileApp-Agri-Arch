@@ -33,6 +33,7 @@ export default function SliderControl({
   maxValue = 100,
   step = 1,
   onChange,
+  onSlidingComplete,
   tintColor = "#2D6A4F",
   thumbColor = "#FFFFFF",
   trackColor = "#E4E7EC",
@@ -70,6 +71,7 @@ export default function SliderControl({
     max,
     step,
     onChange,
+    onSlidingComplete,
     disabled,
     trackWidth,
     low,
@@ -121,7 +123,9 @@ export default function SliderControl({
     if (!s.onChange || s.disabled) return;
     if (s.single) {
       const next = snapValue(s.low + delta * s.step, s.min, s.step);
-      s.onChange(Math.min(Math.max(next, s.min), s.max));
+      const val = Math.min(Math.max(next, s.min), s.max);
+      s.onChange(val);
+      if (s.onSlidingComplete) s.onSlidingComplete(val);
     } else {
       const nextLow = Math.min(
         snapValue(s.low + delta * s.step, s.min, s.step),
@@ -132,6 +136,7 @@ export default function SliderControl({
         s.low
       );
       s.onChange(nextLow, nextHigh);
+      if (s.onSlidingComplete) s.onSlidingComplete(nextLow, nextHigh);
     }
   };
 
@@ -161,10 +166,26 @@ export default function SliderControl({
       },
       onPanResponderMove: (evt) => applyLocation(evt.nativeEvent.locationX),
       onPanResponderRelease: () => {
+        const s = stateRef.current;
+        if (s.onSlidingComplete) {
+          if (s.single) {
+            s.onSlidingComplete(lastEmitRef.current.low ?? s.low);
+          } else {
+            s.onSlidingComplete(lastEmitRef.current.low ?? s.low, lastEmitRef.current.high ?? s.high);
+          }
+        }
         activeRef.current = null;
         setDrag(null);
       },
       onPanResponderTerminate: () => {
+        const s = stateRef.current;
+        if (s.onSlidingComplete) {
+          if (s.single) {
+            s.onSlidingComplete(lastEmitRef.current.low ?? s.low);
+          } else {
+            s.onSlidingComplete(lastEmitRef.current.low ?? s.low, lastEmitRef.current.high ?? s.high);
+          }
+        }
         activeRef.current = null;
         setDrag(null);
       },

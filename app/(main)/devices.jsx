@@ -65,6 +65,7 @@ function DeviceCard({
   const statusLabel = getStatusLabel();
 
   const handleSelect = () => {
+    if (isSelected) return;
     onSelect(device);
   };
 
@@ -125,6 +126,7 @@ function DeviceCard({
         ]}
         activeOpacity={0.85}
         onPress={handleSelect}
+        delayPressIn={120}
       >
         <View style={styles.cardBody}>
           {/* Checkbox */}
@@ -138,6 +140,7 @@ function DeviceCard({
             ]}
             onPress={handleSelect}
             activeOpacity={0.7}
+            delayPressIn={120}
           >
             {isSelected && (
               <Ionicons name="checkmark" size={16} color="#FFF" />
@@ -398,10 +401,6 @@ export default function Devices() {
             }
           }
         }
-
-        setTimeout(() => {
-          quickStatusCheck();
-        }, 1500);
       } else {
         setRegisteredDevices([]);
         setSelectedDevice(null);
@@ -423,6 +422,11 @@ export default function Devices() {
   const handleSelectDevice = async (device) => {
     const key = device.external_key || device.id;
     if (!key) return;
+
+    if (selectedDevice?.id === device.id) {
+      router.replace("/(main)/dashboard");
+      return;
+    }
 
     try {
       setSelectedDevice(device);
@@ -506,11 +510,14 @@ export default function Devices() {
   // ── Refresh ──
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadDevices();
-
-    setTimeout(() => {
-      quickStatusCheck();
-    }, 1500);
+    try {
+      await loadDevices();
+      await quickStatusCheck();
+    } catch (err) {
+      console.error("Refresh error:", err);
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const openAddWizard = () => setShowAddWizard(true);

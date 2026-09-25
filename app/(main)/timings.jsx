@@ -359,11 +359,31 @@ export default function TimingsScreen() {
     getSelectedDeviceName,
     getSelectedDeviceTimings,
     publishTimings,
+    isConnected,
+    deviceOnlineStatus,
+    deviceInitialLoadComplete,
   } = useMqtt();
 
   const deviceKey = selectedExternalKey || externalKey;
   const selectedDeviceName = getSelectedDeviceName();
   const currentDeviceTimings = getSelectedDeviceTimings();
+
+  // ── Stable device online / offline status ──
+  const isDeviceOnline = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceOnlineStatus[deviceKey] === true;
+  }, [deviceKey, deviceOnlineStatus]);
+
+  const isInitialLoadComplete = useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceInitialLoadComplete[deviceKey] === true;
+  }, [deviceKey, deviceInitialLoadComplete]);
+
+  const isOffline = useMemo(() => {
+    return !isConnected || (isInitialLoadComplete && !isDeviceOnline);
+  }, [isConnected, isInitialLoadComplete, isDeviceOnline]);
+
+  const canPublish = isConnected && isDeviceOnline;
 
   const [timings, setTimings] = useState(() => ({
     ...DEFAULT_TIMINGS,
@@ -405,6 +425,14 @@ export default function TimingsScreen() {
   const handleSaveAndPublish = async () => {
     if (!deviceKey) {
       Alert.alert('Error', 'No device selected.');
+      return;
+    }
+
+    if (!canPublish) {
+      Alert.alert(
+        'Device Offline',
+        'Cannot publish timings while device is offline. Your changes are kept locally, but cannot be sent to the device until it reconnects.'
+      );
       return;
     }
 
@@ -468,8 +496,15 @@ export default function TimingsScreen() {
           <View style={styles.heroTopRow}>
             <View style={{ flex: 1 }}>
               <View style={styles.heroTagRow}>
-                <View style={styles.heroLiveDot} />
-                <Text style={styles.heroTagText}>FIRMWARE TIMING ENGINE</Text>
+                <View
+                  style={[
+                    styles.heroLiveDot,
+                    { backgroundColor: canPublish ? '#69F0AE' : '#FF5252' },
+                  ]}
+                />
+                <Text style={styles.heroTagText}>
+                  {canPublish ? 'FIRMWARE TIMING ENGINE' : 'OFFLINE • TIMINGS LOCAL ONLY'}
+                </Text>
               </View>
               <Text style={styles.heroTitle}>System Duty Cycles</Text>
               <Text style={styles.heroSub}>
@@ -673,22 +708,29 @@ export default function TimingsScreen() {
           <TouchableOpacity
             style={[
               styles.saveBtn,
-              hasChanges && styles.saveBtnHighlighted,
-              { opacity: isSaving ? 0.7 : 1 },
+              hasChanges && canPublish && styles.saveBtnHighlighted,
+              !canPublish && styles.saveBtnDisabled,
+              { opacity: isSaving ? 0.7 : !canPublish ? 0.65 : 1 },
             ]}
             onPress={handleSaveAndPublish}
-            disabled={isSaving}
+            disabled={!canPublish || isSaving}
             activeOpacity={0.8}
           >
             {isSaving ? (
               <ActivityIndicator color="#FFFFFF" size="small" />
             ) : (
               <>
-                <Ionicons name="cloud-upload" size={18} color="#FFFFFF" />
+                <Ionicons
+                  name={!canPublish ? 'lock-closed-outline' : 'cloud-upload'}
+                  size={18}
+                  color="#FFFFFF"
+                />
                 <Text style={styles.saveBtnText}>
-                  {hasChanges ? 'Save Changes to Device' : 'Publish Timings to Device'}
+                  {!canPublish
+                    ? (!isConnected ? 'Offline — No Connection' : 'Device Offline — Cannot Publish')
+                    : (hasChanges ? 'Save Changes to Device' : 'Publish Timings to Device')}
                 </Text>
-                {hasChanges && (
+                {hasChanges && canPublish && (
                   <View style={styles.unsavedDotBadge}>
                     <Text style={styles.unsavedDotText}>1</Text>
                   </View>
@@ -696,6 +738,28 @@ export default function TimingsScreen() {
               </>
             )}
           </TouchableOpacity>
+
+          {!canPublish && (
+            <View
+              style={[
+                styles.offlineNoticeCard,
+                {
+                  backgroundColor: theme.dark ? 'rgba(244, 67, 54, 0.12)' : '#FFEBEE',
+                  borderColor: theme.dark ? 'rgba(244, 67, 54, 0.3)' : '#FFCDD2',
+                },
+              ]}
+            >
+              <Ionicons name="cloud-offline-outline" size={18} color="#D32F2F" />
+              <Text
+                style={[
+                  styles.offlineNoticeText,
+                  { color: theme.dark ? '#FF8A80' : '#C62828' },
+                ]}
+              >
+                Device is offline. You can adjust and preview timings, but publishing to the device is disabled until connection is restored.
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={{ height: 40 }} />
@@ -967,6 +1031,26 @@ const styles = StyleSheet.create({
   },
   saveBtnHighlighted: {
     backgroundColor: '#1B5E20',
+  },
+  saveBtnDisabled: {
+    backgroundColor: '#9E9E9E',
+    elevation: 0,
+    shadowOpacity: 0,
+  },
+  offlineNoticeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 10,
+  },
+  offlineNoticeText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '500',
   },
   saveBtnText: {
     color: '#FFFFFF',

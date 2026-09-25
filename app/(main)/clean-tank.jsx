@@ -4,6 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import React, { useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Dimensions,
   Modal,
   ScrollView,
@@ -27,6 +28,7 @@ function CenteredCleanTankModal({
   onClose,
   onConfirm,
   isProcessing,
+  canPublish = true,
   theme,
 }) {
   const cardBg = theme.colors.surface || '#FFFFFF';
@@ -128,9 +130,13 @@ function CenteredCleanTankModal({
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.modalConfirmBtn, { backgroundColor: primaryColor }]}
+              style={[
+                styles.modalConfirmBtn,
+                { backgroundColor: !canPublish ? '#9E9E9E' : primaryColor },
+                !canPublish && { opacity: 0.6 },
+              ]}
               onPress={onConfirm}
-              disabled={isProcessing}
+              disabled={isProcessing || !canPublish}
               activeOpacity={0.8}
             >
               {isProcessing ? (
@@ -138,12 +144,12 @@ function CenteredCleanTankModal({
               ) : (
                 <>
                   <Ionicons
-                    name={isStopping ? 'stop' : 'play'}
+                    name={!canPublish ? 'lock-closed' : isStopping ? 'stop' : 'play'}
                     size={16}
                     color="#FFFFFF"
                   />
                   <Text style={styles.modalConfirmText}>
-                    {isStopping ? 'Stop Cycle' : 'Confirm & Start'}
+                    {!canPublish ? 'Device Offline' : isStopping ? 'Stop Cycle' : 'Confirm & Start'}
                   </Text>
                 </>
               )}
@@ -165,6 +171,9 @@ export default function CleanTankScreen() {
     selectedExternalKey,
     externalKey,
     getSelectedDeviceName,
+    isConnected,
+    deviceOnlineStatus,
+    deviceInitialLoadComplete,
   } = useMqtt();
 
   const {
@@ -185,13 +194,47 @@ export default function CleanTankScreen() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
 
+  const deviceKey = selectedExternalKey || externalKey;
+
+  // ── Stable device online / offline status ──
+  const isDeviceOnline = React.useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceOnlineStatus[deviceKey] === true;
+  }, [deviceKey, deviceOnlineStatus]);
+
+  const isInitialLoadComplete = React.useMemo(() => {
+    if (!deviceKey) return false;
+    return deviceInitialLoadComplete[deviceKey] === true;
+  }, [deviceKey, deviceInitialLoadComplete]);
+
+  const isOffline = React.useMemo(() => {
+    return !isConnected || (isInitialLoadComplete && !isDeviceOnline);
+  }, [isConnected, isInitialLoadComplete, isDeviceOnline]);
+
+  const canPublish = isConnected && isDeviceOnline;
+
   const levelVal = currentLevel !== null && currentLevel !== undefined ? Math.round(currentLevel) : null;
 
   const handleOpenModal = () => {
+    if (!canPublish) {
+      Alert.alert(
+        'Device Offline',
+        'Cannot start or stop clean tank cycle while device is offline. Please ensure connection is restored and try again.'
+      );
+      return;
+    }
     setModalVisible(true);
   };
 
   const handleConfirmAction = async () => {
+    if (!canPublish) {
+      Alert.alert(
+        'Device Offline',
+        'Cannot publish clean tank commands while device is offline.'
+      );
+      setModalVisible(false);
+      return;
+    }
     setIsProcessing(true);
     try {
       if (cleanTankActive) {
@@ -325,9 +368,18 @@ export default function CleanTankScreen() {
           <View style={styles.heroTopRow}>
             <View style={{ flex: 1 }}>
               <View style={styles.heroTagRow}>
-                <View style={[styles.heroLiveDot, { backgroundColor: cleanTankActive ? '#FFCA28' : '#69F0AE' }]} />
+                <View
+                  style={[
+                    styles.heroLiveDot,
+                    { backgroundColor: !canPublish ? '#FF5252' : cleanTankActive ? '#FFCA28' : '#69F0AE' },
+                  ]}
+                />
                 <Text style={styles.heroTagText}>
-                  {cleanTankActive ? 'AUTO CLEAN IN PROGRESS' : 'RESERVOIR HYGIENE SYSTEM'}
+                  {!canPublish
+                    ? 'DEVICE OFFLINE • HYGIENE SYSTEM'
+                    : cleanTankActive
+                      ? 'AUTO CLEAN IN PROGRESS'
+                      : 'RESERVOIR HYGIENE SYSTEM'}
                 </Text>
               </View>
               <Text style={styles.heroTitle}>Clean Tank Engine</Text>
@@ -572,10 +624,12 @@ export default function CleanTankScreen() {
         <TouchableOpacity
           style={[
             styles.actionButton,
-            { backgroundColor: cleanTankActive ? '#D32F2F' : '#2E7D32' },
+            { backgroundColor: !canPublish ? '#9E9E9E' : cleanTankActive ? '#D32F2F' : '#2E7D32' },
+            !canPublish && styles.actionButtonDisabled,
+            { opacity: isProcessing ? 0.7 : !canPublish ? 0.65 : 1 },
           ]}
           onPress={handleOpenModal}
-          disabled={isProcessing}
+          disabled={!canPublish || isProcessing}
           activeOpacity={0.85}
         >
           {isProcessing ? (
@@ -583,16 +637,40 @@ export default function CleanTankScreen() {
           ) : (
             <>
               <Ionicons
-                name={cleanTankActive ? 'stop-circle-outline' : 'play-circle-outline'}
+                name={!canPublish ? 'lock-closed-outline' : cleanTankActive ? 'stop-circle-outline' : 'play-circle-outline'}
                 size={22}
                 color="#FFFFFF"
               />
               <Text style={styles.actionButtonText}>
-                {cleanTankActive ? 'Stop Clean Tank Cycle' : 'Start Auto Clean Cycle'}
+                {!canPublish
+                  ? (!isConnected ? 'Offline — Reconnecting...' : 'Device Offline — Cannot Start Cycle')
+                  : (cleanTankActive ? 'Stop Clean Tank Cycle' : 'Start Auto Clean Cycle')}
               </Text>
             </>
           )}
         </TouchableOpacity>
+
+        {!canPublish && (
+          <View
+            style={[
+              styles.offlineNoticeCard,
+              {
+                backgroundColor: theme.dark ? 'rgba(244, 67, 54, 0.12)' : '#FFEBEE',
+                borderColor: theme.dark ? 'rgba(244, 67, 54, 0.3)' : '#FFCDD2',
+              },
+            ]}
+          >
+            <Ionicons name="cloud-offline-outline" size={18} color="#D32F2F" />
+            <Text
+              style={[
+                styles.offlineNoticeText,
+                { color: theme.dark ? '#FF8A80' : '#C62828' },
+              ]}
+            >
+              Device is offline. Clean tank automated cycle cannot be initiated until connection is restored.
+            </Text>
+          </View>
+        )}
 
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -604,6 +682,7 @@ export default function CleanTankScreen() {
         onClose={() => setModalVisible(false)}
         onConfirm={handleConfirmAction}
         isProcessing={isProcessing}
+        canPublish={canPublish}
         theme={theme}
       />
     </View>
@@ -990,6 +1069,26 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowOffset: { width: 0, height: 3 },
     shadowRadius: 6,
+  },
+  actionButtonDisabled: {
+    backgroundColor: '#9E9E9E',
+    elevation: 0,
+    shadowOpacity: 0,
+  },
+  offlineNoticeCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 10,
+  },
+  offlineNoticeText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '500',
   },
   actionButtonText: {
     color: '#FFFFFF',

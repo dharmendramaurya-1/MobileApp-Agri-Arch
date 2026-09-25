@@ -39,6 +39,7 @@ export const TankSafetyProvider = ({ children }) => {
     publishActuatorStatus,
     publishCleanTank,
     isConnected,
+    deviceOnlineStatus,
   } = useMqtt();
 
   const { isManualMode } = useSystemMode();
@@ -105,6 +106,12 @@ export const TankSafetyProvider = ({ children }) => {
   const startCleanTank = useCallback(async () => {
     if (!deviceKey) {
       Alert.alert('Error', 'No device selected');
+      return false;
+    }
+
+    const isOnline = isConnected && deviceOnlineStatus?.[deviceKey] === true;
+    if (!isOnline) {
+      Alert.alert('Device Offline', 'Cannot start clean tank cycle while device is offline.');
       return false;
     }
 
