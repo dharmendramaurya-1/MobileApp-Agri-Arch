@@ -228,10 +228,10 @@ export const TankSafetyProvider = ({ children }) => {
     }
   }, [cleanTankActive, cleanTankPhase, currentLevel, isPumpOn, deviceKey, sendActuatorUpdate, publishCleanTank]);
 
-  // ── 3-Minute Inflow Monitoring Loop (Applies to Clean Tank & Regular Inlet Open) ──
+  // ── 3-Minute Inflow Monitoring Loop (Applies ONLY during Clean Tank) ──
   useEffect(() => {
-    // We monitor whenever Inlet Valve is OPEN
-    if (!isInletOpen) {
+    // We only monitor inflow during Clean Tank
+    if (!cleanTankActive || !isInletOpen) {
       if (inflowCheckIntervalRef.current) {
         clearInterval(inflowCheckIntervalRef.current);
         inflowCheckIntervalRef.current = null;
@@ -319,33 +319,22 @@ export const TankSafetyProvider = ({ children }) => {
   useEffect(() => {
     if (currentLevel === null || currentLevel === undefined) return;
 
-    // 1. INLET VALVE: If level >= 90%, close inlet valve
-    if (isInletOpen && currentLevel >= 90) {
-      console.log(`🌊 Tank Level is ${currentLevel}% (>= 90%). Auto-closing Inlet Valve.`);
-      sendActuatorUpdate({ water_ILvalve: false });
-      setSafetyAlert('Tank full (>= 90%). Inlet valve closed automatically.');
-    }
-
-    // 2. OUTLET VALVE:
-    // In Manual Mode: If level < 15%, auto-close outlet valve
-    // In Clean Tank: Cutoff is 5%
-    if (isOutletOpen) {
-      const minSafeLevel = cleanTankActive ? 5 : 15;
-      if (currentLevel < minSafeLevel) {
-        console.log(`🌊 Outlet Valve Cutoff: Level is ${currentLevel}% (< ${minSafeLevel}%). Closing Outlet Valve.`);
+    // 1. CLEAN TANK PROTECTIONS
+    if (cleanTankActive) {
+      if (isOutletOpen && currentLevel < 5) {
+        console.log(`🚰 [CleanTank] Level is ${currentLevel}% (< 5%). Closing Outlet Valve.`);
         sendActuatorUpdate({ water_OLvalve: false });
-        if (!cleanTankActive) {
-          Alert.alert(
-            '⚠️ Outlet Valve Closed',
-            `Tank water level dropped below 15% (${currentLevel}%). Outlet valve closed automatically to protect system.`
-          );
-        }
       }
+      if (isInletOpen && currentLevel >= 90) {
+        console.log(`🚰 [CleanTank] Tank full (>= 90%). Closing Inlet Valve.`);
+        sendActuatorUpdate({ water_ILvalve: false });
+      }
+      return;
     }
 
-    // 3. AUTO MODE INLET VALVE AUTOMATION (When not in clean tank):
-    if (!isManualMode && !cleanTankActive) {
-      // "In auto mode the system will open the inlet valve when ever the water fall below 15% and will stop after it crosses 90%"
+    // 2. AUTO MODE INLET VALVE AUTOMATION:
+    if (!isManualMode) {
+      // In auto mode: open inlet valve when water falls below 15%, stop after it crosses 90%
       if (currentLevel < 15 && !isInletOpen) {
         console.log(`🤖 [AutoMode] Tank Level is ${currentLevel}% (< 15%). Opening Inlet Valve.`);
         sendActuatorUpdate({ water_ILvalve: true });
@@ -354,6 +343,7 @@ export const TankSafetyProvider = ({ children }) => {
         sendActuatorUpdate({ water_ILvalve: false });
       }
     }
+    // In MANUAL mode: No automatic overrides — the user has full manual control to turn all devices ON or OFF.
   }, [currentLevel, isInletOpen, isOutletOpen, cleanTankActive, isManualMode, sendActuatorUpdate]);
 
   const clearSafetyAlert = () => setSafetyAlert(null);

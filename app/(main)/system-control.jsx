@@ -423,7 +423,7 @@ export default function SystemControl() {
   const cropSettings = getSelectedDeviceCropSettings();
   const selectedDeviceName = getSelectedDeviceName();
   const { isManualMode, toggleMode } = useSystemMode();
-  const { cleanTankActive, currentLevel, canOpenOutletValve, canOpenInletValve } = useTankSafety();
+  const { cleanTankActive, currentLevel } = useTankSafety();
 
   const [toggleTimes, setToggleTimes] = useState({});
   const publishTimerRef = useRef(null);
@@ -737,31 +737,7 @@ export default function SystemControl() {
                     );
                     return;
                   }
-                  if (Object.prototype.hasOwnProperty.call(pendingActuatorValuesRef.current, d.actuatorKey)) {
-                    return;
-                  }
                   const newVal = nextValue ?? !d.vb;
-
-                  // ── Valve Safety Guards ──
-                  if (d.actuatorKey === "water_OLvalve" && newVal === true) {
-                    if (!canOpenOutletValve()) {
-                      Alert.alert(
-                        "⚠️ Low Water Level",
-                        `Cannot open Outlet Valve: Tank water level is below safe limit (${currentLevel !== null ? Math.round(currentLevel) + "%" : "low"}). Operating below 15% is prohibited in Manual mode for equipment safety.`
-                      );
-                      return;
-                    }
-                  }
-
-                  if (d.actuatorKey === "water_ILvalve" && newVal === true) {
-                    if (!canOpenInletValve()) {
-                      Alert.alert(
-                        "⚠️ Tank Full",
-                        `Cannot open Inlet Valve: Tank is already full (${currentLevel !== null ? Math.round(currentLevel) + "%" : "90%+"}).`
-                      );
-                      return;
-                    }
-                  }
 
                   const nextPending = {
                     ...pendingActuatorValuesRef.current,
