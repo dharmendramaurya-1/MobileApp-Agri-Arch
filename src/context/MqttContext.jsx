@@ -158,8 +158,15 @@ const STORAGE_KEYS = {
 };
 
 // ── Constants ──
-const GET_STATUS_RESPONSE_TIMEOUT = 4 * 1000;
-const OFFLINE_GRACE_PERIOD = 120 * 1000;
+// Timer 1: GET_STATUS response watchdog (1 minute)
+const GET_STATUS_RESPONSE_TIMEOUT = 60 * 1000;
+
+// Timer 2: DATA topic periodic watchdog (3 min interval + 2 min buffer = 5 minutes)
+const DATA_TOPIC_INTERVAL = 3 * 60 * 1000;
+const DATA_TOPIC_GRACE_PERIOD = 2 * 60 * 1000;
+const DATA_TOPIC_TIMEOUT = DATA_TOPIC_INTERVAL + DATA_TOPIC_GRACE_PERIOD;
+const OFFLINE_GRACE_PERIOD = DATA_TOPIC_GRACE_PERIOD;
+
 const STATUS_UPDATE_DELAY = 0;
 const APP_RESUME_DELAY = 800;
 const MAX_RESUME_WAIT_ATTEMPTS = 30;
@@ -501,18 +508,7 @@ export const MqttProvider = ({ children }) => {
         setIsNetworkAvailable(connected);
 
         if (connected) {
-          console.log('✅ Internet restored - forcing fresh data request');
-          const selKey = selectedExternalKeyRef.current;
-          if (selKey) {
-            setTimeout(async () => {
-              if (statusCheckLockRef.current[selKey]) {
-                console.log(`⏳ ${selKey}: check already in flight, skipping network-restore check`);
-                return;
-              }
-              console.log(`📡 Requesting fresh status for ${selKey} after network restore`);
-              await getDeviceStatusOnce(selKey, true, false);
-            }, 30000);
-          }
+          console.log('✅ Internet restored');
         } else {
           console.log('⚠️ Internet lost - waiting for restore');
         }
@@ -546,7 +542,8 @@ export const MqttProvider = ({ children }) => {
   const markDeviceOnline = useCallback((deviceKey, immediate = false) => {
     if (!deviceKey) return;
 
-    clearAllTimersForDevice(deviceKey);
+    // Clear status response timer (Timer 1)
+    clearStatusResponseTimer(deviceKey);
 
     setDeviceCheckingStatus(prev => {
       if (prev[deviceKey] === false) return prev;
@@ -575,7 +572,7 @@ export const MqttProvider = ({ children }) => {
     }
 
     console.log(`🟢 Device ${deviceKey} is ONLINE`);
-  }, [clearAllTimersForDevice, updateDeviceOnlineStatus]);
+  }, [clearStatusResponseTimer, updateDeviceOnlineStatus]);
 
   // ── markDeviceOffline ──
   const markDeviceOffline = useCallback((deviceKey) => {
@@ -614,6 +611,33 @@ export const MqttProvider = ({ children }) => {
 
     console.log(`🔴 Device ${deviceKey} is OFFLINE`);
   }, [clearAllTimersForDevice]);
+
+  // ── Helper: Schedule/Reset Timer 2 (Data Topic Watchdog: 3 min interval + 2 min buffer) ──
+  const scheduleDataTopicTimeout = useCallback((deviceKey) => {
+    if (!deviceKey) return;
+
+    if (dataTimeoutTimersRef.current[deviceKey]) {
+      clearTimeout(dataTimeoutTimersRef.current[deviceKey]);
+      delete dataTimeoutTimersRef.current[deviceKey];
+    }
+
+    console.log(`⏱️ [${deviceKey}] Started Timer 2 (Data Watchdog): ${DATA_TOPIC_TIMEOUT / 1000}s (3 min + 2 min buffer)`);
+
+    const timer = setTimeout(() => {
+      if (dataTimeoutTimersRef.current[deviceKey] !== timer) {
+        return;
+      }
+      delete dataTimeoutTimersRef.current[deviceKey];
+
+      const lastDataTime = lastDataReceivedTimePerDevice.current[deviceKey] || lastOnlineTimePerDevice.current[deviceKey] || 0;
+      const elapsed = Date.now() - lastDataTime;
+
+      console.warn(`⏰ [${deviceKey}] No /data received for ${Math.round(elapsed / 1000)}s (exceeded ${DATA_TOPIC_TIMEOUT / 1000}s). Marking OFFLINE.`);
+      markDeviceOffline(deviceKey);
+    }, DATA_TOPIC_TIMEOUT);
+
+    dataTimeoutTimersRef.current[deviceKey] = timer;
+  }, [markDeviceOffline]);
 
   // ── updateDeviceData (only for sensor data, NOT for status) ──
   const updateDeviceData = useCallback((deviceKey, parsed) => {
@@ -897,15 +921,15 @@ export const MqttProvider = ({ children }) => {
         return false;
       }
 
-      // console.log(`⏳ Waiting ${GET_STATUS_RESPONSE_TIMEOUT / 1000}s for response from ${deviceKey}`);
+      console.log(`⏳ [${deviceKey}] Started Timer 1 (Status Watchdog): waiting up to ${GET_STATUS_RESPONSE_TIMEOUT / 1000}s for /get_stat response`);
 
       const responseTimer = setTimeout(() => {
         if (statusResponseTimersRef.current[deviceKey] !== responseTimer) {
-          console.log(`⏰ Timer for ${deviceKey} already cleared, ignoring timeout`);
+          console.log(`⏰ Timer 1 for ${deviceKey} already cleared, ignoring timeout`);
           return;
         }
 
-        console.log(`❌ No response from ${deviceKey} within ${GET_STATUS_RESPONSE_TIMEOUT / 1000}s`);
+        console.log(`❌ [${deviceKey}] No response to GET_STATUS within ${GET_STATUS_RESPONSE_TIMEOUT / 1000}s. Marking OFFLINE.`);
         delete statusResponseTimersRef.current[deviceKey];
         delete pendingRequestIds.current[deviceKey];
         delete statusCheckLockRef.current[deviceKey];
@@ -1310,14 +1334,13 @@ export const MqttProvider = ({ children }) => {
     // Any live message (data OR status response) proves the device is
     // online — mark it online so the UI never gets stuck on "Connecting..."
     markDeviceOnline(deviceKey, true);
+    clearStatusResponseTimer(deviceKey);
     delete pendingRequestIds.current[deviceKey];
     delete statusCheckLockRef.current[deviceKey];
 
-    // Clear the timeout timer
-    if (statusResponseTimersRef.current[deviceKey]) {
-      clearTimeout(statusResponseTimersRef.current[deviceKey]);
-      delete statusResponseTimersRef.current[deviceKey];
-    }
+    // Record last data received timestamp and schedule Timer 2 (Data Watchdog: 3 min interval + 2 min buffer)
+    lastDataReceivedTimePerDevice.current[deviceKey] = Date.now();
+    scheduleDataTopicTimeout(deviceKey);
 
     let isOnline = false;
     if (parsed.deviceStatus !== undefined && parsed.deviceStatus !== null) {
@@ -1404,7 +1427,7 @@ export const MqttProvider = ({ children }) => {
     } catch (notifyError) {
       console.error("❌ Error notifying live-data listeners:", notifyError);
     }
-  }, [clearAllTimersForDevice, markDeviceOnline, updateDeviceData, updateLegacyState]);
+  }, [clearAllTimersForDevice, clearStatusResponseTimer, markDeviceOnline, scheduleDataTopicTimeout, updateDeviceData, updateLegacyState]);
 
   // ── handleDataMessage ──
   const handleDataMessage = useCallback((deviceKey, msgStr) => {
@@ -1483,8 +1506,8 @@ export const MqttProvider = ({ children }) => {
     const deviceKey = topicParts[2];
     const topicType = topicParts[3] || '';
 
-    if (topicType === 'status') {
-      console.log(`📡 Processing status response for ${deviceKey}`);
+    if (topicType === 'status' || topicType === 'get_stat') {
+      console.log(`📡 Processing status response for ${deviceKey} (from topic: ${topicType})`);
       handleStatusResponse(deviceKey, msgStr);
       return;
     }
@@ -1781,16 +1804,15 @@ export const MqttProvider = ({ children }) => {
                 }
               }
 
-              // Send GET_STATUS for fresh data
-              if (statusCheckLockRef.current[deviceKey] || pendingRequestsRef.current[deviceKey]) {
-                console.log(`⏳ ${deviceKey}: Already has pending request, skipping`);
-                appResumeProcessingRef.current = false;
-                isResumingRef.current = false;
-                return;
+              // Send GET_STATUS for fresh data on app resume
+              const devices = availableDevicesRef.current || [];
+              if (devices.length > 0) {
+                console.log(`📤 App resume: checking status for ${devices.length} devices via GET_STATUS`);
+                await getAllDevicesStatusOnce(true, true);
+              } else if (deviceKey) {
+                console.log(`📤 ${deviceKey}: GET_STATUS on app resume`);
+                await getDeviceStatusOnce(deviceKey, true, true);
               }
-
-              console.log(`📤 ${deviceKey}: GET_STATUS on app resume`);
-              await getDeviceStatusOnce(deviceKey, true, true);
 
             } catch (error) {
               console.error("❌ Error during app resume initialization:", error);
@@ -1967,43 +1989,19 @@ export const MqttProvider = ({ children }) => {
       console.error("Error updating active device:", error);
     }
 
-    // If the device is ALREADY confirmed online, do NOT send GET_STATUS
-    const isAlreadyOnline = deviceOnlineStatusRef.current[extKey] === true;
-    if (isAlreadyOnline) {
-      console.log(`✅ ${extKey}: Device is already ONLINE, skipping GET_STATUS on select`);
-      setConnectionState('connected');
-      setDeviceInitialLoadStatus(prev => ({
-        ...prev,
-        [extKey]: false
-      }));
-      setDeviceInitialLoadComplete(prev => ({
-        ...prev,
-        [extKey]: true
-      }));
-      console.log(`✅ Device selected with external key: ${extKey}`);
-      return true;
-    }
-
-    // Only send GET_STATUS if device is not confirmed online
-    if (statusCheckLockRef.current[extKey] || pendingRequestsRef.current[extKey]) {
-      console.log(`⏳ ${extKey}: Already has pending request, skipping`);
-      return true;
-    }
-
-    console.log(`📡 Sending GET_STATUS for selected device: ${extKey}`);
-    setConnectionState('connecting');
+    // ── Select Device: Never send unsolicited GET_STATUS here ──
+    // Status is determined strictly by app load/reload/resume and periodic data topic watchdog.
+    const isOnline = deviceOnlineStatusRef.current[extKey] === true;
+    setConnectionState(isOnline ? 'online' : 'offline');
     setDeviceInitialLoadStatus(prev => ({
-      ...prev,
-      [extKey]: true
-    }));
-    setDeviceInitialLoadComplete(prev => ({
       ...prev,
       [extKey]: false
     }));
-
-    await getDeviceStatusOnce(extKey, true, true);
-
-    console.log(`✅ Device selected with external key: ${extKey}`);
+    setDeviceInitialLoadComplete(prev => ({
+      ...prev,
+      [extKey]: true
+    }));
+    console.log(`✅ Device selected with external key: ${extKey} (status: ${isOnline ? 'ONLINE' : 'OFFLINE'})`);
     return true;
   };
 
