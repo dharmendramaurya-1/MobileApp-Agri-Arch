@@ -1,18 +1,6 @@
 // components/SettingsSlider.jsx
-// Dual-thumb range slider / single-thumb slider built on React Native's core
-// PanResponder — zero extra dependencies, works on iOS, Android and web.
-//
-// Range mode: <SliderControl min max minValue maxValue onChange={(low, high) => ...} />
-// Single mode: <SliderControl single min max minValue={value} onChange={(v) => ...} />
-//
-// Dragging is smooth and deterministic:
-//  - The WHOLE track claims the touch on touch-down, so the parent ScrollView
-//    can never steal the drag and the grabbed thumb follows the finger.
-//  - Touching the LEFT half of the track always drags MIN; the RIGHT half
-//    always drags MAX (the boundary is the midpoint between the thumbs), so
-//    dragging one thumb NEVER moves the other.
-//  - min may be dragged up to equal max (and vice versa), but never past it.
-import React, { useRef, useState } from "react";
+
+import { useRef, useState } from "react";
 import { PanResponder, StyleSheet, Text, View } from "react-native";
 
 const THUMB_SIZE = 26;

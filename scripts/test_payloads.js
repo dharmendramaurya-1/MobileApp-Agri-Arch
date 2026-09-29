@@ -100,13 +100,15 @@ function buildTimingsPayload(timings = {}) {
     { n: "NP_OT", v: t("NP_OT", 10) },
     { n: "pHPU_ONT", v: t("pHPU_ONT", 5) },
     { n: "pHPD_ONT", v: t("pHPD_ONT", 5) },
+    { n: "LPP_OT", v: t("LPP_OT", 43200) },
+    { n: "LLP_DI", v: t("LLP_DI", t("LPP_DI", 43200)) },
   ];
 }
 
 const defaultTimingsPayload = buildTimingsPayload();
 console.log("Default Timings payload:", JSON.stringify(defaultTimingsPayload));
 
-const expectedPayload = [{"n":"ECA_DI","v":3600},{"n":"ECAP_OT","v":10},{"n":"WPONT","v":120},{"n":"WPINT","v":900},{"n":"ECB_DI","v":3600},{"n":"ECBP_OT","v":10},{"n":"NP_DI","v":3600},{"n":"NP_OT","v":10},{"n":"pHPU_ONT","v":5},{"n":"pHPD_ONT","v":5}];
+const expectedPayload = [{"n":"ECA_DI","v":3600},{"n":"ECAP_OT","v":10},{"n":"WPONT","v":120},{"n":"WPINT","v":900},{"n":"ECB_DI","v":3600},{"n":"ECBP_OT","v":10},{"n":"NP_DI","v":3600},{"n":"NP_OT","v":10},{"n":"pHPU_ONT","v":5},{"n":"pHPD_ONT","v":5},{"n":"LPP_OT","v":43200},{"n":"LLP_DI","v":43200}];
 
 assert.deepStrictEqual(defaultTimingsPayload, expectedPayload, "Timings payload does not match required specification");
 console.log("✅ Check 3 PASSED: Timings payload exactly matches specification");
@@ -126,7 +128,6 @@ function buildActuatorPayload(status, externalKey, previousStatus = {}) {
     { n: "Wat_OLV", vb: p('water_OLvalve', false) },
     { n: "NUT_PMP", vb: p('nutrient_pump', false) },
     { n: "AC_Stat", vb: p('ac_stat', false) },
-    { n: "Led", vb: ledVal },
     { n: "Dimm", v: dimVal },
   ];
   return payload;
@@ -135,23 +136,24 @@ function buildActuatorPayload(status, externalKey, previousStatus = {}) {
 const actPayload = buildActuatorPayload({ water_pump: true }, "MAC_123");
 console.log("Actuator payload:", JSON.stringify(actPayload));
 assert(!actPayload.some(x => ["WPONT", "WPINT", "NP_DI", "NP_OT"].includes(x.n)), "Actuator payload must not include timings");
+assert(!actPayload.some(x => x.n === "Led"), "Actuator payload must not include Led");
 
-// Verify actuator light OFF: Led = false, Dimm = 0
+// Verify actuator light OFF: Dimm = 0, no Led key
 const offPayload = buildActuatorPayload({ led: false, dimming: 0 }, "MAC_123");
-assert.strictEqual(offPayload.find(x => x.n === "Led")?.vb, false, "Led should be false on off");
+assert.strictEqual(offPayload.find(x => x.n === "Led"), undefined, "Led should not be present in payload");
 assert.strictEqual(offPayload.find(x => x.n === "Dimm")?.v, 0, "Dimm should be 0 on off");
 
-// Verify actuator light ON (default): Led = true, Dimm = 100
+// Verify actuator light ON (default): Dimm = 100, no Led key
 const onPayload = buildActuatorPayload({ led: true, dimming: 100 }, "MAC_123");
-assert.strictEqual(onPayload.find(x => x.n === "Led")?.vb, true, "Led should be true on switch on");
+assert.strictEqual(onPayload.find(x => x.n === "Led"), undefined, "Led should not be present in payload");
 assert.strictEqual(onPayload.find(x => x.n === "Dimm")?.v, 100, "Dimm should be 100 on switch on");
 
-// Verify actuator light slider change: 1 to 100 (e.g. 15): Led = true, Dimm = 15
+// Verify actuator light slider change: 1 to 100 (e.g. 15): Dimm = 15, no Led key
 const sliderPayload = buildActuatorPayload({ led: true, dimming: 15 }, "MAC_123");
-assert.strictEqual(sliderPayload.find(x => x.n === "Led")?.vb, true, "Led should be true on slider 15");
+assert.strictEqual(sliderPayload.find(x => x.n === "Led"), undefined, "Led should not be present in payload");
 assert.strictEqual(sliderPayload.find(x => x.n === "Dimm")?.v, 15, "Dimm should be 15 on slider 15");
 
-console.log("✅ Check 4 PASSED: Actuator payload free of timings, and correctly carries Led and Dimm (0 for off, 100 for switch on, and 1-100 for slider)");
+console.log("✅ Check 4 PASSED: Actuator payload free of timings and Led key, and correctly carries Dimm (0 for off, 100 for switch on, and 1-100 for slider)");
 
 function canOpenOutletValve(waterLevel, isCleanTankActive) {
   if (waterLevel === null || waterLevel === undefined) return true;

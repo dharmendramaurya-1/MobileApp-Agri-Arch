@@ -99,6 +99,8 @@ export const DEFAULT_TIMINGS = {
   NP_OT: 10,
   pHPU_ONT: 5,
   pHPD_ONT: 5,
+  LPP_OT: 43200,
+  LLP_DI: 43200,
 };
 
 const DEFAULT_CONFIG = {
@@ -231,7 +233,6 @@ function buildActuatorPayload(status, externalKey, previousStatus = {}) {
     { n: "Wat_OLV", vb: p('water_OLvalve', false) },
     { n: "NUT_PMP", vb: p('nutrient_pump', false) },
     { n: "AC_Stat", vb: p('ac_stat', false) },
-    { n: "Led", vb: ledVal },
     { n: "Dimm", v: dimVal },
   ];
   return payload;
@@ -273,6 +274,8 @@ function buildTimingsPayload(timings = {}) {
     { n: "NP_OT", v: t("NP_OT", 10) },
     { n: "pHPU_ONT", v: t("pHPU_ONT", 5) },
     { n: "pHPD_ONT", v: t("pHPD_ONT", 5) },
+    { n: "LPP_OT", v: t("LPP_OT", 43200) },
+    { n: "LLP_DI", v: t("LLP_DI", t("LPP_DI", 43200)) },
   ];
 }
 
@@ -1527,6 +1530,8 @@ export const MqttProvider = ({ children }) => {
           for (const r of records) {
             if (r.n && r.v !== undefined) {
               updatedTimings[r.n] = r.v;
+              if (r.n === 'LLP_DI') updatedTimings['LPP_DI'] = r.v;
+              if (r.n === 'LPP_DI') updatedTimings['LLP_DI'] = r.v;
             }
           }
           setDevicesData(prev => ({

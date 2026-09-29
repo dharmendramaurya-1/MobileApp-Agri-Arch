@@ -109,8 +109,11 @@ function CenteredTimePickerModal({ visible, value, field, onClose, onSelect, the
   const color = field?.color || '#2E7D32';
 
   // Common Presets based on field type
-  const isPulse = field?.key?.includes('OT');
-  const presets = isPulse
+  const isLight = field?.key === 'LPP_OT' || field?.key === 'LLP_DI' || field?.key === 'LPP_DI';
+  const isPulse = field?.key?.includes('OT') && !isLight;
+  const presets = isLight
+    ? [3600, 7200, 14400, 21600, 28800, 36000, 43200, 50400, 57600, 64800]
+    : isPulse
     ? [5, 10, 20, 30, 60, 120]
     : [300, 600, 900, 1800, 3600, 7200];
 
@@ -298,6 +301,7 @@ const TIMING_GROUPS = [
   {
     id: 'water',
     title: 'Water Circulation',
+    filterLabel: 'Water',
     shortDesc: 'Pump pulse & cycle',
     icon: 'water',
     color: '#2196F3',
@@ -310,6 +314,7 @@ const TIMING_GROUPS = [
   {
     id: 'nutrient',
     title: 'Nutrient Pump',
+    filterLabel: 'Nutrient',
     shortDesc: 'Main nutrient feed',
     icon: 'leaf',
     color: '#4CAF50',
@@ -320,8 +325,22 @@ const TIMING_GROUPS = [
     ],
   },
   {
+    id: 'light',
+    title: 'Grow Light Photoperiod',
+    filterLabel: 'Light',
+    shortDesc: 'Lighting cycle & dark period',
+    icon: 'sunny',
+    color: '#FFB300',
+    gradient: ['#FFB30018', '#FFA00008'],
+    items: [
+      { key: 'LPP_OT', label: 'Light ON Time (Photoperiod)', shortLabel: 'LPP_OT', def: 43200, unit: 's', desc: 'Active lighting duration per cycle' },
+      { key: 'LLP_DI', label: 'Light Cycle Interval (Dark Period)', shortLabel: 'LLP_DI', def: 43200, unit: 's', desc: 'Dark rest duration between light cycles' },
+    ],
+  },
+  {
     id: 'ec',
     title: 'EC Fertigation (A & B)',
+    filterLabel: 'EC',
     shortDesc: 'Concentrate dosing',
     icon: 'flask',
     color: '#00BCD4',
@@ -336,6 +355,7 @@ const TIMING_GROUPS = [
   {
     id: 'ph',
     title: 'pH Balancing',
+    filterLabel: 'pH',
     shortDesc: 'pH Up & Down pulses',
     icon: 'speedometer',
     color: '#FF9800',
@@ -412,11 +432,17 @@ export default function TimingsScreen() {
     });
   }, []);
 
+  const totalParameters = useMemo(() => {
+    return TIMING_GROUPS.reduce((acc, g) => acc + g.items.length, 0);
+  }, []);
+
   // Quick inline stepper directly on the card
   const handleQuickStep = (key, delta) => {
     setTimings((prev) => {
-      const current = prev[key] ?? DEFAULT_TIMINGS[key] ?? 10;
-      const next = Math.max(1, current + delta);
+      const isLight = key === 'LPP_OT' || key === 'LLP_DI' || key === 'LPP_DI';
+      const defaultVal = DEFAULT_TIMINGS[key] ?? (isLight ? 43200 : 10);
+      const current = prev[key] ?? defaultVal;
+      const next = Math.max(isLight ? 300 : 1, current + delta);
       setHasChanges(true);
       return { ...prev, [key]: next };
     });
@@ -441,7 +467,7 @@ export default function TimingsScreen() {
       const success = await publishTimings(deviceKey, timings);
       if (success) {
         setHasChanges(false);
-        Alert.alert('✅ Saved', 'All 10 system timings published to device successfully!');
+        Alert.alert('✅ Saved', `All ${totalParameters} system timings published to device successfully!`);
       } else {
         Alert.alert('Error', 'Failed to publish timings to device.');
       }
@@ -456,7 +482,7 @@ export default function TimingsScreen() {
   const resetToDefaults = () => {
     Alert.alert(
       'Reset Timings',
-      'Reset all 10 timings to factory defaults?',
+      `Reset all ${totalParameters} timings to factory defaults?`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -508,7 +534,7 @@ export default function TimingsScreen() {
               </View>
               <Text style={styles.heroTitle}>System Duty Cycles</Text>
               <Text style={styles.heroSub}>
-                {selectedDeviceName ? `${selectedDeviceName} • ` : ''}10 Parameters Active
+                {selectedDeviceName ? `${selectedDeviceName} • ` : ''}{totalParameters} Parameters Active
               </Text>
             </View>
 
@@ -540,8 +566,8 @@ export default function TimingsScreen() {
             </View>
             <View style={styles.heroMetricDivider} />
             <View style={styles.heroMetricItem}>
-              <Text style={styles.heroMetricVal}>{fmtSec(timings.pHPU_ONT)}</Text>
-              <Text style={styles.heroMetricLabel}>pH Pulse</Text>
+              <Text style={styles.heroMetricVal}>{fmtSec(timings.LPP_OT ?? 43200)}</Text>
+              <Text style={styles.heroMetricLabel}>Light ON</Text>
             </View>
           </View>
         </LinearGradient>
@@ -562,7 +588,7 @@ export default function TimingsScreen() {
             activeOpacity={0.7}
           >
             <Text style={[styles.filterPillText, selectedFilter === 'all' && styles.filterPillTextActive]}>
-              All (10)
+              All ({totalParameters})
             </Text>
           </TouchableOpacity>
 
@@ -586,7 +612,7 @@ export default function TimingsScreen() {
                   style={{ marginRight: 4 }}
                 />
                 <Text style={[styles.filterPillText, isActive && { color: '#FFFFFF', fontWeight: '700' }]}>
-                  {g.title.split(' ')[0]}
+                  {g.filterLabel || g.title.split(' ')[0]}
                 </Text>
               </TouchableOpacity>
             );
@@ -614,12 +640,87 @@ export default function TimingsScreen() {
 
             <View style={[styles.categoryDivider, { backgroundColor: borderC }]} />
 
+            {/* Visual Photoperiod Ratio for Light */}
+            {group.id === 'light' && (
+              <View
+                style={[
+                  styles.photoperiodCard,
+                  {
+                    backgroundColor: theme.dark ? 'rgba(255, 179, 0, 0.08)' : '#FFF9E6',
+                    borderColor: theme.dark ? 'rgba(255, 179, 0, 0.25)' : '#FFE082',
+                  },
+                ]}
+              >
+                <View style={styles.photoperiodHeader}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Ionicons name="sunny" size={15} color="#FFB300" />
+                    <Text style={[styles.photoperiodTitle, { color: theme.colors.text }]}>
+                      24h Photoperiod Ratio
+                    </Text>
+                  </View>
+                  <View style={[styles.photoperiodBadge, { backgroundColor: `${group.color}20` }]}>
+                    <Text style={[styles.photoperiodBadgeText, { color: group.color }]}>
+                      Total: {fmtSec((timings.LPP_OT ?? 43200) + (timings.LLP_DI ?? 43200))}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Split Progress Track */}
+                <View style={styles.photoperiodTrack}>
+                  <View
+                    style={[
+                      styles.photoperiodDaySegment,
+                      {
+                        flex: Math.max(1, timings.LPP_OT ?? 43200),
+                        backgroundColor: '#FFB300',
+                      },
+                    ]}
+                  />
+                  <View
+                    style={[
+                      styles.photoperiodNightSegment,
+                      {
+                        flex: Math.max(1, timings.LLP_DI ?? 43200),
+                        backgroundColor: theme.dark ? '#3949AB' : '#5C6BC0',
+                      },
+                    ]}
+                  />
+                </View>
+
+                {/* Photoperiod Legend Labels */}
+                <View style={styles.photoperiodLegendRow}>
+                  <View style={styles.photoperiodLegendItem}>
+                    <View style={[styles.legendDot, { backgroundColor: '#FFB300' }]} />
+                    <Text style={[styles.legendLabelText, { color: theme.colors.textSecondary }]}>
+                      Day / ON:{' '}
+                      <Text style={[styles.legendValText, { color: theme.colors.text }]}>
+                        {fmtSec(timings.LPP_OT ?? 43200)}
+                      </Text>{' '}
+                      ({Math.round(((timings.LPP_OT ?? 43200) / Math.max(1, (timings.LPP_OT ?? 43200) + (timings.LLP_DI ?? 43200))) * 100)}%)
+                    </Text>
+                  </View>
+
+                  <View style={styles.photoperiodLegendItem}>
+                    <View style={[styles.legendDot, { backgroundColor: theme.dark ? '#3949AB' : '#5C6BC0' }]} />
+                    <Text style={[styles.legendLabelText, { color: theme.colors.textSecondary }]}>
+                      Night / Rest:{' '}
+                      <Text style={[styles.legendValText, { color: theme.colors.text }]}>
+                        {fmtSec(timings.LLP_DI ?? 43200)}
+                      </Text>{' '}
+                      ({Math.round(((timings.LLP_DI ?? 43200) / Math.max(1, (timings.LPP_OT ?? 43200) + (timings.LLP_DI ?? 43200))) * 100)}%)
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            )}
+
             {/* Individual Timing Tiles */}
             <View style={styles.tilesContainer}>
               {group.items.map((item) => {
                 const val = timings[item.key] ?? item.def;
-                const isQuickSmall = item.key.includes('OT');
-                const stepDelta = isQuickSmall ? 5 : 60;
+                const isLight = item.key === 'LPP_OT' || item.key === 'LLP_DI' || item.key === 'LPP_DI';
+                const isQuickSmall = item.key.includes('OT') && !isLight;
+                const stepDelta = isLight ? 1800 : (isQuickSmall ? 5 : 60);
 
                 return (
                   <View
@@ -935,6 +1036,75 @@ const styles = StyleSheet.create({
   },
   categoryDivider: {
     height: StyleSheet.hairlineWidth,
+  },
+
+  /* Photoperiod Visualizer (Light Card) */
+  photoperiodCard: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    marginBottom: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    padding: 12,
+  },
+  photoperiodHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  photoperiodTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  photoperiodBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  photoperiodBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+  },
+  photoperiodTrack: {
+    height: 10,
+    borderRadius: 5,
+    flexDirection: 'row',
+    overflow: 'hidden',
+    marginBottom: 10,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+  },
+  photoperiodDaySegment: {
+    height: '100%',
+  },
+  photoperiodNightSegment: {
+    height: '100%',
+  },
+  photoperiodLegendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  photoperiodLegendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendLabelText: {
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  legendValText: {
+    fontWeight: '700',
   },
 
   /* Tiles Grid */
