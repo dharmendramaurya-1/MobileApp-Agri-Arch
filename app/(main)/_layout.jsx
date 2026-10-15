@@ -26,6 +26,8 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AlertBadge } from "../../components/AlertBadge";
 import { AlertList } from "../../components/AlertList";
+import GlobalBuzzerModal from "../../components/GlobalBuzzerModal";
+import GlobalBuzzerBanner from "../../components/GlobalBuzzerBanner";
 import Logo from "../../components/Logo";
 import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
@@ -845,9 +847,6 @@ function MainDrawer({ theme }) {
           {/* ── SENSOR TABS (all sensors overview) ── */}
           <Drawer.Screen name="sensor-tabs" options={{ title: "Environmental Sensors" }} />
           
-          {/* ── ENVIRONMENT SENSORS ── */}
-          {/* co2.jsx exists as a standalone file */}
-          <Drawer.Screen name="co2" options={{ title: "CO₂ Level" }} />
 
           {/* ── SENSOR DETAIL (dynamic) ── */}
           {/* sensor/[type].jsx handles all per-sensor detail pages */}
@@ -856,7 +855,11 @@ function MainDrawer({ theme }) {
           <Drawer.Screen name="sensor/SensorDetailScreen" options={{ title: "Sensor Details" }} />
         </Drawer>
       </View>
+      {/* ── Common Global Buzzer Alert Banner (shown across all screens when buzzer is on) ── */}
+      <GlobalBuzzerBanner />
       <DrawerBottomBar theme={theme} />
+      {/* ── Global Animated Buzzer Alarm Popup ── */}
+      <GlobalBuzzerModal />
     </View>
   );
 }

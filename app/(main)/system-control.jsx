@@ -110,10 +110,11 @@ function DimmingCard({
   };
 
   const confirmedLevel = parseLevel(dimmingLevel);
-  // Confirmed light state strictly from device response:
-  const isConfirmedOn = confirmedLevel !== null ? confirmedLevel > 0 : Boolean(ledOn);
+  // Confirmed light state strictly from ledOn (Bit 16):
+  const isConfirmedOn = Boolean(ledOn);
 
-  const initialVal = confirmedLevel ?? (isConfirmedOn ? 100 : 0);
+  // Exact dimming level from device (never auto-forced to 100%):
+  const initialVal = confirmedLevel ?? 0;
   const [localValue, setLocalValue] = useState(initialVal);
   const [isSwitchPending, setIsSwitchPending] = useState(false);
   const isSlidingRef = useRef(false);
@@ -129,7 +130,7 @@ function DimmingCard({
     }
     // Device response arrived -> clear pending switch state
     setIsSwitchPending(false);
-  }, [dimmingLevel, ledOn]);
+  }, [dimmingLevel]);
 
   // Clean up debounce timer on unmount
   useEffect(() => {
@@ -190,8 +191,7 @@ function DimmingCard({
     onLightChange(rounded, true);
   };
 
-  // Light Switch toggle: does NOT change UI immediately!
-  // It keeps the SAME state until device response arrives!
+  // Light Switch toggle: toggles LED ON/OFF with current dimming level
   const handleSwitchToggle = () => {
     if (locked || isSwitchPending) return;
     if (slidingTimerRef.current) {
@@ -200,14 +200,9 @@ function DimmingCard({
     }
     isSlidingRef.current = false;
 
-    // Target dimming:
-    // If currently confirmed ON -> target is 0 (OFF)
-    // If currently confirmed OFF -> target is 100 (or previous localValue if > 0)
-    const targetDimming = isConfirmedOn ? 0 : (localValue > 0 ? localValue : 100);
-
-    // Keep switch in SAME state and show Sending... until response comes!
+    const nextLedState = !isConfirmedOn;
     setIsSwitchPending(true);
-    const ok = onLightChange(targetDimming, true);
+    const ok = onLightChange(localValue, true, nextLedState);
     if (ok === false) {
       setIsSwitchPending(false);
     }
@@ -308,7 +303,7 @@ function DimmingCard({
               ? "Sending..."
               : isConfirmedOn
               ? `● ON (${confirmedLevel ?? localValue}%)`
-              : "○ OFF (0%)"}
+              : `○ OFF (${confirmedLevel ?? localValue}%)`}
           </Text>
         </View>
 
@@ -411,6 +406,7 @@ export default function SystemControl() {
     deviceStatusFlags,
     isConnected,
     publishActuatorStatus,
+    acknowledgeBuzzer,
     publishSettings,
     connectionState,
     deviceOnlineStatus,
@@ -527,7 +523,7 @@ export default function SystemControl() {
 
 
   // ── Light / Dimming handler (publishes via actuator payload to /actuator, NOT /settings) ──
-  const handleLightChange = useCallback((dimmingValue, immediate = false) => {
+  const handleLightChange = useCallback((dimmingValue, immediate = false, explicitLedState = undefined) => {
     if (!selectedExternalKey) return false;
     if (!isManualMode) {
       Alert.alert(
@@ -552,9 +548,10 @@ export default function SystemControl() {
         for (const dev of devices) {
           fullStatus[dev.actuatorKey] = currentPending[dev.actuatorKey] ?? dev.vb;
         }
-        const isLightOn = dimmingValue > 0;
+        const isLightOn = explicitLedState !== undefined ? Boolean(explicitLedState) : dimmingValue > 0;
         fullStatus['led'] = isLightOn;
         fullStatus['dimming'] = dimmingValue;
+        fullStatus['BUZ_ACK'] = false;
         await publishActuatorStatus(selectedExternalKey, fullStatus);
       } catch (err) {
         console.error("Light actuator publish error:", err);
@@ -677,7 +674,7 @@ export default function SystemControl() {
         <DimmingCard
           dimmingLevel={deviceStatusFlags?.dimmingLevel ?? actuatorStatus?.dimming ?? null}
           onLightChange={handleLightChange}
-          ledOn={actuatorStatus?.led === true}
+          ledOn={deviceStatusFlags?.ledStatus ?? (actuatorStatus?.led === true)}
           locked={deviceLocked}
           theme={theme}
           cardBg={cardBg}
@@ -743,6 +740,7 @@ export default function SystemControl() {
                     for (const dev of devices) {
                       fullStatus[dev.actuatorKey] = currentPending[dev.actuatorKey] ?? dev.vb;
                     }
+                    fullStatus['BUZ_ACK'] = false;
 
                     try {
                       const success = await publishActuatorStatus(selectedExternalKey, fullStatus);
@@ -1031,4 +1029,61 @@ const styles = StyleSheet.create({
   ledLabel: { fontSize: 13, fontWeight: "700" },
   ledSub: { fontSize: 10, marginTop: 1, fontWeight: "600" },
   ledSwitch: { transform: [{ scaleX: 1.1 }, { scaleY: 1.1 }] },
+
+  // ── Buzzer Alert Banner ──
+  buzzerAlertBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 12,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    marginBottom: 14,
+    shadowColor: "#D32F2F",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  buzzerAlertLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flex: 1,
+  },
+  buzzerAlertIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "#FFCDD2",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  buzzerAlertTextWrap: {
+    flex: 1,
+  },
+  buzzerAlertTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#C62828",
+  },
+  buzzerAlertDesc: {
+    fontSize: 11,
+    color: "#E53935",
+    marginTop: 2,
+  },
+  buzzerAckButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#D32F2F",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    marginLeft: 8,
+  },
+  buzzerAckButtonText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#FFFFFF",
+  },
 });

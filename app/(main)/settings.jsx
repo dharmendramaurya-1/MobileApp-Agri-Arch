@@ -1,4 +1,3 @@
-// app/(main)/config.jsx
 import { Ionicons } from "@expo/vector-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -10,6 +9,7 @@ import {
   StyleSheet,
   Switch,
   Text,
+  TouchableOpacity,
   View,
 } from "react-native";
 import { useMqtt } from "../../src/context/MqttContext";
@@ -52,7 +52,7 @@ export default function ConfigScreen() {
   const pendingTargetModeRef = useRef(null);
   const autoModeTimeoutRef = useRef(null);
 
-  // â”€â”€ App resume state tracking â”€â”€
+  // ── App resume state tracking ──
   const [isResuming, setIsResuming] = useState(false);
   const appStateRef = useRef(AppState.currentState);
   const resumeTimeoutRef = useRef(null);
@@ -620,7 +620,7 @@ export default function ConfigScreen() {
         </View>
       </View> */}
 
-      {/* â”€â”€ Appearance Section â”€â”€ */}
+      {/* ── Appearance Section ── */}
       <View
         style={[
           styles.section,
@@ -670,6 +670,7 @@ export default function ConfigScreen() {
           </View>
         </View>
       </View>
+
     </ScrollView>
   );
 }

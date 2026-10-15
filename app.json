@@ -13,11 +13,13 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.yourcompany.yourapp",
-      "buildNumber": "1.0.0"
+      "buildNumber": "1.0.0",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.yourcompany.yourapp",
-      "usesCleartextTraffic": true,
       "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/Logo.png",
@@ -29,8 +31,9 @@
     },
     "extra": {
       "eas": {
-        "projectId": "3f30c682-8fcd-4d7c-a851-e255928970ce"
-      }
+        "projectId": "44902a84-0dae-4d94-a163-fc21880f8cf6"
+      },
+      "router": {}
     },
     "plugins": [
       "expo-router",

@@ -217,29 +217,25 @@ function RootNav() {
 export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-
       <SafeAreaProvider>
         <ThemeProvider>
-                      <NetworkProvider>  {/* ✅ Wrap at the highest level */}
-
-          <AuthProvider>
-            <MqttProvider>
-              <SystemModeProvider>
-                <TankSafetyProvider>
-                  <AlertProvider>
-                    <HistoricalDataProvider>
-                      <RootNav />
-                    </HistoricalDataProvider>
-                  </AlertProvider>
-                </TankSafetyProvider>
-              </SystemModeProvider>
-            </MqttProvider>
-          </AuthProvider>
-                      </NetworkProvider>
-
+          <NetworkProvider>
+            <AuthProvider>
+              <MqttProvider>
+                <SystemModeProvider>
+                  <TankSafetyProvider>
+                    <AlertProvider>
+                      <HistoricalDataProvider>
+                        <RootNav />
+                      </HistoricalDataProvider>
+                    </AlertProvider>
+                  </TankSafetyProvider>
+                </SystemModeProvider>
+              </MqttProvider>
+            </AuthProvider>
+          </NetworkProvider>
         </ThemeProvider>
       </SafeAreaProvider>
-
     </GestureHandlerRootView>
   );
 }

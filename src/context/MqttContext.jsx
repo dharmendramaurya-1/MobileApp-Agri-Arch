@@ -219,13 +219,46 @@ function parseActuatorToDevices(raw) {
   }
 }
 
-function buildActuatorPayload(status, externalKey, previousStatus = {}) {
+function buildActuatorPayload(status, externalKey, previousStatus = {}, isBuzzerActive = undefined) {
   const p = (key, def) => status[key] ?? previousStatus[key] ?? def;
-  const rawDim = status.dimming ?? status.Dimm ?? status.dimm ?? previousStatus.dimming ?? previousStatus.Dimm ?? previousStatus.dimm;
-  const ledVal = p('led', false);
-  const dimVal = (rawDim !== undefined && rawDim !== null && !isNaN(rawDim))
-    ? Math.max(0, Math.min(100, Math.round(Number(rawDim))))
-    : (ledVal ? 100 : 0);
+  
+  let dimVal;
+  if (status.dimming !== undefined || status.Dimm !== undefined || status.dimm !== undefined) {
+    const raw = status.dimming ?? status.Dimm ?? status.dimm;
+    dimVal = (!isNaN(raw) && raw !== null) ? Math.max(0, Math.min(100, Math.round(Number(raw)))) : 0;
+  } else if (previousStatus.dimming !== undefined || previousStatus.Dimm !== undefined || previousStatus.dimm !== undefined) {
+    const raw = previousStatus.dimming ?? previousStatus.Dimm ?? previousStatus.dimm;
+    dimVal = (!isNaN(raw) && raw !== null) ? Math.max(0, Math.min(100, Math.round(Number(raw)))) : 0;
+  } else {
+    dimVal = 0;
+  }
+
+  const ledVal = status.led !== undefined
+    ? Boolean(status.led)
+    : (previousStatus.led !== undefined ? Boolean(previousStatus.led) : dimVal > 0);
+
+  // Determine if buzzer is currently active/ringing on hardware
+  const buzzerCurrentlyActive = (isBuzzerActive !== undefined)
+    ? Boolean(isBuzzerActive)
+    : Boolean(previousStatus.buzzer || previousStatus.buzzerStatus);
+
+  // BUZ_ACK boolean value (always sent in actuator payload):
+  // - If buzzer is ON: send true ONLY to turn it off (acknowledge / silence)
+  // - If buzzer is OFF: BUZ_ACK is strictly false
+  let buzAckVal = false;
+  if (buzzerCurrentlyActive) {
+    if (status.BUZ_ACK !== undefined) {
+      buzAckVal = Boolean(status.BUZ_ACK);
+    } else if (status.buz_ack !== undefined) {
+      buzAckVal = Boolean(status.buz_ack);
+    } else if (status.buzzer === false) {
+      // Buzzer was ON and is now being switched OFF
+      buzAckVal = true;
+    }
+  } else {
+    // Buzzer is OFF: BUZ_ACK is strictly false
+    buzAckVal = false;
+  }
 
   const payload = [
     { n: "WatPmp", vb: p('water_pump', false) },
@@ -233,8 +266,11 @@ function buildActuatorPayload(status, externalKey, previousStatus = {}) {
     { n: "Wat_OLV", vb: p('water_OLvalve', false) },
     { n: "NUT_PMP", vb: p('nutrient_pump', false) },
     { n: "AC_Stat", vb: p('ac_stat', false) },
+    { n: "Led", vb: ledVal },
     { n: "Dimm", v: dimVal },
+    { n: "BUZ_ACK", vb: buzAckVal },
   ];
+
   return payload;
 }
 
@@ -697,7 +733,8 @@ export const MqttProvider = ({ children }) => {
             water_OLvalve: flags.outletValve,
             nutrient_pump: flags.nutrientPump,
             ac_stat: flags.acStatus,
-            led: flags.dimmingLevel > 0,
+            led: flags.ledStatus !== undefined ? flags.ledStatus : flags.dimmingLevel > 0,
+            buzzer: flags.buzzer,
             dimming: flags.dimmingLevel,
           };
 
@@ -810,6 +847,8 @@ export const MqttProvider = ({ children }) => {
           updatedSensorData.water_OLvalve = flags.outletValve;
           updatedSensorData.nutrient_pump = flags.nutrientPump;
           updatedSensorData.ac_stat = flags.acStatus;
+          updatedSensorData.led = flags.ledStatus !== undefined ? flags.ledStatus : flags.dimmingLevel > 0;
+          updatedSensorData.buzzer = flags.buzzer;
           hasActuatorUpdate = true;
         }
 
@@ -820,7 +859,7 @@ export const MqttProvider = ({ children }) => {
         }
 
         if (['water_pump', 'water_ILvalve', 'water_OLvalve',
-          'nutrient_pump', 'ac_stat'].includes(key)) {
+          'nutrient_pump', 'ac_stat', 'led', 'dimming', 'buzzer'].includes(key)) {
           updatedSensorData[key] = value;
           hasActuatorUpdate = true;
           hasSensorUpdate = true;
@@ -858,7 +897,7 @@ export const MqttProvider = ({ children }) => {
         setActuatorStatus(prevAct => {
           const updatedActuator = { ...prevAct };
           const actuatorKeys = ['water_pump', 'water_ILvalve', 'water_OLvalve',
-            'nutrient_pump', 'ac_stat'];
+            'nutrient_pump', 'ac_stat', 'led', 'dimming', 'buzzer'];
           for (const key of actuatorKeys) {
             if (updatedSensorData[key] !== undefined) {
               updatedActuator[key] = updatedSensorData[key];
@@ -1211,14 +1250,18 @@ export const MqttProvider = ({ children }) => {
         outletValve: flags ? flags.outletValve : parsed.water_OLvalve,
         nutrientPump: flags ? flags.nutrientPump : parsed.nutrient_pump,
         acStatus: flags ? flags.acStatus : parsed.ac_stat,
+        led: flags ? (flags.ledStatus !== undefined ? flags.ledStatus : flags.led) : parsed.led,
+        buzzer: flags ? flags.buzzer : parsed.buzzer,
       };
       const on = (v) => v === true ? '🟢 ON ' : v === false ? '🔴 OFF' : '⚪ --';
       const actuatorLines = [];
-      if (act.waterPump !== undefined) actuatorLines.push(`  💧  Water Pump     : ${on(act.waterPump)}`);
-      if (act.nutrientPump !== undefined) actuatorLines.push(`  🌿  Nutrient Pump  : ${on(act.nutrientPump)}`);
-      if (act.inletValve !== undefined) actuatorLines.push(`  ⬇️   Inlet Valve    : ${on(act.inletValve)}`);
-      if (act.outletValve !== undefined) actuatorLines.push(`  ⬆️   Outlet Valve   : ${on(act.outletValve)}`);
-      if (act.acStatus !== undefined) actuatorLines.push(`  ❄️   AC Status      : ${on(act.acStatus)}`);
+      if (act.waterPump !== undefined) actuatorLines.push(`  💧  Water Pump        : ${on(act.waterPump)}`);
+      if (act.nutrientPump !== undefined) actuatorLines.push(`  🌿  Nutrient Pump     : ${on(act.nutrientPump)}`);
+      if (act.inletValve !== undefined) actuatorLines.push(`  ⬇️   Inlet Valve       : ${on(act.inletValve)}`);
+      if (act.outletValve !== undefined) actuatorLines.push(`  ⬆️   Outlet Valve      : ${on(act.outletValve)}`);
+      if (act.acStatus !== undefined) actuatorLines.push(`  ❄️   AC Status         : ${on(act.acStatus)}`);
+      if (act.led !== undefined) actuatorLines.push(`  💡  LED Light (Bit 16): ${on(act.led)}`);
+      if (act.buzzer !== undefined) actuatorLines.push(`  🔔  Buzzer (Bit 24)   : ${on(act.buzzer)}`);
 
       // ── Faults / Alerts ──
       const alertLines = [];
@@ -1319,9 +1362,10 @@ export const MqttProvider = ({ children }) => {
       if (flags) {
         console.log(`║ SYSTEM                                       ║`);
         console.log(`  🔘  Mode          : ${modeStr}`);
-        console.log(`  💡  Dimming       : ${dimmStr}`);
+        console.log(`  💡  LED (Bit 16)  : ${flags.ledStatus ? '🟢 ON' : '🔴 OFF'}`);
+        console.log(`  🔆  Dimming Level : ${dimmStr}`);
         console.log(`  🌐  Status        : ${onlineStr}`);
-        console.log(`  🔢  Raw Bitmask   : ${rawHex}`);
+        console.log(`  🔢  Raw Bitmask   : ${rawHex} (${flags.rawStatus})`);
       }
 
       console.log(`╚══════════════════════════════════════════════╝\n`);
@@ -1390,6 +1434,9 @@ export const MqttProvider = ({ children }) => {
       const parsedForLegacy = { ...parsed };
       if (resolvedFlags) {
         parsedForLegacy.deviceStatusFlags = resolvedFlags;
+        parsedForLegacy.led = resolvedFlags.ledStatus;
+        parsedForLegacy.dimming = resolvedFlags.dimmingLevel;
+        parsedForLegacy.buzzer = resolvedFlags.buzzer;
       }
       // Remove deviceStatus to prevent duplicate auto_mode sync in updateLegacyState.
       // The flags (waterPump, valves, etc.) are still updated via the bitmask
@@ -2659,8 +2706,15 @@ export const MqttProvider = ({ children }) => {
       return false;
     }
 
-    const previousStatus = devicesData[deviceKey]?.actuatorStatus || {};
-    const payload = buildActuatorPayload(status, deviceKey, previousStatus);
+    const devData = devicesData[deviceKey] || {};
+    const previousStatus = devData.actuatorStatus || {};
+    const isBuzzerActive = Boolean(
+      devData.deviceStatusFlags?.buzzer ??
+      devData.sensorData?.buzzer ??
+      previousStatus.buzzer ??
+      false
+    );
+    const payload = buildActuatorPayload(status, deviceKey, previousStatus, isBuzzerActive);
     console.log(`📤 Publishing actuator to /messages/${deviceKey}/actuator:`, JSON.stringify(payload));
     const success = await publish(`/messages/${deviceKey}/actuator`, JSON.stringify(payload));
 
@@ -2671,6 +2725,48 @@ export const MqttProvider = ({ children }) => {
     }
     return success;
   };
+
+  // ── acknowledgeBuzzer (BUZ_ACK = true) ──
+  const acknowledgeBuzzer = useCallback(async (deviceKey) => {
+    const key = deviceKey || selectedExternalKeyRef.current || externalKeyRef.current;
+    if (!key) {
+      console.log("⚠️ No device key provided for acknowledgeBuzzer");
+      return false;
+    }
+    const currentStatus = devicesData[key]?.actuatorStatus || {};
+    console.log(`🔕 Acknowledging buzzer for ${key} (BUZ_ACK = true)`);
+    // Explicitly pass isBuzzerActive = true since acknowledgeBuzzer is called to silence the sounding alarm
+    const payload = buildActuatorPayload({ ...currentStatus, BUZ_ACK: true, buzzer: false }, key, currentStatus, true);
+    console.log(`📤 Publishing buzzer ack to /messages/${key}/actuator:`, JSON.stringify(payload));
+    const success = await publish(`/messages/${key}/actuator`, JSON.stringify(payload));
+    if (success) {
+      setDevicesData(prev => {
+        const cur = prev[key];
+        if (!cur) return prev;
+        return {
+          ...prev,
+          [key]: {
+            ...cur,
+            actuatorStatus: {
+              ...(cur.actuatorStatus || {}),
+              buzzer: false,
+              BUZ_ACK: false,
+            },
+            deviceStatusFlags: {
+              ...(cur.deviceStatusFlags || {}),
+              buzzer: false,
+              buzzerStatus: false,
+            },
+            sensorData: {
+              ...(cur.sensorData || {}),
+              buzzer: false,
+            },
+          },
+        };
+      });
+    }
+    return success;
+  }, [publish, devicesData]);
 
   // ── publishSettings ──
   const publishSettings = async (deviceKey, settings) => {
@@ -2963,6 +3059,7 @@ export const MqttProvider = ({ children }) => {
     quickStatusCheck,
     checkSingleDeviceStatus,
     publishActuatorStatus,
+    acknowledgeBuzzer,
     publishSettings,
     publishTimings,
     publishCleanTank,

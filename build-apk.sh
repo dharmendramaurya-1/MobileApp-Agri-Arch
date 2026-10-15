@@ -1,4 +1,4 @@
-#!/bin/bash
+!/bin/bash
 
 set -e
 
@@ -13,6 +13,19 @@ echo "Building Release APK..."
 echo "APK Generated Successfully"
 echo "Location:"
 echo "app/build/outputs/apk/release/app-release.apk"
+
+
+# ///////////// iOS Build //////////////////////
+
+
+# echo ""
+# echo "Building iOS using EAS..."
+
+# eas build --platform ios --profile preview
+
+# echo ""
+# echo "iOS Build Completed Successfully"
+# echo "Download the iOS build from the EAS build page."
 # /////////////Development Build//////////////////////
 
 

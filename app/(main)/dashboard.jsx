@@ -8,7 +8,9 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
   Dimensions,
+  Image,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -100,8 +102,8 @@ const getSensorStatusFromFlags = (sensorKey, deviceStatus) => {
     return { level: 'unknown', label: 'No Data', color: '#9E9E9E' };
   }
 
-  const flags = typeof deviceStatus === 'number' 
-    ? parseDeviceStatus(deviceStatus) 
+  const flags = typeof deviceStatus === 'number'
+    ? parseDeviceStatus(deviceStatus)
     : deviceStatus;
 
   // ── AMBIENT TEMPERATURE ──
@@ -211,10 +213,10 @@ function SensorTile({
   const active = isDeviceOnline && hasValue;
 
   const status = getSensorStatusFromFlags(sensor.id, deviceStatusFlags);
-  
+
   let valueColor;
   let statusLabel = status.label;
-  
+
   if (hasValue && active) {
     valueColor = status.color;
     statusLabel = status.label;
@@ -279,7 +281,7 @@ function SensorTile({
   );
 }
 
-function ActuatorSummaryCard({ icon: Icon, label, state, active, theme, accentColor }) {
+function ActuatorSummaryCard({ icon: Icon, label, state, active, theme, accentColor, onPress }) {
   const stateLabel = active ? state.active : state.inactive;
   const iconColor = active ? accentColor : theme.colors.textSecondary;
   const progressColors = active
@@ -287,13 +289,17 @@ function ActuatorSummaryCard({ icon: Icon, label, state, active, theme, accentCo
     : [`${theme.colors.textSecondary}35`, `${theme.colors.textSecondary}28`, `${theme.colors.textSecondary}20`, `${theme.colors.textSecondary}16`, `${theme.colors.textSecondary}10`];
 
   return (
-    <View style={[
-      styles.actuatorSummaryCard,
-      {
-        borderColor: active ? `${accentColor}55` : theme.colors.border,
-        backgroundColor: theme.colors.surface,
-      },
-    ]}>
+    <TouchableOpacity
+      activeOpacity={0.7}
+      onPress={onPress || (() => router.push("/(main)/system-control"))}
+      style={[
+        styles.actuatorSummaryCard,
+        {
+          borderColor: active ? `${accentColor}55` : theme.colors.border,
+          backgroundColor: theme.colors.surface,
+        },
+      ]}
+    >
       <View style={[styles.actuatorSummaryTopAccent, { backgroundColor: active ? accentColor : `${accentColor}40` }]} />
       <View style={[
         styles.actuatorSummaryIcon,
@@ -313,7 +319,7 @@ function ActuatorSummaryCard({ icon: Icon, label, state, active, theme, accentCo
           <View key={`${label}-progress-${index}`} style={[styles.actuatorSummaryProgressSegment, { backgroundColor: color }]} />
         ))}
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -390,9 +396,9 @@ export default function Dashboard() {
   }, [deviceKey, isInitialLoadComplete]);
 
   const isDeviceWaiting = useMemo(() => {
-    return (!isInitialLoadComplete && !isLoading) || 
-      connectionState === "connecting" || 
-      connectionState === "waiting" || 
+    return (!isInitialLoadComplete && !isLoading) ||
+      connectionState === "connecting" ||
+      connectionState === "waiting" ||
       connectionState === "idle";
   }, [isInitialLoadComplete, isLoading, connectionState]);
 
@@ -525,8 +531,8 @@ export default function Dashboard() {
   const modeText = !deviceKey
     ? "--"
     : !isModeLoaded
-    ? "--"
-    : modeDisplay || (isManualMode ? "Manual" : "Auto");
+      ? "--"
+      : modeDisplay || (isManualMode ? "Manual" : "Auto");
 
   const hasNoDevices = availableDevices && availableDevices.length === 0;
 
@@ -641,18 +647,30 @@ export default function Dashboard() {
   }
 
   return (
-    <ScrollView
-      ref={scrollRef}
-      style={{ backgroundColor: theme.colors.background }}
-      contentContainerStyle={{ paddingTop: headerHeight, paddingBottom: 10 }}
-      onScroll={Animated.event(
-        [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-        { useNativeDriver: false }
-      )}
-      scrollEventThrottle={16}
-    >
-      {/* ── HEADER ── */}
-      {/* <View style={styles.header}>
+    <View style={[styles.mainScreenContainer, { backgroundColor: theme.colors.background }]}>
+      {/* Subtle blurred botanical leaves background aura */}
+      <Image
+        source={require("../../assets/images/dashboard_bg.jpg")}
+        style={[
+          styles.screenBgImage,
+          { opacity: isDark ? 0.04 : 0.2 },
+        ]}
+        blurRadius={Platform.OS === "ios" ? 12 : 3}
+        resizeMode="cover"
+      />
+
+      <ScrollView
+        ref={scrollRef}
+        style={{ flex: 1, backgroundColor: "transparent" }}
+        contentContainerStyle={{ paddingTop: headerHeight, paddingBottom: 10 }}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false }
+        )}
+        scrollEventThrottle={16}
+      >
+        {/* ── HEADER ── */}
+        {/* <View style={styles.header}>
         <Text style={[styles.greeting, { color: theme.colors.text }]} numberOfLines={1}>
           {u_name}
         </Text>
@@ -661,29 +679,29 @@ export default function Dashboard() {
         </Text>
       </View> */}
 
-      {/* ── QUICK SUMMARY CARD ── */}
-      <View
-        style={[
-          styles.summaryCard,
-          { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
-        ]}
-      >
-        <View style={styles.summaryRow}>
-          <View style={styles.summaryItem}>
-            <View style={[styles.summaryIconWrap, { backgroundColor: "#4CAF5018" }]}>
-              <Ionicons name="hardware-chip-outline" size={16} color="#4CAF50" />
+        {/* ── QUICK SUMMARY CARD ── */}
+        <View
+          style={[
+            styles.summaryCard,
+            { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+          ]}
+        >
+          <View style={styles.summaryRow}>
+            <View style={styles.summaryItem}>
+              <View style={[styles.summaryIconWrap, { backgroundColor: "#4CAF5018" }]}>
+                <Ionicons name="hardware-chip-outline" size={16} color="#4CAF50" />
+              </View>
+              <View style={styles.summaryTextWrap}>
+                <Text style={[styles.summaryValue, { color: theme.colors.text }]} numberOfLines={1}>
+                  {shortDeviceId}
+                </Text>
+                <Text style={[styles.summaryLabel, { color: theme.colors.textSecondary }]}>Device</Text>
+              </View>
             </View>
-            <View style={styles.summaryTextWrap}>
-              <Text style={[styles.summaryValue, { color: theme.colors.text }]} numberOfLines={1}>
-                {shortDeviceId}
-              </Text>
-              <Text style={[styles.summaryLabel, { color: theme.colors.textSecondary }]}>Device</Text>
-            </View>
-          </View>
 
-          {/* <View style={[styles.summarySep, { backgroundColor: theme.colors.border }]} /> */}
+            {/* <View style={[styles.summarySep, { backgroundColor: theme.colors.border }]} /> */}
 
-          {/* <View style={styles.summaryItem}>
+            {/* <View style={styles.summaryItem}>
             <View style={[styles.summaryIconWrap, { backgroundColor: "#2196F318" }]}>
               <Ionicons name="analytics-outline" size={16} color="#2196F3" />
             </View>
@@ -695,107 +713,111 @@ export default function Dashboard() {
             </View>
           </View> */}
 
-          <View style={[styles.summarySep, { backgroundColor: theme.colors.border }]} />
+            <View style={[styles.summarySep, { backgroundColor: theme.colors.border }]} />
 
 
-          <TouchableOpacity
-            style={styles.summaryItem}
-            onPress={() => {
-              if (!isModeSwitching && !modeLocked && isConnected) {
-                toggleMode();
-              }
-            }}
-            disabled={!isModeLoaded || !isConnected}
-            activeOpacity={0.7}
-          >
-            <View style={[styles.summaryIconWrap, { backgroundColor: `${modeColor}1F` }]}>
-              <Ionicons
-                name={isManualMode ? "hand-left-outline" : "sync-outline"}
-                size={16}
-                color={showMode ? modeColor : theme.colors.textSecondary}
-              />
-            </View>
-            <View style={styles.summaryTextWrap}>
-              <Text
-                style={[
-                  styles.summaryValue,
-                  { color: showMode ? modeColor : theme.colors.textSecondary },
-                ]}
-                numberOfLines={1}
-              >
-                {modeText}
-              </Text>
-              <Text style={[styles.summaryLabel, { color: theme.colors.textSecondary }]}>Mode</Text>
-            </View>
-          </TouchableOpacity>
-        </View>
+            <TouchableOpacity
+              style={styles.summaryItem}
+              onPress={() => {
+                if (!isModeSwitching && !modeLocked && isConnected) {
+                  toggleMode();
+                }
+              }}
+              disabled={!isModeLoaded || !isConnected}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.summaryIconWrap, { backgroundColor: `${modeColor}1F` }]}>
+                <Ionicons
+                  name={isManualMode ? "hand-left-outline" : "sync-outline"}
+                  size={16}
+                  color={showMode ? modeColor : theme.colors.textSecondary}
+                />
+              </View>
+              <View style={styles.summaryTextWrap}>
+                <Text
+                  style={[
+                    styles.summaryValue,
+                    { color: showMode ? modeColor : theme.colors.textSecondary },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {modeText}
+                </Text>
+                <Text style={[styles.summaryLabel, { color: theme.colors.textSecondary }]}>Mode</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
 
-        <View style={[styles.summaryActuatorSection, { borderTopColor: theme.colors.border }]}>
-          {/* <View style={styles.summaryActuatorHeading}>
+          <View style={[styles.summaryActuatorSection, { borderTopColor: theme.colors.border }]}>
+            {/* <View style={styles.summaryActuatorHeading}>
             <View>
               <Text style={[styles.summaryActuatorTitle, { color: theme.colors.text }]}>Equipment status</Text>
               <Text style={[styles.summaryActuatorSubtitle, { color: theme.colors.textSecondary }]}>Pumps and valves</Text>
             </View>
             <Ionicons name="pulse-outline" size={19} color={theme.colors.primary} />
           </View> */}
-          <View style={styles.actuatorSummaryGrid}>
-            <ActuatorSummaryCard
-              icon={WaterPumpIcon}
-              label="Water Pump"
-              state={{ active: "ON", inactive: "OFF" }}
-              active={actuatorStatus?.water_pump === true}
-              accentColor="#2E7D32"
-              theme={theme}
-            />
-            <ActuatorSummaryCard
-              icon={WaterPumpIcon}
-              label="Nutrient Pump"
-              state={{ active: "ON", inactive: "OFF" }}
-              active={actuatorStatus?.nutrient_pump === true}
-              accentColor="#43A047"
-              theme={theme}
-            />
-            <ActuatorSummaryCard
-              icon={InletValveIcon}
-              label="Inlet Valve"
-              state={{ active: "OPEN", inactive: "CLOSED" }}
-              active={actuatorStatus?.water_ILvalve === true}
-              accentColor="#0288D1"
-              theme={theme}
-            />
-            <ActuatorSummaryCard
-              icon={OutletValveIcon}
-              label="Outlet Valve"
-              state={{ active: "OPEN", inactive: "CLOSED" }}
-              active={actuatorStatus?.water_OLvalve === true}
-              accentColor="#1976D2"
-              theme={theme}
-            />
+            <View style={styles.actuatorSummaryGrid}>
+              <ActuatorSummaryCard
+                icon={WaterPumpIcon}
+                label="Water Pump"
+                state={{ active: "ON", inactive: "OFF" }}
+                active={actuatorStatus?.water_pump === true}
+                accentColor="#2E7D32"
+                theme={theme}
+                onPress={() => router.push("/(main)/system-control")}
+              />
+              <ActuatorSummaryCard
+                icon={WaterPumpIcon}
+                label="Nutrient Pump"
+                state={{ active: "ON", inactive: "OFF" }}
+                active={actuatorStatus?.nutrient_pump === true}
+                accentColor="#43A047"
+                theme={theme}
+                onPress={() => router.push("/(main)/system-control")}
+              />
+              <ActuatorSummaryCard
+                icon={InletValveIcon}
+                label="Inlet Valve"
+                state={{ active: "OPEN", inactive: "CLOSED" }}
+                active={actuatorStatus?.water_ILvalve === true}
+                accentColor="#0288D1"
+                theme={theme}
+                onPress={() => router.push("/(main)/system-control")}
+              />
+              <ActuatorSummaryCard
+                icon={OutletValveIcon}
+                label="Outlet Valve"
+                state={{ active: "OPEN", inactive: "CLOSED" }}
+                active={actuatorStatus?.water_OLvalve === true}
+                accentColor="#1976D2"
+                theme={theme}
+                onPress={() => router.push("/(main)/system-control")}
+              />
+            </View>
           </View>
         </View>
-      </View>
 
-      <View style={styles.sensorSectionHeader}>
-        <View>
-          <Text style={[styles.sensorSectionTitle, { color: theme.colors.text }]}>Live Sensors</Text>
-          {/* <Text style={[styles.sensorSectionSubtitle, { color: theme.colors.textSecondary }]}>Real-time readings from {selectedDeviceName || "your device"}</Text> */}
+        <View style={styles.sensorSectionHeader}>
+          <View>
+            <Text style={[styles.sensorSectionTitle, { color: theme.colors.text }]}>Live Sensors</Text>
+            {/* <Text style={[styles.sensorSectionSubtitle, { color: theme.colors.textSecondary }]}>Real-time readings from {selectedDeviceName || "your device"}</Text> */}
+          </View>
+          <TouchableOpacity
+            style={[styles.sensorCountBadge, { backgroundColor: `${theme.colors.primary}15` }]}
+            onPress={() => router.push("/(main)/sensor-list")}
+            activeOpacity={0.75}
+            accessibilityRole="button"
+            accessibilityLabel="Open sensor list"
+          >
+            <View style={[styles.sensorCountDot, { backgroundColor: isDeviceOnline ? "#4CAF50" : theme.colors.textSecondary }]} />
+            <Text style={[styles.sensorCountText, { color: theme.colors.primary }]}>{activeSensors}/{sensorCount}</Text>
+            <Ionicons name="arrow-forward" size={13} color={theme.colors.primary} />
+          </TouchableOpacity>
         </View>
-        <TouchableOpacity
-          style={[styles.sensorCountBadge, { backgroundColor: `${theme.colors.primary}15` }]}
-          onPress={() => router.push("/(main)/sensor-list")}
-          activeOpacity={0.75}
-          accessibilityRole="button"
-          accessibilityLabel="Open sensor list"
-        >
-          <View style={[styles.sensorCountDot, { backgroundColor: isDeviceOnline ? "#4CAF50" : theme.colors.textSecondary }]} />
-          <Text style={[styles.sensorCountText, { color: theme.colors.primary }]}>{activeSensors}/{sensorCount}</Text>
-          <Ionicons name="arrow-forward" size={13} color={theme.colors.primary} />
-        </TouchableOpacity>
-      </View>
 
-      {/* ── SENSOR GRID ── */}
-      <View style={styles.sensorGrid}>
-        {SENSOR_CONFIG.map((sensor, index) => (
+        {/* ── SENSOR GRID ── */}
+        <View style={styles.sensorGrid}>
+          {SENSOR_CONFIG.map((sensor, index) => (
             <SensorTile
               key={sensor.id}
               sensor={sensor}
@@ -812,9 +834,10 @@ export default function Dashboard() {
                 });
               }}
             />
-        ))}
-      </View>
-    </ScrollView>
+          ))}
+        </View>
+      </ScrollView>
+    </View>
   );
 }
 
@@ -823,6 +846,19 @@ export default function Dashboard() {
 ============================================================ */
 
 const styles = StyleSheet.create({
+  mainScreenContainer: {
+    flex: 1,
+    position: "relative",
+  },
+  screenBgImage: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: "100%",
+    height: "100%",
+  },
   container: { flex: 1 },
   header: {
     paddingHorizontal: 16,

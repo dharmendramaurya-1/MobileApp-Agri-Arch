@@ -1,36 +1,44 @@
 // src/utils/deviceStatusParser.js
 
 /**
- * Device Status Bit Mapping - EXACT MATCH to firmware struct
+ * Device Status Bit Mapping - EXACT MATCH to firmware DeviceStatus_t union
  * 
- * struct {
- *   uint32_t tank_low             : 1;  // Bit 0  = 0x00000001
- *   uint32_t tank_high            : 1;  // Bit 1  = 0x00000002
- *   uint32_t ec_high              : 1;  // Bit 2  = 0x00000004
- *   uint32_t ec_low               : 1;  // Bit 3  = 0x00000008
- *   uint32_t ph_high              : 1;  // Bit 4  = 0x00000010
- *   uint32_t ph_low               : 1;  // Bit 5  = 0x00000020
- *   uint32_t lux_low              : 1;  // Bit 6  = 0x00000040
- *   uint32_t lux_high             : 1;  // Bit 7  = 0x00000080
- *   uint32_t co2_high             : 1;  // Bit 8  = 0x00000100
- *   uint32_t co2_low              : 1;  // Bit 9  = 0x00000200
- *   uint32_t inlet_valve          : 1;  // Bit 10 = 0x00000400
- *   uint32_t outlet_valve         : 1;  // Bit 11 = 0x00000800
- *   uint32_t water_pump_status    : 1;  // Bit 12 = 0x00001000
- *   uint32_t nutrient_pump        : 1;  // Bit 13 = 0x00002000
- *   uint32_t ac_status            : 1;  // Bit 14 = 0x00004000
- *   uint32_t mode                 : 1;  // Bit 15 = 0x00008000
- *   uint32_t online               : 1;  // Bit 16 = 0x00010000
- *   uint32_t air_temp_high        : 1;  // Bit 17 = 0x00020000
- *   uint32_t air_temp_low         : 1;  // Bit 18 = 0x00040000
- *   uint32_t humidity_high        : 1;  // Bit 19 = 0x00080000
- *   uint32_t humidity_low         : 1;  // Bit 20 = 0x00100000
- *   uint32_t water_temp_high      : 1;  // Bit 21 = 0x00200000
- *   uint32_t water_temp_low       : 1;  // Bit 22 = 0x00400000
- *   uint32_t sensor_fault         : 1;  // Bit 23 = 0x00800000
- *   uint32_t buzzer_status        : 1;  // Bit 24 = 0x01000000
- *   uint32_t dimming_level        : 7;  // Bits 25-31 = 0xFE000000
- * };
+ * typedef union
+ * {
+ *     struct
+ *     {
+ *       uint32_t tank_low            :1;  // Bit0  === 0x00000001
+ *       uint32_t tank_high           :1;  // Bit1  === 0x00000002
+ *       uint32_t ec_high             :1;  // Bit2  === 0x00000004
+ *       uint32_t ec_low              :1;  // Bit3  === 0x00000008
+ *       uint32_t ph_high             :1;  // Bit4  === 0x00000010
+ *       uint32_t ph_low              :1;  // Bit5  === 0x00000020
+ *       uint32_t lux_low             :1;  // Bit6  === 0x00000040
+ *       uint32_t lux_high            :1;  // Bit7  === 0x00000080
+ *
+ *       uint32_t co2_high            :1;  // Bit8  === 0x00000100
+ *       uint32_t co2_low             :1;  // Bit9  === 0x00000200
+ *       uint32_t inlet_valve         :1;  // Bit10 === 0x00000400
+ *       uint32_t outlet_valve        :1;  // Bit11 === 0x00000800
+ *       uint32_t water_pump_status   :1;  // Bit12 === 0x00001000
+ *       uint32_t nutrient_pump       :1;  // Bit13 === 0x00002000
+ *       uint32_t ac_status           :1;  // Bit14 === 0x00004000
+ *       uint32_t mode                :1;  // Bit15 === 0x00008000
+ *
+ *       uint32_t led_status          :1;  // Bit16 === 0x00010000 (LED Light Status)
+ *       uint32_t air_temp_high       :1;  // Bit17 === 0x00020000
+ *       uint32_t air_temp_low        :1;  // Bit18 === 0x00040000
+ *       uint32_t humidity_high       :1;  // Bit19 === 0x00080000
+ *       uint32_t humidity_low        :1;  // Bit20 === 0x00100000
+ *       uint32_t water_temp_high     :1;  // Bit21 === 0x00200000
+ *       uint32_t water_temp_low      :1;  // Bit22 === 0x00400000
+ *       uint32_t clean_tank          :1;  // Bit23 === 0x00800000
+ *
+ *       uint32_t buzzer_status       :1;  // Bit24 === 0x01000000 (Buzzer Audible Alarm)
+ *       uint32_t dimming_level       :7;  // Bits25-31 === 0xFE000000
+ *     };
+ *     uint32_t all;
+ * } DeviceStatus_t;
  */
 
 export const parseDeviceStatus = (status) => {
@@ -54,7 +62,9 @@ export const parseDeviceStatus = (status) => {
       nutrientPump: false,
       acStatus: false,
       mode: false,
-      online: false,
+      // LED Light Status (Bit 16)
+      ledStatus: false,
+      led: false,
       // Environment flags
       airTempHigh: false,
       airTempLow: false,
@@ -63,8 +73,10 @@ export const parseDeviceStatus = (status) => {
       waterTempHigh: false,
       waterTempLow: false,
       // System flags
+      cleanTank: false,
       sensorFault: false,
       buzzer: false,
+      buzzerStatus: false,
       dimmingLevel: 0,
       rawStatus: 0,
     };
@@ -104,8 +116,9 @@ export const parseDeviceStatus = (status) => {
     acStatus: (status & 0x00004000) !== 0,
     // Bit 15: mode (1 = AUTO, 0 = MANUAL)
     mode: (status & 0x00008000) !== 0,
-    // Bit 16: online
-    online: (status & 0x00010000) !== 0,
+    // Bit 16: led_status (LED Light Status)
+    ledStatus: (status & 0x00010000) !== 0,
+    led: (status & 0x00010000) !== 0,
     // Bit 17: air_temp_high
     airTempHigh: (status & 0x00020000) !== 0,
     // Bit 18: air_temp_low
@@ -118,10 +131,12 @@ export const parseDeviceStatus = (status) => {
     waterTempHigh: (status & 0x00200000) !== 0,
     // Bit 22: water_temp_low
     waterTempLow: (status & 0x00400000) !== 0,
-    // Bit 23: sensor_fault
+    // Bit 23: clean_tank
+    cleanTank: (status & 0x00800000) !== 0,
     sensorFault: (status & 0x00800000) !== 0,
     // Bit 24: buzzer_status
     buzzer: (status & 0x01000000) !== 0,
+    buzzerStatus: (status & 0x01000000) !== 0,
     // Bits 25-31: dimming_level (0-127)
     dimmingLevel: (status >> 25) & 0x7F,
     rawStatus: status,
@@ -149,15 +164,18 @@ export const getDefaultDeviceStatus = () => {
     nutrientPump: false,
     acStatus: false,
     mode: false,
-    online: false,
+    ledStatus: false,
+    led: false,
     airTempHigh: false,
     airTempLow: false,
     humidityHigh: false,
     humidityLow: false,
     waterTempHigh: false,
     waterTempLow: false,
+    cleanTank: false,
     sensorFault: false,
     buzzer: false,
+    buzzerStatus: false,
     dimmingLevel: 0,
     rawStatus: 0,
   };
@@ -170,15 +188,11 @@ export const getDisplayStatus = (status) => {
   const parsed = typeof status === 'number' ? parseDeviceStatus(status) : status;
   
   if (!parsed) {
-    return { text: 'Offline', color: '#FF4444', icon: 'power-outline' };
+    return { text: 'Unknown', color: '#757575', icon: 'power-outline' };
   }
 
-  if (!parsed.online) {
-    return { text: 'Offline', color: '#FF4444', icon: 'power-outline' };
-  }
-
-  if (parsed.sensorFault) {
-    return { text: 'Fault', color: '#FF4444', icon: 'alert-circle-outline' };
+  if (parsed.cleanTank) {
+    return { text: 'Cleaning', color: '#2196F3', icon: 'refresh-circle-outline' };
   }
 
   // Check ANY alert from device
@@ -191,12 +205,12 @@ export const getDisplayStatus = (status) => {
                    parsed.airTempHigh || parsed.airTempLow ||
                    parsed.humidityHigh || parsed.humidityLow;
 
-  if (hasAlert) {
+  if (hasAlert || parsed.buzzer) {
     return { text: 'Alert', color: '#FFA500', icon: 'warning-outline' };
   }
 
   if (parsed.waterPump || parsed.inletValve || parsed.outletValve || 
-      parsed.nutrientPump || parsed.acStatus || parsed.buzzer) {
+      parsed.nutrientPump || parsed.acStatus || parsed.buzzer || parsed.ledStatus) {
     return { text: 'Active', color: '#4CAF50', icon: 'play-circle-outline' };
   }
 
@@ -229,6 +243,7 @@ export const getActiveAlerts = (status) => {
   if (parsed.humidityLow) alerts.push('Humidity Low');
   if (parsed.waterTempHigh) alerts.push('Water Temp High');
   if (parsed.waterTempLow) alerts.push('Water Temp Low');
+  if (parsed.buzzer) alerts.push('Buzzer Sounding');
   
   return alerts;
 };
@@ -246,6 +261,7 @@ export const getActuatorStatus = (status) => {
     { label: 'Outlet Valve', value: parsed.outletValve, icon: 'arrow-up-outline' },
     { label: 'Nutrient Pump', value: parsed.nutrientPump, icon: 'leaf-outline' },
     { label: 'AC Status', value: parsed.acStatus, icon: 'thermometer-outline' },
+    { label: 'LED Light', value: parsed.ledStatus, icon: 'sunny-outline' },
     { label: 'Buzzer', value: parsed.buzzer, icon: 'volume-high-outline' },
     { label: 'Mode', value: parsed.mode ? 'AUTO' : 'MANUAL', icon: 'settings-outline' },
   ];
@@ -255,10 +271,7 @@ export const getActuatorStatus = (status) => {
 export const getStatusColor = (status) => getDisplayStatus(status).color;
 export const getStatusText = (status) => getDisplayStatus(status).text;
 export const getStatusIcon = (status) => getDisplayStatus(status).icon;
-export const isDeviceOnline = (status) => {
-  if (typeof status !== 'number' || isNaN(status)) return false;
-  return (status & 0x00010000) !== 0;
-};
+
 export const isAutoMode = (status) => {
   if (typeof status !== 'number' || isNaN(status)) return false;
   return (status & 0x00008000) !== 0;
@@ -281,7 +294,6 @@ export default {
   getStatusIcon,
   getActiveAlerts,
   getActuatorStatus,
-  isDeviceOnline,
   isAutoMode,
   getDimmingLevel,
   hasActiveAlerts,
