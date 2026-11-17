@@ -15,6 +15,7 @@ import {
   View
 } from "react-native";
 import SliderControl from "../../components/SettingsSlider";
+import { useAlerts } from "../../src/context/AlertContext";
 import { useMqtt } from "../../src/context/MqttContext";
 import { useScroll, useScrollReset } from "../../src/context/ScrollContext";
 import { useSystemMode } from "../../src/context/SystemModeContext";
@@ -110,13 +111,12 @@ function DimmingCard({
   };
 
   const confirmedLevel = parseLevel(dimmingLevel);
-  // Confirmed light state strictly from ledOn (Bit 16):
+  // Confirmed light state strictly from device response (ledOn):
   const isConfirmedOn = Boolean(ledOn);
 
-  // Exact dimming level from device (never auto-forced to 100%):
+  // Exact dimming level from device:
   const initialVal = confirmedLevel ?? 0;
   const [localValue, setLocalValue] = useState(initialVal);
-  const [isSwitchPending, setIsSwitchPending] = useState(false);
   const isSlidingRef = useRef(false);
   const slidingTimerRef = useRef(null);
 
@@ -128,8 +128,6 @@ function DimmingCard({
         setLocalValue(parsed);
       }
     }
-    // Device response arrived -> clear pending switch state
-    setIsSwitchPending(false);
   }, [dimmingLevel]);
 
   // Clean up debounce timer on unmount
@@ -140,16 +138,6 @@ function DimmingCard({
       }
     };
   }, []);
-
-  // Safety fallback: if no response arrives within 8 seconds, clear pending state
-  useEffect(() => {
-    if (isSwitchPending) {
-      const timer = setTimeout(() => {
-        setIsSwitchPending(false);
-      }, 8000);
-      return () => clearTimeout(timer);
-    }
-  }, [isSwitchPending]);
 
   // Real-time slider drag: update UI smoothly without spamming MQTT payloads
   const handleSliderChange = (val) => {
@@ -191,9 +179,9 @@ function DimmingCard({
     onLightChange(rounded, true);
   };
 
-  // Light Switch toggle: toggles LED ON/OFF with current dimming level
+  // Light Switch toggle: triggers MQTT publish; switch state updates ONLY when device response arrives (same as water pump)
   const handleSwitchToggle = () => {
-    if (locked || isSwitchPending) return;
+    if (locked) return;
     if (slidingTimerRef.current) {
       clearTimeout(slidingTimerRef.current);
       slidingTimerRef.current = null;
@@ -201,11 +189,7 @@ function DimmingCard({
     isSlidingRef.current = false;
 
     const nextLedState = !isConfirmedOn;
-    setIsSwitchPending(true);
-    const ok = onLightChange(localValue, true, nextLedState);
-    if (ok === false) {
-      setIsSwitchPending(false);
-    }
+    onLightChange(localValue, true, nextLedState);
   };
 
   const accentColor = CONTROL_COLORS.accent;
@@ -279,7 +263,7 @@ function DimmingCard({
         ))}
       </View>
 
-      {/* ── Light Switch Row (State updates ONLY when device response arrives) ── */}
+      {/* ── Light Switch Row (State updates strictly when device response arrives, exactly like water pump) ── */}
       <View style={[styles.ledRow, { borderTopColor: borderC }]}>
         {/* Icon */}
         <View
@@ -298,22 +282,20 @@ function DimmingCard({
         {/* Label */}
         <View style={styles.ledTextWrap}>
           <Text style={[styles.ledLabel, { color: theme.colors.text }]}>Light Switch</Text>
-          <Text style={[styles.ledSub, { color: isSwitchPending ? theme.colors.textSecondary : isConfirmedOn ? ledColor : theme.colors.textSecondary }]}>
-            {isSwitchPending
-              ? "Sending..."
-              : isConfirmedOn
+          <Text style={[styles.ledSub, { color: isConfirmedOn ? ledColor : theme.colors.textSecondary }]}>
+            {isConfirmedOn
               ? `● ON (${confirmedLevel ?? localValue}%)`
               : `○ OFF (${confirmedLevel ?? localValue}%)`}
           </Text>
         </View>
 
-        {/* Switch: remains in same state until device response arrives */}
+        {/* Switch: updates when device response comes, exactly like water pump */}
         <Switch
           value={isConfirmedOn}
           onValueChange={handleSwitchToggle}
           trackColor={{ false: "#E0E0E0", true: `${ledColor}80` }}
-          thumbColor={isSwitchPending ? "#BDBDBD" : isConfirmedOn ? ledColor : "#FAFAFA"}
-          disabled={locked || isSwitchPending}
+          thumbColor={isConfirmedOn ? ledColor : "#FAFAFA"}
+          disabled={locked}
           style={styles.ledSwitch}
         />
       </View>
@@ -402,6 +384,7 @@ export default function SystemControl() {
     getSelectedDeviceSensorData,
     getSelectedDeviceName,
     getSelectedDeviceCropSettings,
+    getSelectedDeviceStatusFlags,
     selectedExternalKey,
     deviceStatusFlags,
     isConnected,
@@ -420,6 +403,7 @@ export default function SystemControl() {
   const selectedDeviceName = getSelectedDeviceName();
   const { isManualMode, toggleMode } = useSystemMode();
   const { cleanTankActive, currentLevel } = useTankSafety();
+  const { recordActuatorAlert } = useAlerts();
 
   const [toggleTimes, setToggleTimes] = useState({});
   const publishTimerRef = useRef(null);
@@ -516,7 +500,8 @@ export default function SystemControl() {
   }, []);
 
   // ── Get mode label from device status flags ──
-  const displayStatus = getDisplayStatus(deviceStatusFlags);
+  const selectedFlags = typeof getSelectedDeviceStatusFlags === 'function' ? getSelectedDeviceStatusFlags() : deviceStatusFlags;
+  const displayStatus = getDisplayStatus(selectedFlags || deviceStatusFlags);
   const rawMode = displayStatus?.mode;
   const modeLabel = rawMode === "AUTO" ? "AUTO" : rawMode === "MANUAL" ? "MANUAL" : null;
 
@@ -539,6 +524,11 @@ export default function SystemControl() {
     if (deviceLocked) return false;
     if (publishTimerRef.current) clearTimeout(publishTimerRef.current);
 
+    const isLightOn = explicitLedState !== undefined ? Boolean(explicitLedState) : dimmingValue > 0;
+    if (typeof recordActuatorAlert === 'function') {
+      recordActuatorAlert('Light Switch', '💡', isLightOn, 'ON', 'OFF');
+    }
+
     const send = async () => {
       try {
         const currentPending = { ...pendingActuatorValuesRef.current };
@@ -548,7 +538,6 @@ export default function SystemControl() {
         for (const dev of devices) {
           fullStatus[dev.actuatorKey] = currentPending[dev.actuatorKey] ?? dev.vb;
         }
-        const isLightOn = explicitLedState !== undefined ? Boolean(explicitLedState) : dimmingValue > 0;
         fullStatus['led'] = isLightOn;
         fullStatus['dimming'] = dimmingValue;
         fullStatus['BUZ_ACK'] = false;
@@ -564,7 +553,7 @@ export default function SystemControl() {
       publishTimerRef.current = setTimeout(send, 350);
     }
     return true;
-  }, [deviceLocked, selectedExternalKey, devices, publishActuatorStatus, isManualMode]);
+  }, [deviceLocked, selectedExternalKey, devices, publishActuatorStatus, isManualMode, recordActuatorAlert]);
 
   // ── ✅ STABLE MODE PILL (SHOW NOTHING DURING LOADING) ──
   const getModePillStyle = useCallback(() => {
@@ -672,9 +661,9 @@ export default function SystemControl() {
 
         {/* ── Dimming Card ── */}
         <DimmingCard
-          dimmingLevel={deviceStatusFlags?.dimmingLevel ?? actuatorStatus?.dimming ?? null}
+          dimmingLevel={selectedFlags?.dimmingLevel ?? actuatorStatus?.dimming ?? null}
           onLightChange={handleLightChange}
-          ledOn={deviceStatusFlags?.ledStatus ?? (actuatorStatus?.led === true)}
+          ledOn={selectedFlags?.ledStatus ?? (actuatorStatus?.led === true)}
           locked={deviceLocked}
           theme={theme}
           cardBg={cardBg}
@@ -724,6 +713,24 @@ export default function SystemControl() {
                     return;
                   }
                   const newVal = nextValue ?? !d.vb;
+
+                  const isValve = d.actuatorKey && d.actuatorKey.toLowerCase().includes('valve');
+                  const emojiMap = {
+                    water_pump: '💧',
+                    nutrient_pump: '🌿',
+                    water_ILvalve: '🚰',
+                    water_OLvalve: '🚿',
+                    ac_stat: '❄️',
+                  };
+                  if (typeof recordActuatorAlert === 'function') {
+                    recordActuatorAlert(
+                      d.displayName || d.actuatorKey,
+                      emojiMap[d.actuatorKey] || '⚡',
+                      newVal,
+                      isValve ? 'OPEN' : 'ON',
+                      isValve ? 'CLOSED' : 'OFF'
+                    );
+                  }
 
                   const nextPending = {
                     ...pendingActuatorValuesRef.current,

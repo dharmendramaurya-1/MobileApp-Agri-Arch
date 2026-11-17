@@ -32,6 +32,7 @@ import Logo from "../../components/Logo";
 import { useAuth } from "../../src/context/AuthContext";
 import { useMqtt } from "../../src/context/MqttContext";
 import { ScrollProvider, useScroll } from "../../src/context/ScrollContext";
+import { useSystemMode } from "../../src/context/SystemModeContext";
 import { useTheme } from "../../src/context/ThemContext";
 import { getParameterById } from "../../src/services/add_crops/add_crops";
 import { user_profile } from "../../src/services/profile/profile";
@@ -125,6 +126,17 @@ function CustomHeader({ navigation, theme }) {
   };
 
   const statusDisplay = getStatusDisplay();
+
+  // Mode display in header hero card
+  const { isManualMode, modeDisplay, isModeLoaded } = useSystemMode();
+  const deviceStatusFlags = sensorData?.deviceStatusFlags;
+  const headerModeText = !deviceKey
+    ? '--'
+    : (deviceStatusFlags && deviceStatusFlags.mode !== null && deviceStatusFlags.mode !== undefined)
+      ? (deviceStatusFlags.mode ? 'Auto' : 'Manual')
+      : (isModeLoaded && modeDisplay && modeDisplay !== 'Loading...')
+        ? modeDisplay
+        : (isManualMode ? 'Manual' : 'Auto');
 
   // ✅ Fetch crop data when CropId changes
   const cropId = sensorData?.cropId;
@@ -348,30 +360,37 @@ function CustomHeader({ navigation, theme }) {
               </View>
             </View>
 
-            {/* ── Crop Info Row (horizontal) ── */}
+            {/* ── Crop Info Row (horizontal: Crop | Stage | Mode | Status) ── */}
             <View style={styles.cropInfoRowCard}>
               <View style={styles.cropInfoItem}>
-                <Ionicons name="leaf-outline" size={14} color="#FFF" />
-                <View>
+                <Ionicons name="leaf-outline" size={13} color="#FFF" />
+                <View style={styles.cropInfoTextCol}>
                   <Text style={styles.cropInfoLabel}>Crop</Text>
-                  <Text style={styles.cropInfoValue}>{cropInfo?.crop_name || 'N/A'}</Text>
+                  <Text style={styles.cropInfoValue} numberOfLines={1}>{cropInfo?.crop_name || 'N/A'}</Text>
                 </View>
               </View>
               <View style={styles.cropInfoSep} />
               <View style={styles.cropInfoItem}>
-                <Ionicons name="bar-chart-outline" size={14} color="#FFF" />
-                <View>
+                <Ionicons name="bar-chart-outline" size={13} color="#FFF" />
+                <View style={styles.cropInfoTextCol}>
                   <Text style={styles.cropInfoLabel}>Stage</Text>
-                  <Text style={styles.cropInfoValue}>{cropInfo?.stage_id || 'N/A'}</Text>
+                  <Text style={styles.cropInfoValue} numberOfLines={1}>{cropInfo?.stage_id || 'N/A'}</Text>
                 </View>
               </View>
               <View style={styles.cropInfoSep} />
               <View style={styles.cropInfoItem}>
-                <Ionicons name="radio-outline" size={14} color="#FFF" />
-                <View>
+                <Ionicons name={isManualMode ? "hand-left-outline" : "sync-outline"} size={13} color="#FFF" />
+                <View style={styles.cropInfoTextCol}>
+                  <Text style={styles.cropInfoLabel}>Mode</Text>
+                  <Text style={styles.cropInfoValue} numberOfLines={1}>{headerModeText}</Text>
+                </View>
+              </View>
+              <View style={styles.cropInfoSep} />
+              <View style={styles.cropInfoItem}>
+                <Ionicons name="radio-outline" size={13} color="#FFF" />
+                <View style={styles.cropInfoTextCol}>
                   <Text style={styles.cropInfoLabel}>Status</Text>
-                  {/* ✅ Show Connecting / Online / Offline correctly */}
-                  <Text style={[styles.cropInfoValue, { color: statusDisplay.color }]}>
+                  <Text style={[styles.cropInfoValue, { color: statusDisplay.color }]} numberOfLines={1}>
                     {statusDisplay.text}
                   </Text>
                 </View>
@@ -884,7 +903,7 @@ const styles = StyleSheet.create({
   headerRightIcons: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 16,
   },
   logoContainer: {
     backgroundColor: "rgba(255,255,255,0.15)",
@@ -965,7 +984,12 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    justifyContent: "center",
+    gap: 4,
+    paddingHorizontal: 2,
+  },
+  cropInfoTextCol: {
+    flexShrink: 1,
   },
   cropInfoSep: {
     width: 1,

@@ -82,22 +82,20 @@ export const SystemModeProvider = ({ children }) => {
     }
   };
 
-  // ── Sync mode from deviceConfig (REAL DATA ONLY) ──────────────────────
+  // ── Sync mode from deviceConfig ──────────────────────
   useEffect(() => {
     if (!isMountedRef.current) return;
     
-    // ✅ ONLY use deviceConfig if it's from real data (not cached)
-    // Check if we have a valid deviceConfig with a lastUpdated timestamp
-    const hasRealData = deviceConfig && deviceConfig.lastUpdated;
+    // Check if deviceConfig has auto_mode specified
+    const hasConfigData = deviceConfig && typeof deviceConfig.auto_mode === 'boolean';
     
-    if (hasRealData && isReady) {
+    if (hasConfigData) {
       const newMode = deviceConfig.auto_mode ? 'auto' : 'manual';
       
-      // ✅ Mark that we've received real mode data
       setHasReceivedRealMode(true);
       
       if (isSwitching) {
-        // ✅ During a switch — device responded with a DIFFERENT mode = confirmation!
+        // During a switch — device responded with a DIFFERENT mode = confirmation!
         if (newMode !== mode) {
           console.log(`✅ Mode confirmed via deviceConfig: ${newMode.toUpperCase()} (was ${mode?.toUpperCase()})`);
           setMode(newMode);
@@ -108,7 +106,7 @@ export const SystemModeProvider = ({ children }) => {
           clearAllTimers();
         }
       } else {
-        // ✅ Not switching — just sync from device (device changed mode externally)
+        // Not switching — sync from device config
         if (newMode !== mode) {
           console.log(`🔄 System mode synced from deviceConfig: ${newMode.toUpperCase()}`);
           setMode(newMode);
@@ -120,59 +118,44 @@ export const SystemModeProvider = ({ children }) => {
       if (!isModeLoaded) {
         setIsModeLoaded(true);
       }
-    } else {
-      // ✅ Don't use cached deviceConfig - wait for real data
-      console.log('⏳ Waiting for real device config data...');
     }
   }, [deviceConfig, isReady]);
 
-  // ── Sync mode from deviceStatusFlags (REAL DATA ONLY) ──────────────────
+  // ── Sync mode from deviceStatusFlags ──────────────────
   useEffect(() => {
     if (!isMountedRef.current) return;
     
-    // ✅ ONLY use deviceStatusFlags if it's from real data
     // Check if we have a valid mode value (not null/undefined)
     if (deviceStatusFlags && deviceStatusFlags.mode !== null && deviceStatusFlags.mode !== undefined) {
+      const newMode = deviceStatusFlags.mode ? 'auto' : 'manual';
       
-      // ✅ Check if this is real data: rawStatus must be non-zero (0 = default/empty)
-      const hasRealData = deviceStatusFlags.rawStatus && deviceStatusFlags.rawStatus !== 0;
+      setHasReceivedRealMode(true);
       
-      if (hasRealData) {
-        const newMode = deviceStatusFlags.mode ? 'auto' : 'manual';
-        
-        // ✅ Mark that we've received real mode data
-        setHasReceivedRealMode(true);
-        
-        if (isSwitching) {
-          // ✅ During a switch — device responded with a DIFFERENT mode = confirmation!
-          if (newMode !== mode) {
-            console.log(`✅ Mode confirmed via status flags: ${newMode.toUpperCase()}`);
-            setMode(newMode);
-            setModeDisplay(newMode === 'auto' ? 'Auto' : 'Manual');
-            setIsModeLoaded(true);
-            setIsSwitching(false);
-            setModeLocked(false);
-            clearAllTimers();
-          }
-        } else {
-          // ✅ Not switching — just sync from device
-          if (newMode !== mode) {
-            console.log(`🔄 System mode synced from deviceStatusFlags (Bit 15): ${newMode.toUpperCase()}`);
-            setMode(newMode);
-            setModeDisplay(newMode === 'auto' ? 'Auto' : 'Manual');
-            setIsModeLoaded(true);
-          }
+      if (isSwitching) {
+        // During a switch — device responded with confirmation
+        if (newMode !== mode) {
+          console.log(`✅ Mode confirmed via status flags: ${newMode.toUpperCase()}`);
+          setMode(newMode);
+          setModeDisplay(newMode === 'auto' ? 'Auto' : 'Manual');
+          setIsModeLoaded(true);
+          setIsSwitching(false);
+          setModeLocked(false);
+          clearAllTimers();
         }
-        
-        if (!isModeLoaded) {
+      } else {
+        // Not switching — sync from device
+        if (newMode !== mode) {
+          console.log(`🔄 System mode synced from deviceStatusFlags (Bit 15): ${newMode.toUpperCase()}`);
+          setMode(newMode);
+          setModeDisplay(newMode === 'auto' ? 'Auto' : 'Manual');
           setIsModeLoaded(true);
         }
       }
+      
+      if (!isModeLoaded) {
+        setIsModeLoaded(true);
+      }
     }
-  // ✅ FIX: Only depend on deviceStatusFlags (not sensorData). sensorData
-  // changes on every MQTT message causing this to re-run and log spurious
-  // mode syncs on every tick even when flags haven't changed.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deviceStatusFlags]);
 
   // ── Update mode display based on current confirmed mode ─────────────────

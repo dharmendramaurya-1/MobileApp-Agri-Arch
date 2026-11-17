@@ -63,6 +63,10 @@ function convertToSenML(cropData, customSettings) {
     { n: "lux_low", v: customSettings.luxLow ?? Math.round((cropData.ppfd_min || 0) * 60) },
     { n: "lux_high", v: customSettings.luxHigh ?? Math.round((cropData.ppfd_max || 0) * 60) },
     { n: "dimming", v: customSettings.dimming ?? 75 },
+    { n: "ppdmin", v: Number(customSettings.ppfd_min ?? cropData.ppfd_min ?? 0) },
+    { n: "ppdmax", v: Number(customSettings.ppfd_max ?? cropData.ppfd_max ?? 0) },
+    { n: "ppmin", v: Number(customSettings.photo_period_min ?? cropData.photo_period_min ?? 0) },
+    { n: "ppmax", v: Number(customSettings.photo_period_max ?? cropData.photo_period_max ?? 0) },
   ];
 }
 
@@ -554,6 +558,11 @@ export default function AddCrops() {
         luxLow: customSettings.luxLow,
         luxHigh: customSettings.luxHigh,
         dimming: customSettings.dimming,
+        CropId: cropDetails.parameter_id || 0,
+        ppdmin: customSettings.ppfd_min ?? cropDetails.ppfd_min ?? 0,
+        ppdmax: customSettings.ppfd_max ?? cropDetails.ppfd_max ?? 0,
+        ppmin: customSettings.photo_period_min ?? cropDetails.photo_period_min ?? 0,
+        ppmax: customSettings.photo_period_max ?? cropDetails.photo_period_max ?? 0,
         durationDays: `${cropDetails.stage_duration_min || 0}-${cropDetails.stage_duration_max || 0} DAS`,
         photoperiod: `${cropDetails.photo_period_min || 0}-${cropDetails.photo_period_max || 0} hrs/day`,
         expectedYield: cropDetails.yield_per_plant || "-",

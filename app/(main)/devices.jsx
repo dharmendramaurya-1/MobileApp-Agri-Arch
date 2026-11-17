@@ -418,6 +418,18 @@ export default function Devices() {
     loadDevices();
   }, []);
 
+  // ── Fix 1: Sync local selectedDevice when MqttContext auto-switches selection ──
+  // When the context changes selectedDeviceId (e.g. auto-select an online device),
+  // keep the local checkbox highlight in sync.
+  useEffect(() => {
+    if (!selectedDeviceId || registeredDevices.length === 0) return;
+    setSelectedDevice(prev => {
+      if (prev?.id === selectedDeviceId) return prev; // already in sync
+      const matched = registeredDevices.find(d => d.id === selectedDeviceId);
+      return matched || prev;
+    });
+  }, [selectedDeviceId, registeredDevices]);
+
   // ── Handle device selection ──
   const handleSelectDevice = async (device) => {
     const key = device.external_key || device.id;
@@ -430,7 +442,13 @@ export default function Devices() {
 
     try {
       setSelectedDevice(device);
-      const selection = selectDevice(device.id, device.name);
+
+      // ── Fix 1: Tell MqttContext whether the user deliberately chose an offline device ──
+      const status = getDeviceStatus(device);
+      const isDeviceOnline = status.isOnline;
+      // userExplicitOffline=true only when the user manually picks an offline device.
+      const selection = selectDevice(device.id, device.name, !isDeviceOnline);
+
       router.replace("/(main)/dashboard");
       await selection;
     } catch (error) {

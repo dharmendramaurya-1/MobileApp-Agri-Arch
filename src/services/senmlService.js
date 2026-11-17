@@ -28,6 +28,10 @@ const SENSOR_NAME_MAP = {
   lightLevel: "lux",
   soilMoisture: "soil_moisture",
   deviceStatus: "DevStat",
+  eventMask: "EventMask",
+  EventMask: "EventMask",
+  sensorFault: "SensFlt",
+  SensFlt: "SensFlt",
 };
 
 /**
@@ -141,12 +145,13 @@ export const searchSenML = async (params) => {
 /**
  * Get all sensor data for a time range
  */
-export const getAllSensorData = async (from, to, limit = 1000) => {
+export const getAllSensorData = async (from, to, limit = 1000, publisherId = null) => {
   const result = await searchSenML({
     from: from,
     to: to,
     limit: limit,
     offset: 0,
+    publisherId: publisherId,
   });
 
   if (!result.success) {
@@ -160,17 +165,32 @@ export const getAllSensorData = async (from, to, limit = 1000) => {
 
   const groupedData = {};
   result.messages.forEach((msg) => {
-    const sensorName = msg.sensorName || msg.name;
-    if (!groupedData[sensorName]) {
-      groupedData[sensorName] = [];
+    const shortName = msg.sensorName || (msg.name ? msg.name.split(':').pop() : null);
+    if (!shortName) return;
+
+    if (!groupedData[shortName]) {
+      groupedData[shortName] = [];
     }
 
-    groupedData[sensorName].push({
+    const item = {
       time: msg.timeMs,
       value: msg.value !== undefined ? msg.value : (msg.bool_value ? 1 : 0),
       unit: msg.unit || '',
       bool_value: msg.bool_value,
-    });
+    };
+
+    groupedData[shortName].push(item);
+
+    // Also map to frontend dataKey (e.g. ATMP -> ambientTemperature)
+    const frontendKey = Object.keys(SENSOR_NAME_MAP).find(
+      (k) => SENSOR_NAME_MAP[k] === shortName
+    );
+    if (frontendKey) {
+      if (!groupedData[frontendKey]) {
+        groupedData[frontendKey] = [];
+      }
+      groupedData[frontendKey].push(item);
+    }
   });
 
   return {

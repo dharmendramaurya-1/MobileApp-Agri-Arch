@@ -1,5 +1,5 @@
 // app/(main)/timings.jsx — High-Aesthetic Interactive System Timings
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,9 +7,9 @@ import {
   ScrollView,
   TouchableOpacity,
   Modal,
-  Alert,
   ActivityIndicator,
   Dimensions,
+  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -19,6 +19,7 @@ import { useScroll, useScrollReset } from '../../src/context/ScrollContext';
 
 const { width } = Dimensions.get('window');
 
+// ── Smart Time Formatter (Friendly & Readable) ──
 function fmtSec(sec) {
   if (sec === null || sec === undefined) return '--';
   const val = Math.max(0, Number(sec) || 0);
@@ -36,7 +37,164 @@ function fmtSec(sec) {
   return rem === 0 ? `${min}m` : `${min}m ${rem}s`;
 }
 
-// ── Centered, Interactive Time Picker Modal with Steppers & Quick Presets ──
+function fmtSecLong(sec) {
+  if (sec === null || sec === undefined) return '--';
+  const val = Math.max(0, Number(sec) || 0);
+  if (val >= 3600) {
+    const hours = Math.floor(val / 3600);
+    const minutes = Math.floor((val % 3600) / 60);
+    const seconds = val % 60;
+    const parts = [];
+    if (hours > 0) parts.push(`${hours} hr${hours > 1 ? 's' : ''}`);
+    if (minutes > 0) parts.push(`${minutes} min`);
+    if (seconds > 0) parts.push(`${seconds} sec`);
+    return parts.join(' ');
+  }
+  if (val < 60) return `${val} seconds`;
+  const min = Math.floor(val / 60);
+  const rem = val % 60;
+  return rem === 0 ? `${min} minute${min > 1 ? 's' : ''}` : `${min}m ${rem}s`;
+}
+
+// ── Custom Attractive Publish / Feedback Modal ──
+function CustomFeedbackModal({ visible, type = 'success', title, message, onClose, theme }) {
+  if (!visible) return null;
+  const isSuccess = type === 'success';
+  const isWarning = type === 'warning';
+  const iconName = isSuccess
+    ? 'checkmark-circle'
+    : isWarning
+    ? 'alert-circle'
+    : 'close-circle';
+
+  const accentColor = isSuccess ? '#2E7D32' : isWarning ? '#F57C00' : '#D32F2F';
+  const bgLight = isSuccess
+    ? 'rgba(46, 125, 50, 0.12)'
+    : isWarning
+    ? 'rgba(245, 124, 0, 0.12)'
+    : 'rgba(211, 47, 47, 0.12)';
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalBackdrop}>
+        <View
+          style={[
+            styles.feedbackCard,
+            {
+              backgroundColor: theme.colors.surface || '#FFFFFF',
+              borderColor: `${accentColor}35`,
+            },
+          ]}
+        >
+          {/* Glowing Icon Header */}
+          <View style={styles.feedbackIconOuter}>
+            <LinearGradient
+              colors={
+                isSuccess
+                  ? ['#4CAF5030', '#2E7D3210']
+                  : isWarning
+                  ? ['#FFA72630', '#F57C0010']
+                  : ['#EF535030', '#D32F2F10']
+              }
+              style={[styles.feedbackIconGlow, { borderColor: `${accentColor}40` }]}
+            >
+              <View style={[styles.feedbackIconCircle, { backgroundColor: bgLight }]}>
+                <Ionicons name={iconName} size={48} color={accentColor} />
+              </View>
+            </LinearGradient>
+          </View>
+
+          {/* Title */}
+          <Text style={[styles.feedbackTitle, { color: theme.colors.text }]}>
+            {title || (isSuccess ? 'Published' : isWarning ? 'Notice' : 'Failed')}
+          </Text>
+
+          {/* Exact clean text */}
+          <Text style={[styles.feedbackMessage, { color: theme.colors.textSecondary }]}>
+            {message}
+          </Text>
+
+          {/* Action button */}
+          <TouchableOpacity
+            style={styles.feedbackBtn}
+            onPress={onClose}
+            activeOpacity={0.85}
+          >
+            <LinearGradient
+              colors={
+                isSuccess
+                  ? ['#2E7D32', '#1B5E20']
+                  : isWarning
+                  ? ['#F57C00', '#E65100']
+                  : ['#D32F2F', '#B71C1C']
+              }
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+              style={styles.feedbackBtnGradient}
+            >
+              <Ionicons name="checkmark-sharp" size={18} color="#FFFFFF" />
+              <Text style={styles.feedbackBtnText}>OK</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ── Custom Confirmation Modal (for Reset) ──
+function CustomConfirmModal({ visible, title, message, onConfirm, onCancel, theme }) {
+  if (!visible) return null;
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={styles.modalBackdrop}>
+        <View
+          style={[
+            styles.feedbackCard,
+            {
+              backgroundColor: theme.colors.surface || '#FFFFFF',
+              borderColor: 'rgba(244, 67, 54, 0.3)',
+            },
+          ]}
+        >
+          <View style={[styles.feedbackIconCircle, { backgroundColor: 'rgba(244, 67, 54, 0.12)', marginBottom: 14 }]}>
+            <Ionicons name="refresh-circle" size={44} color="#F44336" />
+          </View>
+
+          <Text style={[styles.feedbackTitle, { color: theme.colors.text }]}>{title}</Text>
+          <Text style={[styles.feedbackMessage, { color: theme.colors.textSecondary }]}>{message}</Text>
+
+          <View style={styles.confirmBtnRow}>
+            <TouchableOpacity
+              style={[styles.confirmCancelBtn, { borderColor: theme.colors.border || '#E0E0E0' }]}
+              onPress={onCancel}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.confirmCancelText, { color: theme.colors.textSecondary }]}>Cancel</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.confirmActionBtn}
+              onPress={onConfirm}
+              activeOpacity={0.85}
+            >
+              <LinearGradient
+                colors={['#D32F2F', '#B71C1C']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.confirmActionGradient}
+              >
+                <Text style={styles.confirmActionText}>Reset All</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+// ── Centered, Interactive Time Picker Modal ──
 function CenteredTimePickerModal({ visible, value, field, onClose, onSelect, theme }) {
   const safeValue = Math.max(0, Math.min(Number(value) || 0, 86400));
   const initialHours = Math.floor(safeValue / 3600);
@@ -108,7 +266,6 @@ function CenteredTimePickerModal({ visible, value, field, onClose, onSelect, the
   const borderC = theme.colors.border || '#E0E0E0';
   const color = field?.color || '#2E7D32';
 
-  // Common Presets based on field type
   const isLight = field?.key === 'LPP_OT' || field?.key === 'LLP_DI' || field?.key === 'LPP_DI';
   const isPulse = field?.key?.includes('OT') && !isLight;
   const presets = isLight
@@ -127,7 +284,7 @@ function CenteredTimePickerModal({ visible, value, field, onClose, onSelect, the
               <View style={[styles.modalIconCircle, { backgroundColor: `${color}18` }]}>
                 <Ionicons name={field?.icon || 'timer-outline'} size={20} color={color} />
               </View>
-              <View>
+              <View style={{ flex: 1, paddingRight: 6 }}>
                 <Text style={[styles.modalTitle, { color: theme.colors.text }]} numberOfLines={1}>
                   {field?.label || 'Set Duration'}
                 </Text>
@@ -135,7 +292,7 @@ function CenteredTimePickerModal({ visible, value, field, onClose, onSelect, the
                   <View style={[styles.modalCodeBadge, { backgroundColor: `${color}18` }]}>
                     <Text style={[styles.modalCodeText, { color }]}>{field?.shortLabel}</Text>
                   </View>
-                  <Text style={[styles.modalSubtitle, { color: theme.colors.textSecondary }]}>
+                  <Text style={[styles.modalSubtitle, { color: theme.colors.textSecondary }]} numberOfLines={1}>
                     {field?.groupTitle}
                   </Text>
                 </View>
@@ -152,14 +309,14 @@ function CenteredTimePickerModal({ visible, value, field, onClose, onSelect, the
 
           {/* Digital Timer Display Card */}
           <LinearGradient
-            colors={theme.dark ? ['#1B5E2020', '#1B5E2010'] : ['#E8F5E9', '#F1F8E9']}
-            style={[styles.digitalDisplayCard, { borderColor: `${color}30` }]}
+            colors={theme.dark ? ['#1B5E2025', '#1B5E2010'] : ['#E8F5E9', '#F1F8E9']}
+            style={[styles.digitalDisplayCard, { borderColor: `${color}35` }]}
           >
             <Text style={[styles.digitalTimeText, { color }]}>
               {String(hours).padStart(2, '0')} : {String(minutes).padStart(2, '0')} : {String(seconds).padStart(2, '0')}
             </Text>
             <Text style={[styles.digitalSubText, { color: theme.colors.textSecondary }]}>
-              {fmtSec(totalSec)} ({totalSec} seconds total)
+              {fmtSecLong(totalSec)} ({totalSec}s)
             </Text>
           </LinearGradient>
 
@@ -296,31 +453,29 @@ function CenteredTimePickerModal({ visible, value, field, onClose, onSelect, the
   );
 }
 
-// ── Timing Categories ──
+// ── Timing Categories Configuration ──
 const TIMING_GROUPS = [
   {
     id: 'water',
     title: 'Water Circulation',
     filterLabel: 'Water',
-    shortDesc: 'Pump pulse & cycle',
+    shortDesc: 'Main circulation pump & rest cycles',
     icon: 'water',
-    color: '#2196F3',
-    gradient: ['#2196F315', '#0288D105'],
+    color: '#0288D1',
     items: [
-      { key: 'WPONT', label: 'Water Pump ON Time', shortLabel: 'WPONT', def: 120, unit: 's', desc: 'Active pumping duration' },
+      { key: 'WPONT', label: 'Water Pump ON Time', shortLabel: 'WPONT', def: 120, unit: 's', desc: 'Active water circulation duration' },
       { key: 'WPINT', label: 'Water Pump Interval', shortLabel: 'WPINT', def: 900, unit: 's', desc: 'Rest duration between cycles' },
     ],
   },
   {
     id: 'nutrient',
-    title: 'Nutrient Pump',
+    title: 'Nutrient Feeding',
     filterLabel: 'Nutrient',
-    shortDesc: 'Main nutrient feed',
+    shortDesc: 'Nutrient dosing pump cycle',
     icon: 'leaf',
-    color: '#4CAF50',
-    gradient: ['#4CAF5015', '#2E7D3205'],
+    color: '#2E7D32',
     items: [
-      { key: 'NP_OT', label: 'Nutrient Pump ON Time', shortLabel: 'NP_OT', def: 10, unit: 's', desc: 'Nutrient pump active burst' },
+      { key: 'NP_OT', label: 'Nutrient Pump ON Time', shortLabel: 'NP_OT', def: 10, unit: 's', desc: 'Active nutrient dosing burst' },
       { key: 'NP_DI', label: 'Nutrient Pump Interval', shortLabel: 'NP_DI', def: 3600, unit: 's', desc: 'Interval between feedings' },
     ],
   },
@@ -328,41 +483,38 @@ const TIMING_GROUPS = [
     id: 'light',
     title: 'Grow Light Photoperiod',
     filterLabel: 'Light',
-    shortDesc: 'Lighting cycle & dark period',
+    shortDesc: '24-hour photoperiod & dark rest',
     icon: 'sunny',
-    color: '#FFB300',
-    gradient: ['#FFB30018', '#FFA00008'],
+    color: '#F57C00',
     items: [
-      { key: 'LPP_OT', label: 'Light ON Time (Photoperiod)', shortLabel: 'LPP_OT', def: 43200, unit: 's', desc: 'Active lighting duration per cycle' },
-      { key: 'LLP_DI', label: 'Light Cycle Interval (Dark Period)', shortLabel: 'LLP_DI', def: 43200, unit: 's', desc: 'Dark rest duration between light cycles' },
+      { key: 'LPP_OT', label: 'Light ON Time (Day)', shortLabel: 'LPP_OT', def: 43200, unit: 's', desc: 'Daily lighting duration' },
+      { key: 'LLP_DI', label: 'Dark Period (Night)', shortLabel: 'LLP_DI', def: 43200, unit: 's', desc: 'Daily dark rest duration' },
     ],
   },
   {
     id: 'ec',
     title: 'EC Fertigation (A & B)',
-    filterLabel: 'EC',
-    shortDesc: 'Concentrate dosing',
+    filterLabel: 'EC Dosing',
+    shortDesc: 'Precision A & B concentrate dosing',
     icon: 'flask',
-    color: '#00BCD4',
-    gradient: ['#00BCD415', '#0097A705'],
+    color: '#00897B',
     items: [
-      { key: 'ECAP_OT', label: 'EC-A Pump ON Time', shortLabel: 'ECAP_OT', def: 10, unit: 's', desc: 'Part-A dosing burst' },
-      { key: 'ECA_DI', label: 'EC-A Dosing Interval', shortLabel: 'ECA_DI', def: 3600, unit: 's', desc: 'Part-A cycle frequency' },
-      { key: 'ECBP_OT', label: 'EC-B Pump ON Time', shortLabel: 'ECBP_OT', def: 10, unit: 's', desc: 'Part-B dosing burst' },
-      { key: 'ECB_DI', label: 'EC-B Dosing Interval', shortLabel: 'ECB_DI', def: 3600, unit: 's', desc: 'Part-B cycle frequency' },
+      { key: 'ECAP_OT', label: 'EC-A Pump ON Time', shortLabel: 'ECAP_OT', def: 10, unit: 's', desc: 'Part-A concentrate micro burst' },
+      { key: 'ECA_DI', label: 'EC-A Dosing Interval', shortLabel: 'ECA_DI', def: 3600, unit: 's', desc: 'Interval between Part-A doses' },
+      { key: 'ECBP_OT', label: 'EC-B Pump ON Time', shortLabel: 'ECBP_OT', def: 10, unit: 's', desc: 'Part-B concentrate micro burst' },
+      { key: 'ECB_DI', label: 'EC-B Dosing Interval', shortLabel: 'ECB_DI', def: 3600, unit: 's', desc: 'Interval between Part-B doses' },
     ],
   },
   {
     id: 'ph',
     title: 'pH Balancing',
-    filterLabel: 'pH',
-    shortDesc: 'pH Up & Down pulses',
+    filterLabel: 'pH Balance',
+    shortDesc: 'pH Up & Down correction pulses',
     icon: 'speedometer',
-    color: '#FF9800',
-    gradient: ['#FF980015', '#F57C0005'],
+    color: '#8E24AA',
     items: [
-      { key: 'pHPU_ONT', label: 'pH Up Pump ON Time', shortLabel: 'pHPU_ONT', def: 5, unit: 's', desc: 'pH Up micro-dose' },
-      { key: 'pHPD_ONT', label: 'pH Down Pump ON Time', shortLabel: 'pHPD_ONT', def: 5, unit: 's', desc: 'pH Down micro-dose' },
+      { key: 'pHPU_ONT', label: 'pH Up Pump ON Time', shortLabel: 'pHPU_ONT', def: 5, unit: 's', desc: 'pH Up micro-dose burst' },
+      { key: 'pHPD_ONT', label: 'pH Down Pump ON Time', shortLabel: 'pHPD_ONT', def: 5, unit: 's', desc: 'pH Down micro-dose burst' },
     ],
   },
 ];
@@ -370,7 +522,7 @@ const TIMING_GROUPS = [
 export default function TimingsScreen() {
   const { theme } = useTheme();
   const { headerHeight } = useScroll();
-  const scrollRef = React.useRef(null);
+  const scrollRef = useRef(null);
   useScrollReset(scrollRef);
 
   const {
@@ -388,7 +540,6 @@ export default function TimingsScreen() {
   const selectedDeviceName = getSelectedDeviceName();
   const currentDeviceTimings = getSelectedDeviceTimings();
 
-  // ── Stable device online / offline status ──
   const isDeviceOnline = useMemo(() => {
     if (!deviceKey) return false;
     return deviceOnlineStatus[deviceKey] === true;
@@ -398,10 +549,6 @@ export default function TimingsScreen() {
     if (!deviceKey) return false;
     return deviceInitialLoadComplete[deviceKey] === true;
   }, [deviceKey, deviceInitialLoadComplete]);
-
-  const isOffline = useMemo(() => {
-    return !isConnected || (isInitialLoadComplete && !isDeviceOnline);
-  }, [isConnected, isInitialLoadComplete, isDeviceOnline]);
 
   const canPublish = isConnected && isDeviceOnline;
 
@@ -415,12 +562,25 @@ export default function TimingsScreen() {
   const [isSaving, setIsSaving] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
 
+  // Custom feedback modal state
+  const [feedbackModal, setFeedbackModal] = useState({
+    visible: false,
+    type: 'success',
+    title: '',
+    message: '',
+  });
+
+  // Custom reset confirm modal state
+  const [confirmResetVisible, setConfirmResetVisible] = useState(false);
+
   useEffect(() => {
-    if (currentDeviceTimings) {
+    if (currentDeviceTimings && Object.keys(currentDeviceTimings).length > 0) {
+      console.log("⏱️ [Timings Screen] Device response arrived, updating UI timings state:", currentDeviceTimings);
       setTimings((prev) => ({
         ...prev,
         ...currentDeviceTimings,
       }));
+      setHasChanges(false);
     }
   }, [currentDeviceTimings]);
 
@@ -450,15 +610,22 @@ export default function TimingsScreen() {
 
   const handleSaveAndPublish = async () => {
     if (!deviceKey) {
-      Alert.alert('Error', 'No device selected.');
+      setFeedbackModal({
+        visible: true,
+        type: 'warning',
+        title: 'No Device Selected',
+        message: 'Please select a device before publishing timings.',
+      });
       return;
     }
 
     if (!canPublish) {
-      Alert.alert(
-        'Device Offline',
-        'Cannot publish timings while device is offline. Your changes are kept locally, but cannot be sent to the device until it reconnects.'
-      );
+      setFeedbackModal({
+        visible: true,
+        type: 'warning',
+        title: 'Device Offline',
+        message: 'Device is offline. Your changes are saved locally and will publish when the device reconnects.',
+      });
       return;
     }
 
@@ -467,34 +634,32 @@ export default function TimingsScreen() {
       const success = await publishTimings(deviceKey, timings);
       if (success) {
         setHasChanges(false);
-        Alert.alert('✅ Saved', `All ${totalParameters} system timings published to device successfully!`);
+        // Custom attractive popup with exact requested message:
+        setFeedbackModal({
+          visible: true,
+          type: 'success',
+          title: 'Success!',
+          message: 'Your data saved and published successfully',
+        });
       } else {
-        Alert.alert('Error', 'Failed to publish timings to device.');
+        setFeedbackModal({
+          visible: true,
+          type: 'error',
+          title: 'Publish Failed',
+          message: 'Failed to publish timings to device. Please verify connection and try again.',
+        });
       }
     } catch (err) {
       console.error('Error saving timings:', err);
-      Alert.alert('Error', 'An error occurred while publishing.');
+      setFeedbackModal({
+        visible: true,
+        type: 'error',
+        title: 'Error',
+        message: 'An unexpected error occurred while publishing timings.',
+      });
     } finally {
       setIsSaving(false);
     }
-  };
-
-  const resetToDefaults = () => {
-    Alert.alert(
-      'Reset Timings',
-      `Reset all ${totalParameters} timings to factory defaults?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reset All',
-          style: 'destructive',
-          onPress: () => {
-            setTimings({ ...DEFAULT_TIMINGS });
-            setHasChanges(true);
-          },
-        },
-      ]
-    );
   };
 
   const filteredGroups = useMemo(() => {
@@ -509,41 +674,46 @@ export default function TimingsScreen() {
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
       <ScrollView
         ref={scrollRef}
-        contentContainerStyle={[styles.scrollContent, { paddingTop: headerHeight + 8 }]}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingTop: headerHeight + 8, paddingBottom: 110 },
+        ]}
         showsVerticalScrollIndicator={false}
       >
         {/* Hero Interactive Card */}
         <LinearGradient
-          colors={theme.dark ? ['#1B5E20', '#0D3813'] : ['#2E7D32', '#1B5E20']}
+          colors={theme.dark ? ['#1B5E20', '#0A2E0F'] : ['#2E7D32', '#1B5E20']}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={styles.heroCard}
         >
           <View style={styles.heroTopRow}>
-            <View style={{ flex: 1 }}>
-              <View style={styles.heroTagRow}>
+            <View style={{ flex: 1, paddingRight: 8 }}>
+              {/* Status Chip */}
+              <View style={styles.heroStatusChip}>
                 <View
                   style={[
-                    styles.heroLiveDot,
+                    styles.heroStatusDot,
                     { backgroundColor: canPublish ? '#69F0AE' : '#FF5252' },
                   ]}
                 />
-                <Text style={styles.heroTagText}>
-                  {canPublish ? 'FIRMWARE TIMING ENGINE' : 'OFFLINE • TIMINGS LOCAL ONLY'}
+                <Text style={styles.heroStatusText}>
+                  {canPublish ? 'CONNECTED • FIRMWARE ACTIVE' : 'OFFLINE • EDITING LOCALLY'}
                 </Text>
               </View>
+
               <Text style={styles.heroTitle}>System Duty Cycles</Text>
-              <Text style={styles.heroSub}>
-                {selectedDeviceName ? `${selectedDeviceName} • ` : ''}{totalParameters} Parameters Active
+              <Text style={styles.heroSub} numberOfLines={1}>
+                {selectedDeviceName || 'AgriArch Controller'} • {totalParameters} Active Timers
               </Text>
             </View>
 
             <TouchableOpacity
               style={styles.heroResetBtn}
-              onPress={resetToDefaults}
+              onPress={() => setConfirmResetVisible(true)}
               activeOpacity={0.7}
             >
-              <Ionicons name="refresh" size={14} color="#FFFFFF" />
+              <Ionicons name="refresh-outline" size={14} color="#FFFFFF" />
               <Text style={styles.heroResetText}>Reset</Text>
             </TouchableOpacity>
           </View>
@@ -551,21 +721,25 @@ export default function TimingsScreen() {
           {/* Quick Metrics Bar inside Hero */}
           <View style={styles.heroMetricsBar}>
             <View style={styles.heroMetricItem}>
+              <Ionicons name="water-outline" size={13} color="#90CAF9" style={{ marginBottom: 2 }} />
               <Text style={styles.heroMetricVal}>{fmtSec(timings.WPONT)}</Text>
               <Text style={styles.heroMetricLabel}>Pump ON</Text>
             </View>
             <View style={styles.heroMetricDivider} />
             <View style={styles.heroMetricItem}>
+              <Ionicons name="pause-circle-outline" size={13} color="#A5D6A7" style={{ marginBottom: 2 }} />
               <Text style={styles.heroMetricVal}>{fmtSec(timings.WPINT)}</Text>
-              <Text style={styles.heroMetricLabel}>Interval</Text>
+              <Text style={styles.heroMetricLabel}>Rest</Text>
             </View>
             <View style={styles.heroMetricDivider} />
             <View style={styles.heroMetricItem}>
+              <Ionicons name="leaf-outline" size={13} color="#80CBC4" style={{ marginBottom: 2 }} />
               <Text style={styles.heroMetricVal}>{fmtSec(timings.NP_OT)}</Text>
-              <Text style={styles.heroMetricLabel}>Nutrient ON</Text>
+              <Text style={styles.heroMetricLabel}>Nutrient</Text>
             </View>
             <View style={styles.heroMetricDivider} />
             <View style={styles.heroMetricItem}>
+              <Ionicons name="sunny-outline" size={13} color="#FFE082" style={{ marginBottom: 2 }} />
               <Text style={styles.heroMetricVal}>{fmtSec(timings.LPP_OT ?? 43200)}</Text>
               <Text style={styles.heroMetricLabel}>Light ON</Text>
             </View>
@@ -587,6 +761,12 @@ export default function TimingsScreen() {
             onPress={() => setSelectedFilter('all')}
             activeOpacity={0.7}
           >
+            <Ionicons
+              name="layers-outline"
+              size={13}
+              color={selectedFilter === 'all' ? '#FFFFFF' : '#757575'}
+              style={{ marginRight: 5 }}
+            />
             <Text style={[styles.filterPillText, selectedFilter === 'all' && styles.filterPillTextActive]}>
               All ({totalParameters})
             </Text>
@@ -609,21 +789,24 @@ export default function TimingsScreen() {
                   name={g.icon}
                   size={13}
                   color={isActive ? '#FFFFFF' : g.color}
-                  style={{ marginRight: 4 }}
+                  style={{ marginRight: 5 }}
                 />
                 <Text style={[styles.filterPillText, isActive && { color: '#FFFFFF', fontWeight: '700' }]}>
-                  {g.filterLabel || g.title.split(' ')[0]}
+                  {g.filterLabel}
                 </Text>
               </TouchableOpacity>
             );
           })}
         </ScrollView>
 
-        {/* Grouped Timing Cards with Micro-Interactions */}
+        {/* Grouped Timing Cards */}
         {filteredGroups.map((group) => (
           <View
             key={group.id}
-            style={[styles.categoryCard, { backgroundColor: cardBg, borderColor: borderC }]}
+            style={[
+              styles.categoryCard,
+              { backgroundColor: cardBg, borderColor: borderC },
+            ]}
           >
             {/* Category Header Bar */}
             <View style={styles.categoryHeader}>
@@ -634,6 +817,11 @@ export default function TimingsScreen() {
                 <Text style={[styles.categoryTitle, { color: theme.colors.text }]}>{group.title}</Text>
                 <Text style={[styles.categorySub, { color: theme.colors.textSecondary }]}>
                   {group.shortDesc}
+                </Text>
+              </View>
+              <View style={[styles.groupCountBadge, { backgroundColor: `${group.color}14` }]}>
+                <Text style={[styles.groupCountText, { color: group.color }]}>
+                  {group.items.length} {group.items.length === 1 ? 'timer' : 'timers'}
                 </Text>
               </View>
             </View>
@@ -725,7 +913,13 @@ export default function TimingsScreen() {
                 return (
                   <View
                     key={item.key}
-                    style={[styles.timingTile, { borderColor: borderC, backgroundColor: theme.colors.background }]}
+                    style={[
+                      styles.timingTile,
+                      {
+                        borderColor: borderC,
+                        backgroundColor: theme.dark ? 'rgba(255,255,255,0.02)' : '#FAFAFA',
+                      },
+                    ]}
                   >
                     {/* Top Row: Code Badge & Full Edit Button */}
                     <View style={styles.tileTopRow}>
@@ -734,7 +928,7 @@ export default function TimingsScreen() {
                       </View>
 
                       <TouchableOpacity
-                        style={[styles.tileTapToEdit, { backgroundColor: `${group.color}10` }]}
+                        style={[styles.tileTapToEdit, { backgroundColor: `${group.color}10`, borderColor: `${group.color}25` }]}
                         onPress={() =>
                           setActivePickerField({
                             ...item,
@@ -743,9 +937,9 @@ export default function TimingsScreen() {
                             color: group.color,
                           })
                         }
-                        activeOpacity={0.6}
+                        activeOpacity={0.65}
                       >
-                        <Ionicons name="options-outline" size={13} color={group.color} />
+                        <Ionicons name="time-outline" size={13} color={group.color} />
                         <Text style={[styles.tileTapText, { color: group.color }]}>Set Time</Text>
                       </TouchableOpacity>
                     </View>
@@ -758,10 +952,16 @@ export default function TimingsScreen() {
                       {item.desc}
                     </Text>
 
-                    {/* Bottom Row: Big Formatted Value + Direct Steppers */}
+                    {/* Bottom Row: Human-friendly Duration Pill + Stepper controls */}
                     <View style={styles.tileBottomRow}>
                       <TouchableOpacity
-                        style={{ flex: 1 }}
+                        style={[
+                          styles.tileDurationPill,
+                          {
+                            backgroundColor: `${group.color}10`,
+                            borderColor: `${group.color}30`,
+                          },
+                        ]}
                         onPress={() =>
                           setActivePickerField({
                             ...item,
@@ -770,30 +970,53 @@ export default function TimingsScreen() {
                             color: group.color,
                           })
                         }
+                        activeOpacity={0.7}
                       >
-                        <Text style={[styles.tileDurationText, { color: group.color }]}>
-                          {fmtSec(val)}
-                        </Text>
-                        <Text style={[styles.tileSecondsRaw, { color: theme.colors.textSecondary }]}>
-                          {val}s
-                        </Text>
+                        <Ionicons name="timer" size={16} color={group.color} />
+                        <View>
+                          <Text style={[styles.tileDurationText, { color: group.color }]}>
+                            {fmtSec(val)}
+                          </Text>
+                          <Text style={[styles.tileSecondsRaw, { color: theme.colors.textSecondary }]}>
+                            {val}s total
+                          </Text>
+                        </View>
                       </TouchableOpacity>
 
-                      {/* Micro Steppers right on card */}
+                      {/* Tactile Micro Stepper Buttons */}
                       <View style={styles.miniStepperGroup}>
                         <TouchableOpacity
-                          style={[styles.miniStepBtn, { borderColor: borderC }]}
+                          style={[
+                            styles.miniStepBtn,
+                            {
+                              borderColor: `${group.color}35`,
+                              backgroundColor: theme.colors.surface || '#FFFFFF',
+                            },
+                          ]}
                           onPress={() => handleQuickStep(item.key, -stepDelta)}
                           activeOpacity={0.6}
                         >
-                          <Ionicons name="remove" size={14} color={theme.colors.text} />
+                          <Ionicons name="remove" size={16} color={group.color} />
                         </TouchableOpacity>
+
+                        <View style={styles.stepDeltaBadge}>
+                          <Text style={[styles.stepDeltaText, { color: theme.colors.textSecondary }]}>
+                            {stepDelta >= 60 ? `${stepDelta / 60}m` : `${stepDelta}s`}
+                          </Text>
+                        </View>
+
                         <TouchableOpacity
-                          style={[styles.miniStepBtn, { borderColor: borderC }]}
+                          style={[
+                            styles.miniStepBtn,
+                            {
+                              borderColor: `${group.color}35`,
+                              backgroundColor: theme.colors.surface || '#FFFFFF',
+                            },
+                          ]}
                           onPress={() => handleQuickStep(item.key, stepDelta)}
                           activeOpacity={0.6}
                         >
-                          <Ionicons name="add" size={14} color={theme.colors.text} />
+                          <Ionicons name="add" size={16} color={group.color} />
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -804,69 +1027,114 @@ export default function TimingsScreen() {
           </View>
         ))}
 
-        {/* Floating / Sticky-style Save Button */}
-        <View style={styles.saveSection}>
-          <TouchableOpacity
+        {/* Offline Warning Notice if disconnected */}
+        {!canPublish && (
+          <View
             style={[
-              styles.saveBtn,
-              hasChanges && canPublish && styles.saveBtnHighlighted,
-              !canPublish && styles.saveBtnDisabled,
-              { opacity: isSaving ? 0.7 : !canPublish ? 0.65 : 1 },
+              styles.offlineNoticeCard,
+              {
+                backgroundColor: theme.dark ? 'rgba(244, 67, 54, 0.12)' : '#FFEBEE',
+                borderColor: theme.dark ? 'rgba(244, 67, 54, 0.3)' : '#FFCDD2',
+              },
             ]}
-            onPress={handleSaveAndPublish}
-            disabled={!canPublish || isSaving}
-            activeOpacity={0.8}
+          >
+            <Ionicons name="cloud-offline-outline" size={20} color="#D32F2F" />
+            <Text
+              style={[
+                styles.offlineNoticeText,
+                { color: theme.dark ? '#FF8A80' : '#C62828' },
+              ]}
+            >
+              Device is currently offline. You can test and adjust values locally; publish will activate once connection restores.
+            </Text>
+          </View>
+        )}
+      </ScrollView>
+
+      {/* Floating Modern Save & Publish Bar */}
+      <View
+        style={[
+          styles.stickyBottomBar,
+          {
+            backgroundColor: theme.colors.surface || '#FFFFFF',
+            borderTopColor: borderC,
+          },
+        ]}
+      >
+        <TouchableOpacity
+          style={[
+            styles.saveBtn,
+            !canPublish && styles.saveBtnDisabled,
+            { opacity: isSaving ? 0.7 : !canPublish ? 0.65 : 1 },
+          ]}
+          onPress={handleSaveAndPublish}
+          disabled={!canPublish || isSaving}
+          activeOpacity={0.85}
+        >
+          <LinearGradient
+            colors={
+              !canPublish
+                ? ['#9E9E9E', '#757575']
+                : hasChanges
+                ? ['#2E7D32', '#1B5E20']
+                : ['#388E3C', '#2E7D32']
+            }
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.saveBtnGradient}
           >
             {isSaving ? (
               <ActivityIndicator color="#FFFFFF" size="small" />
             ) : (
               <>
                 <Ionicons
-                  name={!canPublish ? 'lock-closed-outline' : 'cloud-upload'}
-                  size={18}
+                  name={!canPublish ? 'lock-closed-outline' : hasChanges ? 'cloud-upload' : 'cloud-done-outline'}
+                  size={20}
                   color="#FFFFFF"
                 />
                 <Text style={styles.saveBtnText}>
                   {!canPublish
-                    ? (!isConnected ? 'Offline — No Connection' : 'Device Offline — Cannot Publish')
-                    : (hasChanges ? 'Save Changes to Device' : 'Publish Timings to Device')}
+                    ? (!isConnected ? 'Offline — No MQTT Connection' : 'Device Offline')
+                    : hasChanges
+                    ? 'Save & Publish Changes'
+                    : 'Publish Timings to Device'}
                 </Text>
                 {hasChanges && canPublish && (
                   <View style={styles.unsavedDotBadge}>
-                    <Text style={styles.unsavedDotText}>1</Text>
+                    <Text style={styles.unsavedDotText}>Ready</Text>
                   </View>
                 )}
               </>
             )}
-          </TouchableOpacity>
+          </LinearGradient>
+        </TouchableOpacity>
+      </View>
 
-          {!canPublish && (
-            <View
-              style={[
-                styles.offlineNoticeCard,
-                {
-                  backgroundColor: theme.dark ? 'rgba(244, 67, 54, 0.12)' : '#FFEBEE',
-                  borderColor: theme.dark ? 'rgba(244, 67, 54, 0.3)' : '#FFCDD2',
-                },
-              ]}
-            >
-              <Ionicons name="cloud-offline-outline" size={18} color="#D32F2F" />
-              <Text
-                style={[
-                  styles.offlineNoticeText,
-                  { color: theme.dark ? '#FF8A80' : '#C62828' },
-                ]}
-              >
-                Device is offline. You can adjust and preview timings, but publishing to the device is disabled until connection is restored.
-              </Text>
-            </View>
-          )}
-        </View>
+      {/* Custom Attractive Feedback Modal */}
+      <CustomFeedbackModal
+        visible={feedbackModal.visible}
+        type={feedbackModal.type}
+        title={feedbackModal.title}
+        message={feedbackModal.message}
+        onClose={() => setFeedbackModal((prev) => ({ ...prev, visible: false }))}
+        theme={theme}
+      />
 
-        <View style={{ height: 40 }} />
-      </ScrollView>
+      {/* Custom Confirmation Modal for Factory Reset */}
+      <CustomConfirmModal
+        visible={confirmResetVisible}
+        title="Reset All Timings?"
+        message={`Are you sure you want to restore all ${totalParameters} timing parameters back to their factory default duty cycles?`}
+        onConfirm={() => {
+          setConfirmResetVisible(false);
+          setTimings({ ...DEFAULT_TIMINGS });
+          setHasChanges(true);
+        }}
+        onCancel={() => setConfirmResetVisible(false)}
+        theme={theme}
+      />
 
-      {/* Centered Modal */}
+      {/* Interactive Time Picker Modal */}
       {activePickerField && (
         <CenteredTimePickerModal
           visible={!!activePickerField}
@@ -883,63 +1151,69 @@ export default function TimingsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  scrollContent: { paddingHorizontal: 16, paddingBottom: 40 },
+  scrollContent: { paddingHorizontal: 16 },
 
   /* Hero Card */
   heroCard: {
-    borderRadius: 20,
+    borderRadius: 22,
     padding: 18,
     marginBottom: 14,
-    elevation: 4,
-    shadowColor: '#2E7D32',
+    elevation: 5,
+    shadowColor: '#1B5E20',
     shadowOpacity: 0.35,
     shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 8,
+    shadowRadius: 10,
   },
   heroTopRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
-    marginBottom: 16,
+    marginBottom: 14,
   },
-  heroTagRow: {
+  heroStatusChip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginBottom: 4,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 20,
+    alignSelf: 'flex-start',
+    marginBottom: 6,
   },
-  heroLiveDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#69F0AE',
+  heroStatusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
   },
-  heroTagText: {
-    color: '#A5D6A7',
+  heroStatusText: {
+    color: '#E8F5E9',
     fontSize: 10,
     fontWeight: '800',
-    letterSpacing: 0.8,
+    letterSpacing: 0.5,
   },
   heroTitle: {
     color: '#FFFFFF',
     fontSize: 22,
     fontWeight: '800',
-    letterSpacing: -0.4,
+    letterSpacing: -0.3,
   },
   heroSub: {
-    color: '#E8F5E9',
+    color: '#C8E6C9',
     fontSize: 12,
-    opacity: 0.85,
+    fontWeight: '600',
     marginTop: 2,
   },
   heroResetBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.2)',
     paddingHorizontal: 10,
     paddingVertical: 6,
-    borderRadius: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
   },
   heroResetText: {
     color: '#FFFFFF',
@@ -949,11 +1223,13 @@ const styles = StyleSheet.create({
 
   heroMetricsBar: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(0,0,0,0.18)',
+    backgroundColor: 'rgba(0,0,0,0.22)',
     borderRadius: 14,
     paddingVertical: 10,
     paddingHorizontal: 6,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   heroMetricItem: {
     flex: 1,
@@ -965,15 +1241,16 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   heroMetricLabel: {
-    color: '#C8E6C9',
+    color: '#E8F5E9',
     fontSize: 9,
     marginTop: 1,
     fontWeight: '600',
+    opacity: 0.85,
   },
   heroMetricDivider: {
     width: 1,
-    height: 18,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    height: 22,
+    backgroundColor: 'rgba(255,255,255,0.15)',
   },
 
   /* Filter Pills */
@@ -1007,32 +1284,47 @@ const styles = StyleSheet.create({
 
   /* Category Card */
   categoryCard: {
-    borderRadius: 18,
+    borderRadius: 20,
     borderWidth: 1,
     marginBottom: 14,
     overflow: 'hidden',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
   },
   categoryHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
     gap: 12,
   },
   categoryIconCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 38,
+    height: 38,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
   categoryTitle: {
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: '800',
+    letterSpacing: -0.2,
   },
   categorySub: {
     fontSize: 11,
     marginTop: 1,
+  },
+  groupCountBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  groupCountText: {
+    fontSize: 10,
+    fontWeight: '700',
   },
   categoryDivider: {
     height: StyleSheet.hairlineWidth,
@@ -1041,9 +1333,9 @@ const styles = StyleSheet.create({
   /* Photoperiod Visualizer (Light Card) */
   photoperiodCard: {
     marginHorizontal: 12,
-    marginTop: 10,
-    marginBottom: 4,
-    borderRadius: 14,
+    marginTop: 12,
+    marginBottom: 6,
+    borderRadius: 16,
     borderWidth: 1,
     padding: 12,
   },
@@ -1113,9 +1405,9 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   timingTile: {
-    borderRadius: 14,
+    borderRadius: 16,
     borderWidth: 1,
-    padding: 12,
+    padding: 14,
   },
   tileTopRow: {
     flexDirection: 'row',
@@ -1124,116 +1416,157 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   tileCodeBadge: {
-    paddingHorizontal: 7,
-    paddingVertical: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
     borderRadius: 6,
   },
   tileCodeText: {
     fontSize: 10,
     fontWeight: '800',
-    letterSpacing: 0.4,
+    letterSpacing: 0.5,
   },
   tileTapToEdit: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    paddingHorizontal: 8,
+    paddingHorizontal: 9,
     paddingVertical: 3,
-    borderRadius: 6,
+    borderRadius: 8,
+    borderWidth: 1,
   },
   tileTapText: {
     fontSize: 11,
     fontWeight: '700',
   },
   tileTitle: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
   },
   tileDesc: {
     fontSize: 11,
-    marginTop: 1,
-    marginBottom: 8,
+    marginTop: 2,
+    marginBottom: 10,
   },
   tileBottomRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 10,
+  },
+  tileDurationPill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
   },
   tileDurationText: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
-    letterSpacing: -0.3,
+    letterSpacing: -0.2,
   },
   tileSecondsRaw: {
     fontSize: 10,
-    fontWeight: '500',
+    fontWeight: '600',
+    marginTop: 1,
   },
   miniStepperGroup: {
     flexDirection: 'row',
-    gap: 6,
+    alignItems: 'center',
+    gap: 4,
   },
   miniStepBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 2,
+  },
+  stepDeltaBadge: {
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    minWidth: 26,
+  },
+  stepDeltaText: {
+    fontSize: 10,
+    fontWeight: '700',
   },
 
-  /* Save Action */
-  saveSection: {
-    marginTop: 8,
-  },
-  saveBtn: {
-    backgroundColor: '#2E7D32',
+  /* Offline Notice */
+  offlineNoticeCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 15,
+    gap: 10,
+    padding: 14,
     borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 8,
+    marginBottom: 14,
+  },
+  offlineNoticeText: {
+    flex: 1,
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: '500',
+  },
+
+  /* Sticky Bottom Save Bar */
+  stickyBottomBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 24 : 14,
+    borderTopWidth: 1,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOpacity: 0.1,
+    shadowOffset: { width: 0, height: -3 },
+    shadowRadius: 8,
+  },
+  saveBtn: {
+    borderRadius: 16,
+    overflow: 'hidden',
     elevation: 3,
     shadowColor: '#2E7D32',
     shadowOpacity: 0.3,
     shadowOffset: { width: 0, height: 3 },
     shadowRadius: 6,
   },
-  saveBtnHighlighted: {
-    backgroundColor: '#1B5E20',
-  },
   saveBtnDisabled: {
-    backgroundColor: '#9E9E9E',
     elevation: 0,
     shadowOpacity: 0,
   },
-  offlineNoticeCard: {
+  saveBtnGradient: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    padding: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginTop: 10,
-  },
-  offlineNoticeText: {
-    flex: 1,
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: '500',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
   },
   saveBtnText: {
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
   unsavedDotBadge: {
-    backgroundColor: '#FF9800',
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: '#FFA000',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
   },
   unsavedDotText: {
     color: '#FFFFFF',
@@ -1241,7 +1574,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 
-  /* Centered Modal Styles */
+  /* Centered Modal Backdrop */
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.65)',
@@ -1249,6 +1582,108 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
   },
+
+  /* Custom Feedback Modal */
+  feedbackCard: {
+    width: '100%',
+    maxWidth: 340,
+    borderRadius: 24,
+    padding: 24,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 18,
+  },
+  feedbackIconOuter: {
+    marginBottom: 16,
+  },
+  feedbackIconGlow: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  feedbackIconCircle: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  feedbackTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    marginBottom: 8,
+    textAlign: 'center',
+    letterSpacing: -0.3,
+  },
+  feedbackMessage: {
+    fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20,
+    paddingHorizontal: 6,
+    fontWeight: '500',
+  },
+  feedbackBtn: {
+    width: '100%',
+    borderRadius: 14,
+    overflow: 'hidden',
+  },
+  feedbackBtnGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 13,
+  },
+  feedbackBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+
+  /* Confirm Buttons */
+  confirmBtnRow: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  confirmCancelBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmCancelText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  confirmActionBtn: {
+    flex: 1.3,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  confirmActionGradient: {
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmActionText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+
+  /* Centered Time Picker Card */
   centeredModalCard: {
     width: '100%',
     maxWidth: 360,
@@ -1330,7 +1765,6 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 
-  /* Steppers */
   steppersContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1376,7 +1810,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
   },
 
-  /* Presets */
   presetSectionLabel: {
     fontSize: 11,
     fontWeight: '700',
@@ -1399,7 +1832,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
-  /* Actions */
   modalActionsRow: {
     flexDirection: 'row',
     gap: 10,

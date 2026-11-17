@@ -26,11 +26,16 @@ export const AlertBadge = ({ onPress }) => {
   }, [alertCount]);
 
   return (
-    <TouchableOpacity onPress={onPress} style={styles.container} activeOpacity={0.7}>
+    <TouchableOpacity 
+      onPress={onPress} 
+      style={styles.container} 
+      activeOpacity={0.7}
+      hitSlop={{ top: 12, bottom: 12, left: 12, right: 6 }}
+    >
       <View style={styles.iconContainer}>
         <Ionicons 
           name={alertCount > 0 ? "notifications" : "notifications-outline"} 
-          size={24} 
+          size={22} 
           color={alertCount > 0 ? "#FF6B35" : "#FFFFFF"} 
         />
         {alertCount > 0 && (
@@ -47,28 +52,29 @@ export const AlertBadge = ({ onPress }) => {
 
 const styles = StyleSheet.create({
   container: {
-    padding: 4,
+    padding: 6,
+    marginRight: 2,
   },
   iconContainer: {
     position: 'relative',
   },
   badge: {
     position: 'absolute',
-    top: -6,
-    right: -8,
+    top: -5,
+    right: -6,
     backgroundColor: '#FF6B35',
-    borderRadius: 12,
-    minWidth: 20,
-    height: 20,
+    borderRadius: 10,
+    minWidth: 18,
+    height: 18,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: 5,
-    borderWidth: 2,
+    paddingHorizontal: 4,
+    borderWidth: 1.5,
     borderColor: '#FFFFFF',
   },
   badgeText: {
     color: '#FFFFFF',
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '700',
   },
 });

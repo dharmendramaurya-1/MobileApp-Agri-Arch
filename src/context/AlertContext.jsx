@@ -1,6 +1,7 @@
 // src/context/AlertContext.jsx
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { useMqtt } from './MqttContext';
+import { EVENT_BITS } from '../utils/deviceStatusParser';
 
 const AlertContext = createContext(undefined);
 
@@ -133,6 +134,7 @@ export const AlertProvider = ({ children }) => {
   
   const [alerts, setAlerts] = useState([]);
   const previousState = useRef({});
+  const previousActuatorStates = useRef({});
   const isInitialLoad = useRef(true);
   const dismissedAlerts = useRef(new Set());
 
@@ -165,6 +167,32 @@ export const AlertProvider = ({ children }) => {
     return newAlert;
   }, []);
 
+  // ── Record Actuator / Event Alert (Appends a new event alert for ON or OFF) ──
+  const recordActuatorAlert = useCallback((label, emoji, isOn, statusOnText = 'ON', statusOffText = 'OFF', customMessage = null) => {
+    const statusText = isOn ? statusOnText : statusOffText;
+    const title = `${emoji} ${label}: ${statusText}`;
+    const msg = customMessage || `${label} turned ${statusText}`;
+
+    dismissedAlerts.current.delete(title);
+
+    const freshAlert = {
+      id: generateAlertId(),
+      title,
+      message: msg,
+      timestamp: new Date(),
+    };
+
+    setAlerts(prev => {
+      // Avoid rapid double-insertion if same alert fired within 2.5 seconds
+      if (prev.length > 0 && prev[0].title === title && (Date.now() - new Date(prev[0].timestamp).getTime() < 2500)) {
+        return prev;
+      }
+      return [freshAlert, ...prev].slice(0, 50);
+    });
+  }, []);
+
+  const updateActuatorAlert = recordActuatorAlert;
+
   // ── Remove alert by title ──────────────────────────────────────────────
   const removeAlert = useCallback((title) => {
     dismissedAlerts.current.delete(title);
@@ -193,6 +221,7 @@ export const AlertProvider = ({ children }) => {
   // ── Reset state on device switch ─────────────────────────────────────────
   useEffect(() => {
     previousState.current = {};
+    previousActuatorStates.current = {};
     dismissedAlerts.current.clear();
     setAlerts([]);
     isInitialLoad.current = true;
@@ -274,43 +303,174 @@ export const AlertProvider = ({ children }) => {
     }
 
     // ──────────────────────────────────────────────────────────────────────
-    // ✅ TYPE 4: ACTUATOR ALERTS (Pumps, Valves, AC, Buzzer) - State transitions
+    // ✅ TYPE 4: ACTUATOR ALERTS & EVENT MASK (Water Pump, Valves, Pumps, AC)
     // ──────────────────────────────────────────────────────────────────────
-    const actuatorAlerts = [
-      { key: 'waterPump', label: 'Water Pump', emoji: '💧', onStatus: 'ON', offStatus: 'OFF' },
-      { key: 'nutrientPump', label: 'Nutrient Pump', emoji: '🌿', onStatus: 'ON', offStatus: 'OFF' },
-      { key: 'inletValve', label: 'Inlet Valve', emoji: '🚰', onStatus: 'OPEN', offStatus: 'CLOSED' },
-      { key: 'outletValve', label: 'Outlet Valve', emoji: '🚿', onStatus: 'OPEN', offStatus: 'CLOSED' },
-      { key: 'acStatus', label: 'AC Status', emoji: '❄️', onStatus: 'ON', offStatus: 'OFF' },
-      { key: 'buzzer', label: 'Buzzer', emoji: '🔊', onStatus: 'ON', offStatus: 'OFF' },
-    ];
+    const rawEventMask = typeof effectiveSensData.eventMask === 'number'
+      ? effectiveSensData.eventMask
+      : (typeof effectiveSensData.EventMask === 'number' ? effectiveSensData.EventMask : null);
 
-    if (!isInitialLoad.current) {
-      actuatorAlerts.forEach(({ key, label, emoji, onStatus, offStatus }) => {
-        const currentVal = currentFlags[key];
-        const prevVal = prev[key];
-        
-        if (currentVal !== undefined && prevVal !== undefined && currentVal !== prevVal) {
-          if (currentVal === true) {
-            const title = `${emoji} ${label}: ${onStatus}`;
-            const message = `${label} turned ${onStatus}`;
-            addAlert(title, message);
-          } else if (currentVal === false) {
-            const title = `${emoji} ${label}: ${offStatus}`;
-            const message = `${label} turned ${offStatus}`;
-            addAlert(title, message);
-          }
+    // ── 1. WATER PUMP (EventMask Bit 16: ON [65536], Bit 17: OFF [131072], or DevStat Bit 12) ──
+    let currentPumpState = null;
+    let pumpSource = '';
+
+    if (rawEventMask !== null) {
+      if ((rawEventMask & EVENT_BITS.EVENT_WATER_PUMP_ON) !== 0) {
+        currentPumpState = true;
+        pumpSource = 'Event Mask';
+      } else if ((rawEventMask & EVENT_BITS.EVENT_WATER_PUMP_OFF) !== 0) {
+        currentPumpState = false;
+        pumpSource = 'Event Mask';
+      }
+    }
+
+    if (currentPumpState === null && typeof currentFlags.waterPump === 'boolean') {
+      currentPumpState = currentFlags.waterPump;
+      pumpSource = 'DevStat';
+    }
+
+    if (currentPumpState !== null) {
+      const prevPump = previousActuatorStates.current.waterPump;
+      if (prevPump === undefined || prevPump !== currentPumpState) {
+        previousActuatorStates.current.waterPump = currentPumpState;
+
+        // Trigger alert on state change, or if pump is actively ON on load
+        if (!isInitialLoad.current || currentPumpState === true) {
+          console.log(`🔔 [AlertContext] Water Pump alert triggered: ${currentPumpState ? 'ON' : 'OFF'} via ${pumpSource}`);
+          updateActuatorAlert(
+            'Water Pump',
+            '💧',
+            currentPumpState,
+            'ON',
+            'OFF',
+            `Water circulation pump turned ${currentPumpState ? 'ON' : 'OFF'}`
+          );
         }
-      });
+      }
+    }
 
-      // Mode change alert
-      const currentMode = currentFlags.mode;
-      const prevMode = prev.mode;
-      if (currentMode !== undefined && prevMode !== undefined && currentMode !== prevMode) {
-        const modeStatus = currentMode ? 'AUTO' : 'MANUAL';
-        const title = `⚙️ Mode: ${modeStatus}`;
-        const message = `System mode changed to ${modeStatus}`;
-        addAlert(title, message);
+    // ── 2. INLET VALVE (EventMask Bit 18: OPEN, Bit 19: CLOSED, or DevStat Bit 10) ──
+    let currentInletState = null;
+    if (rawEventMask !== null) {
+      if ((rawEventMask & EVENT_BITS.EVENT_INLET_VALVE_OPEN) !== 0) currentInletState = true;
+      else if ((rawEventMask & EVENT_BITS.EVENT_INLET_VALVE_CLOSED) !== 0) currentInletState = false;
+    }
+    if (currentInletState === null && typeof currentFlags.inletValve === 'boolean') {
+      currentInletState = currentFlags.inletValve;
+    }
+    if (currentInletState !== null) {
+      const prevInlet = previousActuatorStates.current.inletValve;
+      if (prevInlet === undefined || prevInlet !== currentInletState) {
+        previousActuatorStates.current.inletValve = currentInletState;
+        if (!isInitialLoad.current) {
+          updateActuatorAlert('Inlet Valve', '🚰', currentInletState, 'OPEN', 'CLOSED');
+        }
+      }
+    }
+
+    // ── 3. OUTLET VALVE (EventMask Bit 20: OPEN, Bit 21: CLOSED, or DevStat Bit 11) ──
+    let currentOutletState = null;
+    if (rawEventMask !== null) {
+      if ((rawEventMask & EVENT_BITS.EVENT_OUTLET_VALVE_OPEN) !== 0) currentOutletState = true;
+      else if ((rawEventMask & EVENT_BITS.EVENT_OUTLET_VALVE_CLOSED) !== 0) currentOutletState = false;
+    }
+    if (currentOutletState === null && typeof currentFlags.outletValve === 'boolean') {
+      currentOutletState = currentFlags.outletValve;
+    }
+    if (currentOutletState !== null) {
+      const prevOutlet = previousActuatorStates.current.outletValve;
+      if (prevOutlet === undefined || prevOutlet !== currentOutletState) {
+        previousActuatorStates.current.outletValve = currentOutletState;
+        if (!isInitialLoad.current) {
+          updateActuatorAlert('Outlet Valve', '🚿', currentOutletState, 'OPEN', 'CLOSED');
+        }
+      }
+    }
+
+    // ── 4. NUTRIENT PUMP (EventMask Bit 22: ON, Bit 23: OFF, or DevStat Bit 13) ──
+    let currentNutrientState = null;
+    if (rawEventMask !== null) {
+      if ((rawEventMask & EVENT_BITS.EVENT_NUTRIENT_PUMP_ON) !== 0) currentNutrientState = true;
+      else if ((rawEventMask & EVENT_BITS.EVENT_NUTRIENT_PUMP_OFF) !== 0) currentNutrientState = false;
+    }
+    if (currentNutrientState === null && typeof currentFlags.nutrientPump === 'boolean') {
+      currentNutrientState = currentFlags.nutrientPump;
+    }
+    if (currentNutrientState !== null) {
+      const prevNutrient = previousActuatorStates.current.nutrientPump;
+      if (prevNutrient === undefined || prevNutrient !== currentNutrientState) {
+        previousActuatorStates.current.nutrientPump = currentNutrientState;
+        if (!isInitialLoad.current) {
+          updateActuatorAlert('Nutrient Pump', '🌿', currentNutrientState, 'ON', 'OFF');
+        }
+      }
+    }
+
+    // ── 5. LED LIGHT (EventMask Bit 24: ON, Bit 25: OFF, or DevStat Bit 16) ──
+    let currentLedState = null;
+    if (rawEventMask !== null) {
+      if ((rawEventMask & EVENT_BITS.EVENT_LED_LIGHT_ON) !== 0) currentLedState = true;
+      else if ((rawEventMask & EVENT_BITS.EVENT_LED_LIGHT_OFF) !== 0) currentLedState = false;
+    }
+    if (currentLedState === null && typeof currentFlags.ledStatus === 'boolean') {
+      currentLedState = currentFlags.ledStatus;
+    }
+    if (currentLedState !== null) {
+      const prevLed = previousActuatorStates.current.ledStatus;
+      if (prevLed === undefined || prevLed !== currentLedState) {
+        previousActuatorStates.current.ledStatus = currentLedState;
+        if (!isInitialLoad.current) {
+          updateActuatorAlert('Light Switch', '💡', currentLedState, 'ON', 'OFF');
+        }
+      }
+    }
+
+    // ── 6. AC STATUS (EventMask Bit 26: ON, Bit 27: OFF, or DevStat Bit 14) ──
+    let currentAcState = null;
+    if (rawEventMask !== null) {
+      if ((rawEventMask & EVENT_BITS.EVENT_AC_ON) !== 0) currentAcState = true;
+      else if ((rawEventMask & EVENT_BITS.EVENT_AC_OFF) !== 0) currentAcState = false;
+    }
+    if (currentAcState === null && typeof currentFlags.acStatus === 'boolean') {
+      currentAcState = currentFlags.acStatus;
+    }
+    if (currentAcState !== null) {
+      const prevAc = previousActuatorStates.current.acStatus;
+      if (prevAc === undefined || prevAc !== currentAcState) {
+        previousActuatorStates.current.acStatus = currentAcState;
+        if (!isInitialLoad.current) {
+          updateActuatorAlert('AC Status', '❄️', currentAcState, 'ON', 'OFF');
+        }
+      }
+    }
+
+    // ── 7. BUZZER (DevStat Bit 24) ──
+    if (typeof currentFlags.buzzer === 'boolean') {
+      const prevBuzzer = previousActuatorStates.current.buzzer;
+      if (prevBuzzer === undefined || prevBuzzer !== currentFlags.buzzer) {
+        previousActuatorStates.current.buzzer = currentFlags.buzzer;
+        if (!isInitialLoad.current) {
+          updateActuatorAlert('Buzzer', '🔊', currentFlags.buzzer, 'ON', 'OFF');
+        }
+      }
+    }
+
+    // ── 8. SYSTEM MODE (EventMask Bit 28: AUTO, Bit 29: MANUAL, or DevStat Bit 15) ──
+    let currentModeState = null;
+    if (rawEventMask !== null) {
+      if ((rawEventMask & EVENT_BITS.EVENT_MODE_AUTO) !== 0) currentModeState = true;
+      else if ((rawEventMask & EVENT_BITS.EVENT_MODE_MANUAL) !== 0) currentModeState = false;
+    }
+    if (currentModeState === null && typeof currentFlags.mode === 'boolean') {
+      currentModeState = currentFlags.mode;
+    }
+    if (currentModeState !== null) {
+      const prevMode = previousActuatorStates.current.mode;
+      if (prevMode === undefined || prevMode !== currentModeState) {
+        previousActuatorStates.current.mode = currentModeState;
+        if (!isInitialLoad.current) {
+          const modeStatus = currentModeState ? 'AUTO' : 'MANUAL';
+          updateActuatorAlert('Mode', '⚙️', currentModeState, 'AUTO', 'MANUAL', `System mode changed to ${modeStatus}`);
+        }
       }
     }
 
@@ -320,7 +480,17 @@ export const AlertProvider = ({ children }) => {
 
     previousState.current = { ...currentFlags };
 
-  }, [deviceStatusFlags, hasReceivedData, sensorData, cropSettings, addAlert, removeAlert, getSelectedDeviceSensorData, getSelectedDeviceCropSettings]);
+  }, [
+    deviceStatusFlags,
+    hasReceivedData,
+    sensorData,
+    cropSettings,
+    addAlert,
+    removeAlert,
+    updateActuatorAlert,
+    getSelectedDeviceSensorData,
+    getSelectedDeviceCropSettings
+  ]);
 
   const value = {
     alerts,
@@ -328,6 +498,8 @@ export const AlertProvider = ({ children }) => {
     clearAlerts,
     removeAlertById,
     addAlert,
+    recordActuatorAlert,
+    updateActuatorAlert,
   };
 
   return (

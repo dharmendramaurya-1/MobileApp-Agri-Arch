@@ -68,6 +68,10 @@ function convertToSenML(cropData, customSettings) {
     { n: "lux_low", v: safe(settings, 'luxLow', Math.round(safe(crop, 'ppfd_min', 0) * 60)) },
     { n: "lux_high", v: safe(settings, 'luxHigh', Math.round(safe(crop, 'ppfd_max', 0) * 60)) },
     { n: "dimming", v: safe(settings, 'dimming', 75) },
+    { n: "ppdmin", v: Number(safe(settings, 'ppdmin', safe(crop, 'ppfd_min', 0))) },
+    { n: "ppdmax", v: Number(safe(settings, 'ppdmax', safe(crop, 'ppfd_max', 0))) },
+    { n: "ppmin", v: Number(safe(settings, 'ppmin', safe(crop, 'photo_period_min', 0))) },
+    { n: "ppmax", v: Number(safe(settings, 'ppmax', safe(crop, 'photo_period_max', 0))) },
   ];
 }
 
@@ -940,6 +944,10 @@ export default function AddCrops() {
         luxLow: customSettings.luxLow ?? Math.round((cropDetails.ppfd_min || 0) * 60),
         luxHigh: customSettings.luxHigh ?? Math.round((cropDetails.ppfd_max || 0) * 60),
         dimming: customSettings.dimming ?? 75,
+        ppdmin: customSettings.ppfd_min ?? cropDetails.ppfd_min ?? 0,
+        ppdmax: customSettings.ppfd_max ?? cropDetails.ppfd_max ?? 0,
+        ppmin: customSettings.photo_period_min ?? cropDetails.photo_period_min ?? 0,
+        ppmax: customSettings.photo_period_max ?? cropDetails.photo_period_max ?? 0,
       };
 
       let success = false;

@@ -52,12 +52,33 @@ const NUMERIC_FIELD_MAP = {
   Fault: "sensorFaultStatus",
   flt: "sensorFaultStatus",
   FLT: "sensorFaultStatus",
+  EventMask: "eventMask",
+  eventMask: "eventMask",
+  event_mask: "eventMask",
+  EVENTMASK: "eventMask",
+  ppdmin: "ppdmin",
+  ppdmax: "ppdmax",
+  ppmin: "ppmin",
+  ppmax: "ppmax",
 };
 
 // ✅ Status fields - pure mapping only
-const STATUS_FIELDS = {
+const DEVICE_STATUS_FIELDS = {
   DevStat: "deviceStatus",
+  devStat: "deviceStatus",
   device_status: "deviceStatus",
+  deviceStatus: "deviceStatus",
+};
+
+const EVENT_MASK_FIELDS = {
+  EventMask: "eventMask",
+  eventMask: "eventMask",
+  event_mask: "eventMask",
+  EVENTMASK: "eventMask",
+  ppdmin: "ppdmin",
+  ppdmax: "ppdmax",
+  ppmin: "ppmin",
+  ppmax: "ppmax",
 };
 
 // ✅ Boolean actuator fields - pure mapping only
@@ -70,6 +91,8 @@ const BOOLEAN_FIELD_MAP = {
   water_ILvalve: "water_ILvalve",
   water_OLvalve: "water_OLvalve",
   nutrient_pump: "nutrient_pump",
+  bypaslvl: "bypaslvl",
+  bypas_lvl: "bypaslvl",
 };
 
 // ✅ String fields - pure mapping only
@@ -83,21 +106,21 @@ const STRING_FIELD_MAP = {
  */
 const fixIncompleteJSON = (str) => {
   if (!str || typeof str !== 'string') return str;
-  
+
   let fixed = str.trim();
-  
+
   try {
     JSON.parse(fixed);
     return fixed;
   } catch (e) {
     // Not valid, try to fix
   }
-  
+
   const openBrackets = (fixed.match(/\[/g) || []).length;
   const closeBrackets = (fixed.match(/\]/g) || []).length;
   const openBraces = (fixed.match(/\{/g) || []).length;
   const closeBraces = (fixed.match(/\}/g) || []).length;
-  
+
   if (openBraces > closeBraces) {
     const diff = openBraces - closeBraces;
     if (fixed.endsWith(',')) {
@@ -105,7 +128,7 @@ const fixIncompleteJSON = (str) => {
     }
     fixed += '}'.repeat(diff);
   }
-  
+
   if (openBrackets > closeBrackets) {
     const diff = openBrackets - closeBrackets;
     if (fixed.endsWith(',')) {
@@ -113,7 +136,7 @@ const fixIncompleteJSON = (str) => {
     }
     fixed += ']'.repeat(diff);
   }
-  
+
   try {
     JSON.parse(fixed);
     return fixed;
@@ -128,7 +151,7 @@ const fixIncompleteJSON = (str) => {
  */
 const extractPartialData = (str) => {
   const result = {};
-  
+
   // Extract numeric values - raw only
   const numericPatterns = {
     ambientTemperature: [
@@ -150,7 +173,7 @@ const extractPartialData = (str) => {
     lightLevel: [/["']lux["'][^}]*"v":\s*([\d.]+)/],
     cropId: [/["']CropId["'][^}]*"v":\s*(\d+)/],
   };
-  
+
   for (const [key, patterns] of Object.entries(numericPatterns)) {
     for (const pattern of patterns) {
       const match = str.match(pattern);
@@ -160,13 +183,26 @@ const extractPartialData = (str) => {
       }
     }
   }
-  
+
   // ✅ Extract device status - raw value only, NO parsing
   const devStatMatch = str.match(/["']DevStat["'][^}]*"v":\s*([\d.]+)/);
   if (devStatMatch) {
     result.deviceStatus = parseInt(devStatMatch[1]);
   }
-  
+
+  // ✅ Extract EventMask
+  const eventMaskMatch = str.match(/["']EventMask["'][^}]*"v":\s*([\d.]+)/);
+  if (eventMaskMatch) {
+    result.eventMask = parseInt(eventMaskMatch[1]);
+  }
+
+  // ✅ Extract SensFlt
+  const sensFltMatch = str.match(/["']SensFlt["'][^}]*"v":\s*([\d.]+)/);
+  if (sensFltMatch) {
+    result.SensFlt = parseInt(sensFltMatch[1]);
+    result.sensorFaultStatus = parseInt(sensFltMatch[1]);
+  }
+
   // Extract boolean values - raw only
   const boolPatterns = {
     water_pump: [
@@ -185,8 +221,12 @@ const extractPartialData = (str) => {
       /["']NutPmp["'][^}]*"vb":\s*(true|false)/,
       /["']nutrient_pump["'][^}]*"vb":\s*(true|false)/
     ],
+    bypaslvl: [
+      /["']bypaslvl["'][^}]*"vb":\s*(true|false)/,
+      /["']bypas_lvl["'][^}]*"vb":\s*(true|false)/
+    ],
   };
-  
+
   for (const [key, patterns] of Object.entries(boolPatterns)) {
     for (const pattern of patterns) {
       const match = str.match(pattern);
@@ -196,13 +236,13 @@ const extractPartialData = (str) => {
       }
     }
   }
-  
+
   // Extract string values - raw only
   const reqIdMatch = str.match(/["']ReqID["'][^}]*"vs":\s*"([^"]*)"/);
   if (reqIdMatch) {
     result._requestId = reqIdMatch[1];
   }
-  
+
   return result;
 };
 
@@ -217,9 +257,9 @@ export const parseSenMLToObject = (raw) => {
       console.log("⚠️ SenML parse: Empty input");
       return {};
     }
-    
+
     let data = raw;
-    
+
     if (typeof data === 'string') {
       let parsed = null;
       try {
@@ -230,7 +270,7 @@ export const parseSenMLToObject = (raw) => {
         return parseSenMLRecords([parsed]);
       } catch (e) {
         console.log(`🔧 Attempting to fix incomplete JSON (length: ${data.length})`);
-        
+
         const fixed = fixIncompleteJSON(data);
         try {
           parsed = JSON.parse(fixed);
@@ -246,21 +286,21 @@ export const parseSenMLToObject = (raw) => {
             console.log(`✅ Extracted partial data:`, partialData);
             return partialData;
           }
-          
+
           console.log(`⚠️ No data could be extracted, returning empty object`);
           return {};
         }
       }
     }
-    
+
     if (Array.isArray(data)) {
       return parseSenMLRecords(data);
     }
-    
+
     if (typeof data === 'object') {
       return parseSenMLRecords([data]);
     }
-    
+
     return {};
   } catch (e) {
     console.log("⚠️ SenML parse error:", e);
@@ -292,11 +332,16 @@ const parseSenMLRecords = (records) => {
 
     // ✅ Numeric value - just map, NO parsing
     if (typeof r.v === "number") {
-      if (STATUS_FIELDS[fieldName]) {
+      if (DEVICE_STATUS_FIELDS[fieldName]) {
         result.deviceStatus = r.v;
+        result[fieldName] = r.v;
+      } else if (EVENT_MASK_FIELDS[fieldName]) {
+        result.eventMask = r.v;
         result[fieldName] = r.v;
       } else if (NUMERIC_FIELD_MAP[fieldName]) {
         result[NUMERIC_FIELD_MAP[fieldName]] = r.v;
+        result[fieldName] = r.v;
+      } else {
         result[fieldName] = r.v;
       }
     }

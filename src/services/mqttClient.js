@@ -1,3 +1,4 @@
+
 // src/services/mqttClient.js
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import mqtt from "mqtt";
@@ -29,7 +30,7 @@ if (typeof AppState !== 'undefined') {
       if (client && client.connected) {
         console.log('✅ MQTT connection is healthy');
         connectionCallbacks.forEach(cb => {
-          try { cb(true); } catch (e) {}
+          try { cb(true); } catch (e) { }
         });
       }
     }
@@ -162,7 +163,7 @@ export const getMqttClient = async () => {
     try {
       client.removeAllListeners();
       client.end(true);
-    } catch (e) {}
+    } catch (e) { }
     client = null;
     isMqttPersistent = false;
   }
@@ -226,7 +227,7 @@ export const getMqttClient = async () => {
         try {
           client.removeAllListeners();
           client.end(true);
-        } catch (e) {}
+        } catch (e) { }
         client = null;
         isConnecting = false;
         reconnectAttempts = 0;
@@ -273,7 +274,7 @@ export const getMqttClient = async () => {
         try {
           client.removeAllListeners();
           client.end(true);
-        } catch (e) {}
+        } catch (e) { }
         client = null;
         isMqttPersistent = false;
       }

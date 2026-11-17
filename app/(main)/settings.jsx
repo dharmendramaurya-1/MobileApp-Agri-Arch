@@ -45,12 +45,16 @@ export default function ConfigScreen() {
     report_interval: 180,
     sampling_interval: 30,
     auto_mode: false,
+    bypaslvl: false,
   });
   const [publishing, setPublishing] = useState(false);
   const [isAutoModePending, setIsAutoModePending] = useState(false);
+  const [isBypaslvlPending, setIsBypaslvlPending] = useState(false);
   const [publishError, setPublishError] = useState(null);
   const pendingTargetModeRef = useRef(null);
   const autoModeTimeoutRef = useRef(null);
+  const pendingTargetBypaslvlRef = useRef(null);
+  const bypaslvlTimeoutRef = useRef(null);
 
   // ── App resume state tracking ──
   const [isResuming, setIsResuming] = useState(false);
@@ -177,12 +181,14 @@ export default function ConfigScreen() {
   useEffect(() => {
     if (deviceConfig) {
       const devAutoMode = typeof deviceConfig.auto_mode === "boolean" ? deviceConfig.auto_mode : null;
+      const devBypaslvl = typeof deviceConfig.bypaslvl === "boolean" ? deviceConfig.bypaslvl : null;
       setConfig((prev) => ({
         ...prev,
         report_interval: deviceConfig.report_interval ?? prev.report_interval,
         sampling_interval: deviceConfig.sampling_interval ?? prev.sampling_interval,
         // While pending /data response, keep existing switch value; otherwise sync with confirmed deviceConfig
         auto_mode: isAutoModePending ? prev.auto_mode : (devAutoMode ?? prev.auto_mode),
+        bypaslvl: isBypaslvlPending ? prev.bypaslvl : (devBypaslvl ?? prev.bypaslvl ?? false),
       }));
 
       // If pending target matches updated deviceConfig, device has confirmed!
@@ -198,6 +204,14 @@ export default function ConfigScreen() {
       }
     }
   }, [deviceConfig, isAutoModePending]);
+
+  // Sync bypaslvl from deviceConfig if not pending
+  useEffect(() => {
+    if (deviceConfig && !isBypaslvlPending) {
+      const devBypaslvl = deviceConfig.bypaslvl !== undefined ? Boolean(deviceConfig.bypaslvl) : false;
+      setConfig((prev) => ({ ...prev, bypaslvl: devBypaslvl }));
+    }
+  }, [deviceConfig, isBypaslvlPending]);
 
   // ── Listen for direct /data confirmation from the device ──
   useEffect(() => {
@@ -223,6 +237,22 @@ export default function ConfigScreen() {
             setConfig((prev) => ({ ...prev, auto_mode: flags.mode }));
           }
         }
+
+        // Bit 23 of DevStat (deviceStatus): bypaslvl (0-indexed Bit 23)
+        if (flags.bypaslvl !== null && flags.bypaslvl !== undefined) {
+          console.log(`📥 [${msgDeviceKey}] ${isStatusResponse ? 'STATUS' : 'DATA'} DevStat Bit 23 bypaslvl = ${flags.bypaslvl}`);
+
+          if (pendingTargetBypaslvlRef.current !== null && flags.bypaslvl === pendingTargetBypaslvlRef.current) {
+            console.log(`🎉 Confirmed bypaslvl = ${flags.bypaslvl} from DevStat Bit 23 for ${msgDeviceKey}!`);
+            if (bypaslvlTimeoutRef.current) {
+              clearTimeout(bypaslvlTimeoutRef.current);
+              bypaslvlTimeoutRef.current = null;
+            }
+            pendingTargetBypaslvlRef.current = null;
+            setIsBypaslvlPending(false);
+          }
+          setConfig((prev) => ({ ...prev, bypaslvl: flags.bypaslvl }));
+        }
       }
     });
 
@@ -231,6 +261,10 @@ export default function ConfigScreen() {
       if (autoModeTimeoutRef.current) {
         clearTimeout(autoModeTimeoutRef.current);
         autoModeTimeoutRef.current = null;
+      }
+      if (bypaslvlTimeoutRef.current) {
+        clearTimeout(bypaslvlTimeoutRef.current);
+        bypaslvlTimeoutRef.current = null;
       }
     };
   }, [selectedExternalKey, externalKey, subscribeToLiveData]);
@@ -284,6 +318,7 @@ export default function ConfigScreen() {
       report_interval: config.report_interval || 180,
       sampling_interval: config.sampling_interval || 30,
       auto_mode: autoModeValue,
+      bypaslvl: Boolean(config.bypaslvl),
     };
 
     try {
@@ -321,6 +356,85 @@ export default function ConfigScreen() {
     }
   };
 
+  // ── Auto-publish on bypaslvl toggle ──
+  const handleBypaslvlToggle = async (bypaslvlValue) => {
+    const targetDeviceKey = selectedExternalKey || externalKey;
+
+    if (!isConnected) {
+      Alert.alert("Not Connected", "Please wait for device to connect.");
+      return;
+    }
+    if (!targetDeviceKey) {
+      Alert.alert("Error", "No device selected.");
+      return;
+    }
+    if (!isDeviceReady) {
+      Alert.alert("Device Not Ready", "Please wait for the device to come online.");
+      return;
+    }
+    if (isBypaslvlPending || publishing) {
+      return;
+    }
+
+    pendingTargetBypaslvlRef.current = bypaslvlValue;
+    setIsBypaslvlPending(true);
+    setPublishError(null);
+
+    // Timeout: if device does not confirm in deviceStatus telemetry within 25 seconds, cancel pending state
+    if (bypaslvlTimeoutRef.current) clearTimeout(bypaslvlTimeoutRef.current);
+    bypaslvlTimeoutRef.current = setTimeout(() => {
+      if (pendingTargetBypaslvlRef.current !== null) {
+        console.warn(`⏱️ Timeout waiting for bypaslvl confirmation in deviceStatus for ${targetDeviceKey}`);
+        pendingTargetBypaslvlRef.current = null;
+        setIsBypaslvlPending(false);
+        Alert.alert(
+          "Timeout",
+          `Bypass Level command was sent, but the device did not confirm in deviceStatus telemetry within 25 seconds.\nThe switch remains in its current state.`
+        );
+      }
+    }, 25000);
+
+    const configToSend = {
+      report_interval: config.report_interval || 180,
+      sampling_interval: config.sampling_interval || 30,
+      auto_mode: config.auto_mode,
+      bypaslvl: bypaslvlValue,
+    };
+
+    try {
+      console.log(`📡 [${targetDeviceKey}] Publishing /cfg for bypaslvl = ${bypaslvlValue}:`, configToSend);
+      const result = await publishConfig(targetDeviceKey, configToSend);
+      const isSuccess = typeof result === 'boolean' ? result : result?.success;
+
+      if (isSuccess) {
+        console.log(`✅ bypaslvl = ${bypaslvlValue} /cfg published. Waiting for device confirmation in deviceStatus Bit 23...`);
+        // Do NOT setConfig or clear isBypaslvlPending here!
+        // The switch will update strictly when deviceStatus Bit 23 (DevStat) confirms flags.bypaslvl
+      } else {
+        if (bypaslvlTimeoutRef.current) {
+          clearTimeout(bypaslvlTimeoutRef.current);
+          bypaslvlTimeoutRef.current = null;
+        }
+        setIsBypaslvlPending(false);
+        pendingTargetBypaslvlRef.current = null;
+        const errorMsg = typeof result === 'object' && result?.error ? result.error : "Failed to send bypass level setting.";
+        setPublishError(errorMsg);
+        Alert.alert("Publish Failed", errorMsg);
+      }
+    } catch (error) {
+      if (bypaslvlTimeoutRef.current) {
+        clearTimeout(bypaslvlTimeoutRef.current);
+        bypaslvlTimeoutRef.current = null;
+      }
+      setIsBypaslvlPending(false);
+      pendingTargetBypaslvlRef.current = null;
+      console.error('❌ Bypass level publish error:', error);
+      const errorMsg = error.message || "Failed to publish bypass level.";
+      setPublishError(errorMsg);
+      Alert.alert("Error", errorMsg);
+    }
+  };
+
   // ── Publish configuration ──
   const handlePublish = async () => {
     const targetDeviceKey = selectedExternalKey || externalKey;
@@ -349,6 +463,7 @@ export default function ConfigScreen() {
         report_interval: config.report_interval || 180,
         sampling_interval: config.sampling_interval || 30,
         auto_mode: config.auto_mode,
+        bypaslvl: Boolean(config.bypaslvl),
       };
 
       console.log('📤 Publishing config:', {
@@ -522,6 +637,57 @@ export default function ConfigScreen() {
             </Text>
             <Text style={[styles.modeSummarySubtitle, { color: theme.colors.textSecondary }]}>
               {config.auto_mode ? "The device manages its cycle." : "You control the device from the app."}
+            </Text>
+          </View>
+        </View>
+
+        {/* ── Bypass Level (bypaslvl) ── */}
+        <View style={[styles.settingItem, { marginTop: 14, paddingTop: 14, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: theme.colors.border }]}>
+          <Ionicons name="water-outline" size={24} color="#0288D1" />
+          <View style={styles.settingLabelContainer}>
+            <Text style={[styles.settingText, { color: theme.colors.text }]}>Bypass Level</Text>
+            <Text style={[styles.settingDescription, { color: theme.colors.textSecondary }]}>
+              Bypass tank water level safety limits (bypaslvl).
+            </Text>
+          </View>
+          <View style={styles.switchWrapper}>
+            {isBypaslvlPending && (
+              <ActivityIndicator
+                size="small"
+                color="#0288D1"
+                style={{ marginRight: 8 }}
+              />
+            )}
+            <Switch
+              value={Boolean(config.bypaslvl)}
+              onValueChange={(v) => {
+                handleBypaslvlToggle(v);
+              }}
+              disabled={isBypaslvlPending || publishing || !isDeviceReady}
+              style={styles.largeSwitch}
+              trackColor={{ false: theme.colors.border, true: "#0288D1" }}
+              thumbColor="#fff"
+            />
+          </View>
+        </View>
+
+        <View style={[styles.modeSummary, { 
+          backgroundColor: Boolean(config.bypaslvl) ? '#FFF3E0' : `${theme.colors.primary}0D`, 
+          borderColor: Boolean(config.bypaslvl) ? '#FFE0B2' : `${theme.colors.primary}25` 
+        }]}>
+          <Ionicons
+            name={Boolean(config.bypaslvl) ? "warning-outline" : "shield-checkmark-outline"}
+            size={22}
+            color={Boolean(config.bypaslvl) ? "#F57C00" : theme.colors.primary}
+          />
+          <View style={styles.modeSummaryText}>
+            <Text style={[styles.modeSummaryTitle, { color: Boolean(config.bypaslvl) ? "#E65100" : theme.colors.text }]}>
+              {Boolean(config.bypaslvl) ? "Level Safety Bypassed (ON)" : "Level Safety Active (OFF)"}
+            </Text>
+            <Text style={[styles.modeSummarySubtitle, { color: theme.colors.textSecondary }]}>
+              {Boolean(config.bypaslvl) 
+                ? "Pumps can operate regardless of tank water level." 
+                : "Pumps and valves follow normal tank water level limits."}
             </Text>
           </View>
         </View>

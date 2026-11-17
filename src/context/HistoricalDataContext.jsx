@@ -56,7 +56,7 @@ export const HistoricalDataProvider = ({ children }) => {
   }, [isAuthenticated]);
 
   // Fetch all sensor data for a time range
-  const fetchAllSensorData = useCallback(async (from, to, limit = 1000) => {
+  const fetchAllSensorData = useCallback(async (from, to, limit = 1000, publisherId = null) => {
     if (!isAuthenticated) {
       setError("User not authenticated");
       return;
@@ -65,7 +65,7 @@ export const HistoricalDataProvider = ({ children }) => {
     setIsLoading(true);
     setError(null);
     try {
-      const result = await getAllSensorData(from, to, limit);
+      const result = await getAllSensorData(from, to, limit, publisherId);
       
       if (result.success) {
         setAllData(result.data);

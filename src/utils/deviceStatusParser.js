@@ -32,7 +32,7 @@
  *       uint32_t humidity_low        :1;  // Bit20 === 0x00100000
  *       uint32_t water_temp_high     :1;  // Bit21 === 0x00200000
  *       uint32_t water_temp_low      :1;  // Bit22 === 0x00400000
- *       uint32_t clean_tank          :1;  // Bit23 === 0x00800000
+ *       uint32_t bypaslvl            :1;  // Bit23 === 0x00800000 (Bypass Level / clean_tank)
  *
  *       uint32_t buzzer_status       :1;  // Bit24 === 0x01000000 (Buzzer Audible Alarm)
  *       uint32_t dimming_level       :7;  // Bits25-31 === 0xFE000000
@@ -75,6 +75,8 @@ export const parseDeviceStatus = (status) => {
       // System flags
       cleanTank: false,
       sensorFault: false,
+      bypaslvl: false,
+      bypassLevel: false,
       buzzer: false,
       buzzerStatus: false,
       dimmingLevel: 0,
@@ -131,7 +133,9 @@ export const parseDeviceStatus = (status) => {
     waterTempHigh: (status & 0x00200000) !== 0,
     // Bit 22: water_temp_low
     waterTempLow: (status & 0x00400000) !== 0,
-    // Bit 23: clean_tank
+    // Bit 23: bypaslvl (Bypass Level - 0-indexed Bit 23, mask 0x00800000)
+    bypaslvl: (status & 0x00800000) !== 0,
+    bypassLevel: (status & 0x00800000) !== 0,
     cleanTank: (status & 0x00800000) !== 0,
     sensorFault: (status & 0x00800000) !== 0,
     // Bit 24: buzzer_status
@@ -174,6 +178,8 @@ export const getDefaultDeviceStatus = () => {
     waterTempLow: false,
     cleanTank: false,
     sensorFault: false,
+    bypaslvl: false,
+    bypassLevel: false,
     buzzer: false,
     buzzerStatus: false,
     dimmingLevel: 0,
@@ -285,6 +291,225 @@ export const hasActiveAlerts = (status) => {
   return alerts.length > 0;
 };
 
+// ── Event Mask Bit Definitions (EventBits_t) ─────────────────────────────────
+export const EVENT_BITS = {
+  EVENT_AIR_TEMP_HIGH: 1 << 0,
+  EVENT_AIR_TEMP_LOW: 1 << 1,
+  EVENT_HUMIDITY_HIGH: 1 << 2,
+  EVENT_HUMIDITY_LOW: 1 << 3,
+  EVENT_PH_HIGH: 1 << 4,
+  EVENT_PH_LOW: 1 << 5,
+  EVENT_EC_HIGH: 1 << 6,
+  EVENT_EC_LOW: 1 << 7,
+  EVENT_CO2_HIGH: 1 << 8,
+  EVENT_CO2_LOW: 1 << 9,
+  EVENT_LUX_HIGH: 1 << 10,
+  EVENT_LUX_LOW: 1 << 11,
+  EVENT_WATER_TEMP_HIGH: 1 << 12,
+  EVENT_WATER_TEMP_LOW: 1 << 13,
+  EVENT_TANK_LEVEL_LOW: 1 << 14,
+  EVENT_TANK_LEVEL_HIGH: 1 << 15,
+  EVENT_WATER_PUMP_ON: 1 << 16,
+  EVENT_WATER_PUMP_OFF: 1 << 17,
+  EVENT_INLET_VALVE_OPEN: 1 << 18,
+  EVENT_INLET_VALVE_CLOSED: 1 << 19,
+  EVENT_OUTLET_VALVE_OPEN: 1 << 20,
+  EVENT_OUTLET_VALVE_CLOSED: 1 << 21,
+  EVENT_NUTRIENT_PUMP_ON: 1 << 22,
+  EVENT_NUTRIENT_PUMP_OFF: 1 << 23,
+  EVENT_LED_LIGHT_ON: 1 << 24,
+  EVENT_LED_LIGHT_OFF: 1 << 25,
+  EVENT_AC_ON: 1 << 26,
+  EVENT_AC_OFF: 1 << 27,
+  EVENT_MODE_AUTO: 1 << 28,
+  EVENT_MODE_MANUAL: 1 << 29,
+  EVENT_CLEAN_TANK_CHANGED: 1 << 30,
+  EVENT_ALARM_STATE_CHANGED: 0x80000000,
+};
+
+/**
+ * Parse an EventMask bitfield (EventBits_t)
+ */
+export const parseEventMask = (mask) => {
+  if (mask === null || mask === undefined || typeof mask !== 'number' || isNaN(mask)) {
+    return {
+      rawMask: 0,
+      activeEvents: [],
+      waterPump: null,
+      nutrientPump: null,
+      inletValve: null,
+      outletValve: null,
+      ledStatus: null,
+      acStatus: null,
+      mode: null,
+      cleanTankChanged: false,
+      alarmStateChanged: false,
+    };
+  }
+
+  let waterPump = null;
+  if ((mask & EVENT_BITS.EVENT_WATER_PUMP_ON) !== 0) waterPump = true;
+  else if ((mask & EVENT_BITS.EVENT_WATER_PUMP_OFF) !== 0) waterPump = false;
+
+  let inletValve = null;
+  if ((mask & EVENT_BITS.EVENT_INLET_VALVE_OPEN) !== 0) inletValve = true;
+  else if ((mask & EVENT_BITS.EVENT_INLET_VALVE_CLOSED) !== 0) inletValve = false;
+
+  let outletValve = null;
+  if ((mask & EVENT_BITS.EVENT_OUTLET_VALVE_OPEN) !== 0) outletValve = true;
+  else if ((mask & EVENT_BITS.EVENT_OUTLET_VALVE_CLOSED) !== 0) outletValve = false;
+
+  let nutrientPump = null;
+  if ((mask & EVENT_BITS.EVENT_NUTRIENT_PUMP_ON) !== 0) nutrientPump = true;
+  else if ((mask & EVENT_BITS.EVENT_NUTRIENT_PUMP_OFF) !== 0) nutrientPump = false;
+
+  let ledStatus = null;
+  if ((mask & EVENT_BITS.EVENT_LED_LIGHT_ON) !== 0) ledStatus = true;
+  else if ((mask & EVENT_BITS.EVENT_LED_LIGHT_OFF) !== 0) ledStatus = false;
+
+  let acStatus = null;
+  if ((mask & EVENT_BITS.EVENT_AC_ON) !== 0) acStatus = true;
+  else if ((mask & EVENT_BITS.EVENT_AC_OFF) !== 0) acStatus = false;
+
+  let mode = null;
+  if ((mask & EVENT_BITS.EVENT_MODE_AUTO) !== 0) mode = true;
+  else if ((mask & EVENT_BITS.EVENT_MODE_MANUAL) !== 0) mode = false;
+
+  const cleanTankChanged = (mask & EVENT_BITS.EVENT_CLEAN_TANK_CHANGED) !== 0;
+  const alarmStateChanged = (mask & EVENT_BITS.EVENT_ALARM_STATE_CHANGED) !== 0;
+
+  const activeEvents = [];
+  if ((mask & EVENT_BITS.EVENT_AIR_TEMP_HIGH) !== 0) activeEvents.push("Air Temp HIGH");
+  if ((mask & EVENT_BITS.EVENT_AIR_TEMP_LOW) !== 0) activeEvents.push("Air Temp LOW");
+  if ((mask & EVENT_BITS.EVENT_HUMIDITY_HIGH) !== 0) activeEvents.push("Humidity HIGH");
+  if ((mask & EVENT_BITS.EVENT_HUMIDITY_LOW) !== 0) activeEvents.push("Humidity LOW");
+  if ((mask & EVENT_BITS.EVENT_PH_HIGH) !== 0) activeEvents.push("pH HIGH");
+  if ((mask & EVENT_BITS.EVENT_PH_LOW) !== 0) activeEvents.push("pH LOW");
+  if ((mask & EVENT_BITS.EVENT_EC_HIGH) !== 0) activeEvents.push("EC HIGH");
+  if ((mask & EVENT_BITS.EVENT_EC_LOW) !== 0) activeEvents.push("EC LOW");
+  if ((mask & EVENT_BITS.EVENT_CO2_HIGH) !== 0) activeEvents.push("CO₂ HIGH");
+  if ((mask & EVENT_BITS.EVENT_CO2_LOW) !== 0) activeEvents.push("CO₂ LOW");
+  if ((mask & EVENT_BITS.EVENT_LUX_HIGH) !== 0) activeEvents.push("Light HIGH");
+  if ((mask & EVENT_BITS.EVENT_LUX_LOW) !== 0) activeEvents.push("Light LOW");
+  if ((mask & EVENT_BITS.EVENT_WATER_TEMP_HIGH) !== 0) activeEvents.push("Water Temp HIGH");
+  if ((mask & EVENT_BITS.EVENT_WATER_TEMP_LOW) !== 0) activeEvents.push("Water Temp LOW");
+  if ((mask & EVENT_BITS.EVENT_TANK_LEVEL_LOW) !== 0) activeEvents.push("Tank Level LOW");
+  if ((mask & EVENT_BITS.EVENT_TANK_LEVEL_HIGH) !== 0) activeEvents.push("Tank Level HIGH");
+  if ((mask & EVENT_BITS.EVENT_WATER_PUMP_ON) !== 0) activeEvents.push("Water Pump ON");
+  if ((mask & EVENT_BITS.EVENT_WATER_PUMP_OFF) !== 0) activeEvents.push("Water Pump OFF");
+  if ((mask & EVENT_BITS.EVENT_INLET_VALVE_OPEN) !== 0) activeEvents.push("Inlet Valve OPEN");
+  if ((mask & EVENT_BITS.EVENT_INLET_VALVE_CLOSED) !== 0) activeEvents.push("Inlet Valve CLOSED");
+  if ((mask & EVENT_BITS.EVENT_OUTLET_VALVE_OPEN) !== 0) activeEvents.push("Outlet Valve OPEN");
+  if ((mask & EVENT_BITS.EVENT_OUTLET_VALVE_CLOSED) !== 0) activeEvents.push("Outlet Valve CLOSED");
+  if ((mask & EVENT_BITS.EVENT_NUTRIENT_PUMP_ON) !== 0) activeEvents.push("Nutrient Pump ON");
+  if ((mask & EVENT_BITS.EVENT_NUTRIENT_PUMP_OFF) !== 0) activeEvents.push("Nutrient Pump OFF");
+  if ((mask & EVENT_BITS.EVENT_LED_LIGHT_ON) !== 0) activeEvents.push("LED Light ON");
+  if ((mask & EVENT_BITS.EVENT_LED_LIGHT_OFF) !== 0) activeEvents.push("LED Light OFF");
+  if ((mask & EVENT_BITS.EVENT_AC_ON) !== 0) activeEvents.push("AC ON");
+  if ((mask & EVENT_BITS.EVENT_AC_OFF) !== 0) activeEvents.push("AC OFF");
+  if ((mask & EVENT_BITS.EVENT_MODE_AUTO) !== 0) activeEvents.push("Mode AUTO");
+  if ((mask & EVENT_BITS.EVENT_MODE_MANUAL) !== 0) activeEvents.push("Mode MANUAL");
+  if (cleanTankChanged) activeEvents.push("Clean Tank Changed");
+  if (alarmStateChanged) activeEvents.push("Alarm State Changed");
+
+  return {
+    rawMask: mask,
+    activeEvents,
+    waterPump,
+    nutrientPump,
+    inletValve,
+    outletValve,
+    ledStatus,
+    acStatus,
+    mode,
+    cleanTankChanged,
+    alarmStateChanged,
+    airTempHigh: (mask & EVENT_BITS.EVENT_AIR_TEMP_HIGH) !== 0,
+    airTempLow: (mask & EVENT_BITS.EVENT_AIR_TEMP_LOW) !== 0,
+    humidityHigh: (mask & EVENT_BITS.EVENT_HUMIDITY_HIGH) !== 0,
+    humidityLow: (mask & EVENT_BITS.EVENT_HUMIDITY_LOW) !== 0,
+    phHigh: (mask & EVENT_BITS.EVENT_PH_HIGH) !== 0,
+    phLow: (mask & EVENT_BITS.EVENT_PH_LOW) !== 0,
+    ecHigh: (mask & EVENT_BITS.EVENT_EC_HIGH) !== 0,
+    ecLow: (mask & EVENT_BITS.EVENT_EC_LOW) !== 0,
+    co2High: (mask & EVENT_BITS.EVENT_CO2_HIGH) !== 0,
+    co2Low: (mask & EVENT_BITS.EVENT_CO2_LOW) !== 0,
+    luxHigh: (mask & EVENT_BITS.EVENT_LUX_HIGH) !== 0,
+    luxLow: (mask & EVENT_BITS.EVENT_LUX_LOW) !== 0,
+    waterTempHigh: (mask & EVENT_BITS.EVENT_WATER_TEMP_HIGH) !== 0,
+    waterTempLow: (mask & EVENT_BITS.EVENT_WATER_TEMP_LOW) !== 0,
+    tankLevelLow: (mask & EVENT_BITS.EVENT_TANK_LEVEL_LOW) !== 0,
+    tankLevelHigh: (mask & EVENT_BITS.EVENT_TANK_LEVEL_HIGH) !== 0,
+  };
+};
+
+// ── Clean Tank States (Bits 8-12 of SensFlt, Mask: 0x00001F00) ───────────────
+export const CLEAN_TANK_STATES = {
+  0: { code: 0, key: "CLEAN_TANK_IDLE", label: "Idle", color: "#757575", isActive: false },
+  1: { code: 1, key: "CLEAN_TANK_DRAINING", label: "Draining", color: "#FF9800", isActive: true },
+  2: { code: 2, key: "CLEAN_TANK_FILLING", label: "Filling", color: "#2196F3", isActive: true },
+  3: { code: 3, key: "CLEAN_TANK_COMPLETE", label: "Complete", color: "#4CAF50", isActive: false },
+  4: { code: 4, key: "CLEAN_TANK_ERROR", label: "Error", color: "#F44336", isActive: false },
+};
+
+/**
+ * Parse Clean Tank State from SensFlt (Bits 8-12, Mask: 0x00001F00)
+ */
+export const parseCleanTankState = (sensFlt) => {
+  if (sensFlt === null || sensFlt === undefined || typeof sensFlt !== "number" || isNaN(sensFlt)) {
+    return CLEAN_TANK_STATES[0];
+  }
+  const code = (sensFlt & 0x00001F00) >>> 8;
+  return (
+    CLEAN_TANK_STATES[code] || {
+      code,
+      key: `CLEAN_TANK_UNKNOWN_${code}`,
+      label: `State ${code}`,
+      color: "#9E9E9E",
+      isActive: false,
+    }
+  );
+};
+
+/**
+ * Parse Sensor Faults and Clean Tank state from SensFlt
+ * Bits 0-7: Sensor faults
+ * Bits 8-12: Tank cleaning states
+ */
+export const parseSensorFaults = (sensFlt) => {
+  if (sensFlt === null || sensFlt === undefined || typeof sensFlt !== "number" || isNaN(sensFlt)) {
+    return {
+      co2: false,
+      waterLevel: false,
+      light: false,
+      ec: false,
+      ph: false,
+      waterTemp: false,
+      airTemp: false,
+      humidity: false,
+      rawMask: 0,
+      hasAnyFault: false,
+      cleanTank: CLEAN_TANK_STATES[0],
+    };
+  }
+  const sensorBits = sensFlt & 0x00FF; // Bits 0-7
+  const cleanTank = parseCleanTankState(sensFlt); // Bits 8-12
+
+  return {
+    co2: (sensorBits & 0x01) !== 0,
+    waterLevel: (sensorBits & 0x02) !== 0,
+    light: (sensorBits & 0x04) !== 0,
+    ec: (sensorBits & 0x08) !== 0,
+    ph: (sensorBits & 0x10) !== 0,
+    waterTemp: (sensorBits & 0x20) !== 0,
+    airTemp: (sensorBits & 0x40) !== 0,
+    humidity: (sensorBits & 0x80) !== 0,
+    rawMask: sensorBits,
+    hasAnyFault: sensorBits !== 0,
+    cleanTank,
+  };
+};
+
 export default {
   parseDeviceStatus,
   getDefaultDeviceStatus,
@@ -297,4 +522,9 @@ export default {
   isAutoMode,
   getDimmingLevel,
   hasActiveAlerts,
+  EVENT_BITS,
+  parseEventMask,
+  CLEAN_TANK_STATES,
+  parseCleanTankState,
+  parseSensorFaults,
 };

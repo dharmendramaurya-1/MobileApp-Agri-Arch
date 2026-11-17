@@ -5,6 +5,7 @@ import {
   ActivityIndicator,
   Dimensions,
   Modal,
+  RefreshControl,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -23,7 +24,10 @@ import {
   downsampleData,
   fetchAllSensorHistorical,
 } from "../../src/services/senmlService";
-import { parseDeviceStatus } from "../../src/utils/deviceStatusParser";
+import {
+  parseDeviceStatus,
+  parseEventMask,
+} from "../../src/utils/deviceStatusParser";
 
 const { width, height } = Dimensions.get("window"); // ✅ Added height
 const PAGE_SIZE = 10;
@@ -76,6 +80,7 @@ export default function PumpHistory() {
   const [timeRange, setTimeRange] = useState("1d");
   const [activeTab, setActiveTab] = useState("table");
   const [allTableData, setAllTableData] = useState([]);
+  const [tableSortOrder, setTableSortOrder] = useState("desc"); // 'desc' = latest time first
   const [graphData, setGraphData] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [isTableLoading, setIsTableLoading] = useState(false);
@@ -95,12 +100,26 @@ export default function PumpHistory() {
       let waterPump = null;
       let nutrientPump = null;
 
+      // 1. Check EventMask first (published immediately on command responses!)
+      const em =
+        typeof parsed?.eventMask === "number"
+          ? parsed.eventMask
+          : typeof parsed?.EventMask === "number"
+            ? parsed.EventMask
+            : null;
+      if (em !== null) {
+        const parsedEm = parseEventMask(em);
+        if (parsedEm.waterPump !== null) waterPump = parsedEm.waterPump;
+        if (parsedEm.nutrientPump !== null) nutrientPump = parsedEm.nutrientPump;
+      }
+
+      // 2. Direct boolean fields
       if (typeof parsed?.water_pump === "boolean")
         waterPump = parsed.water_pump;
       if (typeof parsed?.nutrient_pump === "boolean")
         nutrientPump = parsed.nutrient_pump;
 
-      // DevStat bitmask also carries pump flags (e.g. status responses)
+      // 3. DevStat bitmask also carries pump flags (e.g. status responses)
       const flags = parsed?.deviceStatusFlags;
       if (flags) {
         if (typeof flags.waterPump === "boolean") waterPump = flags.waterPump;
@@ -109,7 +128,11 @@ export default function PumpHistory() {
       }
 
       if (waterPump === null && nutrientPump === null) return null;
-      return { waterPump: !!waterPump, nutrientPump: !!nutrientPump };
+      return {
+        time: parsed?.time || parsed?.t || parsed?.timestamp || undefined,
+        waterPump: !!waterPump,
+        nutrientPump: !!nutrientPump,
+      };
     },
   });
 
@@ -130,39 +153,39 @@ export default function PumpHistory() {
 
   // Current pump state label + stats for the live card (meaningful for ON/OFF)
   const livePumpStats = useMemo(() => {
-      const last = livePumpRaw[livePumpRaw.length - 1];
-      if (!last) return [];
-      const colors =
-        selectedPump === "water"
-          ? "#2196F3"
-          : selectedPump === "nutrient"
-            ? "#4CAF50"
-            : safeTheme.colors.primary;
-      let state = "OFF";
-      if (selectedPump === "water") {
-        state = last.waterPump ? "ON" : "OFF";
-      } else if (selectedPump === "nutrient") {
-        state = last.nutrientPump ? "ON" : "OFF";
-      } else {
-        if (last.waterPump && last.nutrientPump) state = "Both";
-        else if (last.waterPump) state = "Water";
-        else if (last.nutrientPump) state = "Nutrient";
-      }
-      const stateColor = state === "OFF" ? "#F44336" : colors;
-      return [
-        { label: "State", value: state, color: stateColor },
-        {
-          label: "Points",
-          value: String(livePumpRaw.length),
-          color: safeTheme.colors.text,
-        },
-      ];
-    }, [
-      livePumpRaw,
-      selectedPump,
-      safeTheme.colors.primary,
-      safeTheme.colors.text,
-    ]);
+    const last = livePumpRaw[livePumpRaw.length - 1];
+    if (!last) return [];
+    const colors =
+      selectedPump === "water"
+        ? "#2196F3"
+        : selectedPump === "nutrient"
+          ? "#4CAF50"
+          : safeTheme.colors.primary;
+    let state = "OFF";
+    if (selectedPump === "water") {
+      state = last.waterPump ? "ON" : "OFF";
+    } else if (selectedPump === "nutrient") {
+      state = last.nutrientPump ? "ON" : "OFF";
+    } else {
+      if (last.waterPump && last.nutrientPump) state = "Both";
+      else if (last.waterPump) state = "Water";
+      else if (last.nutrientPump) state = "Nutrient";
+    }
+    const stateColor = state === "OFF" ? "#F44336" : colors;
+    return [
+      { label: "State", value: state, color: stateColor },
+      {
+        label: "Points",
+        value: String(livePumpRaw.length),
+        color: safeTheme.colors.text,
+      },
+    ];
+  }, [
+    livePumpRaw,
+    selectedPump,
+    safeTheme.colors.primary,
+    safeTheme.colors.text,
+  ]);
 
   const getDevicePublisherAndKey = useCallback(() => {
     const selectedDevId = getSelectedDeviceId?.();
@@ -185,34 +208,98 @@ export default function PumpHistory() {
     setError(null); // ✅ Clear previous errors
     try {
       const days = RANGE_DAYS[timeRange] || 7;
-      const toMs = Date.now();
-      const fromMs = toMs - days * 24 * 60 * 60 * 1000;
+      // Add 1 hour buffer to prevent device clock skew from cutting off the latest records
+      const toMs = Date.now() + 60 * 60 * 1000;
+      const fromMs = Date.now() - days * 24 * 60 * 60 * 1000;
       const { publisherId, externalKey } = getDevicePublisherAndKey();
 
-      const result = await fetchAllSensorHistorical({
-        sensorKey: "deviceStatus",
-        from: fromMs,
-        to: toMs,
-        pageSize: 500,
-        publisherId,
-        externalKey,
-      });
+      // Fetch both deviceStatus (DevStat) and eventMask (EventMask) in parallel
+      const [devStatResult, eventMaskResult] = await Promise.all([
+        fetchAllSensorHistorical({
+          sensorKey: "deviceStatus",
+          from: fromMs,
+          to: toMs,
+          pageSize: 500,
+          publisherId,
+          externalKey,
+        }),
+        fetchAllSensorHistorical({
+          sensorKey: "eventMask",
+          from: fromMs,
+          to: toMs,
+          pageSize: 500,
+          publisherId,
+          externalKey,
+        }),
+      ]);
 
-      if (result.success && result.data.length > 0) {
-        const events = result.data
+      const eventsMap = new Map();
+
+      // Populate events from DevStat records
+      if (devStatResult.success && Array.isArray(devStatResult.data)) {
+        devStatResult.data
           .filter((d) => d.value != null)
-          .map((d, idx) => {
+          .forEach((d, idx) => {
             const parsed = parseDeviceStatus(d.value);
-            return {
-              id: `${d.time}-${idx}`,
+            eventsMap.set(d.time, {
+              id: `devstat-${d.time}-${idx}`,
               time: d.time,
               waterPump: parsed.waterPump,
               nutrientPump: parsed.nutrientPump,
               rawStatus: d.value,
-            };
+              eventMask: null,
+            });
           });
+      }
 
-        setAllTableData(downsampleData(events, MAX_TABLE_ROWS));
+      // Merge / add events from EventMask records (published on actions)
+      if (eventMaskResult.success && Array.isArray(eventMaskResult.data)) {
+        eventMaskResult.data
+          .filter((d) => d.value != null)
+          .forEach((d, idx) => {
+            const parsedEm = parseEventMask(d.value);
+            const hasPumpBit =
+              parsedEm.waterPump !== null || parsedEm.nutrientPump !== null;
+
+            if (eventsMap.has(d.time)) {
+              const existing = eventsMap.get(d.time);
+              eventsMap.set(d.time, {
+                ...existing,
+                waterPump:
+                  parsedEm.waterPump !== null
+                    ? parsedEm.waterPump
+                    : existing.waterPump,
+                nutrientPump:
+                  parsedEm.nutrientPump !== null
+                    ? parsedEm.nutrientPump
+                    : existing.nutrientPump,
+                eventMask: d.value,
+                eventMaskFlags: parsedEm,
+              });
+            } else if (hasPumpBit) {
+              eventsMap.set(d.time, {
+                id: `eventmask-${d.time}-${idx}`,
+                time: d.time,
+                waterPump: parsedEm.waterPump ?? false,
+                nutrientPump: parsedEm.nutrientPump ?? false,
+                rawStatus: null,
+                eventMask: d.value,
+                eventMaskFlags: parsedEm,
+              });
+            }
+          });
+      }
+
+      const events = Array.from(eventsMap.values());
+
+      if (events.length > 0) {
+        // Do NOT downsample table events - keep raw latest events sorted by time
+        const sortedTable = [...events].sort((a, b) =>
+          tableSortOrder === "asc"
+            ? (a.time || 0) - (b.time || 0)
+            : (b.time || 0) - (a.time || 0)
+        );
+        setAllTableData(sortedTable.slice(0, MAX_TABLE_ROWS));
 
         // Build graph data
         const graphPoints = events.map((e) => ({
@@ -232,8 +319,8 @@ export default function PumpHistory() {
       } else {
         setAllTableData([]);
         setGraphData([]);
-        if (!result.success) {
-          setError("Failed to fetch data"); // ✅ Set error
+        if (!devStatResult.success && !eventMaskResult.success) {
+          setError("Failed to fetch data");
         }
       }
     } catch (error) {
@@ -245,7 +332,21 @@ export default function PumpHistory() {
       setIsTableLoading(false);
       setIsGraphLoading(false);
     }
-  }, [timeRange, selectedPump, getDevicePublisherAndKey]);
+  }, [timeRange, selectedPump, getDevicePublisherAndKey, tableSortOrder]);
+
+  const toggleTableSortOrder = useCallback(() => {
+    setTableSortOrder((prevOrder) => {
+      const nextOrder = prevOrder === "desc" ? "asc" : "desc";
+      setAllTableData((prevData) =>
+        [...prevData].sort((a, b) =>
+          nextOrder === "asc"
+            ? (a.time || 0) - (b.time || 0)
+            : (b.time || 0) - (a.time || 0)
+        )
+      );
+      return nextOrder;
+    });
+  }, []);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -253,30 +354,78 @@ export default function PumpHistory() {
     fetchAllData();
   }, [fetchAllData]);
 
+  // Merge live real-time MQTT points with historical records so toggle events immediately reflect in the table
+  const displayTableData = useMemo(() => {
+    if (!livePumpRaw || livePumpRaw.length === 0) {
+      return allTableData;
+    }
+    const maxHistTime = allTableData.reduce(
+      (max, d) => Math.max(max, d.time || 0),
+      0
+    );
+    const newLiveEvents = livePumpRaw
+      .filter((lp) => (lp.time || 0) > maxHistTime)
+      .map((lp, idx) => ({
+        id: `live-${lp.time}-${idx}`,
+        time: lp.time,
+        waterPump: lp.waterPump,
+        nutrientPump: lp.nutrientPump,
+        rawStatus: null,
+      }));
+
+    if (newLiveEvents.length === 0) {
+      return allTableData;
+    }
+
+    const combined = [...newLiveEvents, ...allTableData];
+    return combined.sort((a, b) =>
+      tableSortOrder === "asc"
+        ? (a.time || 0) - (b.time || 0)
+        : (b.time || 0) - (a.time || 0)
+    );
+  }, [allTableData, livePumpRaw, tableSortOrder]);
+
   // Client-side pagination
-  const tableTotal = allTableData.length;
+  const tableTotal = displayTableData.length;
   const totalPages = Math.max(1, Math.ceil(tableTotal / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
-  const pageData = allTableData.slice(
+  const pageData = displayTableData.slice(
     (safePage - 1) * PAGE_SIZE,
     safePage * PAGE_SIZE,
   );
+
   const startIndex = tableTotal > 0 ? (safePage - 1) * PAGE_SIZE + 1 : 0;
   const endIndex = Math.min(safePage * PAGE_SIZE, tableTotal);
 
   const formatTime = (ms) => {
     if (!ms) return "--";
     const d = new Date(ms);
-    const date = d.toLocaleDateString([], {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-    });
-    const time = d.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-    return `${date}, ${time}`;
+    // Hardware timestamp is already formatted to Indian Standard Time (IST).
+    // Using UTC date/time getters avoids double-applying the timezone offset (+5:30) on local devices.
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    const month = months[d.getUTCMonth()];
+    const year = d.getUTCFullYear();
+    let hours = d.getUTCHours();
+    const minutes = String(d.getUTCMinutes()).padStart(2, "0");
+    const ampm = hours >= 12 ? "PM" : "AM";
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    const formattedHours = String(hours).padStart(2, "0");
+    return `${day} ${month} ${year}, ${formattedHours}:${minutes} ${ampm}`;
   };
 
   const getStatusColor = (on) => (on ? "#4CAF50" : "#F44336");
@@ -294,6 +443,7 @@ export default function PumpHistory() {
     }
   };
 
+
   return (
     <>
       <ScrollView
@@ -305,6 +455,14 @@ export default function PumpHistory() {
         contentContainerStyle={{ paddingTop: headerHeight }}
         onScroll={onScroll}
         scrollEventThrottle={16}
+        refreshControl={
+          <RefreshControl
+            refreshing={isTableLoading && isGraphLoading}
+            onRefresh={fetchAllData}
+            tintColor={safeTheme.colors.primary}
+            colors={[safeTheme.colors.primary]}
+          />
+        }
       >
         {/* ── HEADER ── */}
         <View style={styles.header}>
@@ -561,14 +719,37 @@ export default function PumpHistory() {
             ) : pageData.length > 0 ? (
               <>
                 <View style={styles.tableHeader}>
-                  <Text
-                    style={[
-                      styles.tableHeaderCell,
-                      { color: safeTheme.colors.textSecondary },
-                    ]}
+                  <TouchableOpacity
+                    style={{ flexDirection: "row", alignItems: "center", gap: 4, flex: 2 }}
+                    onPress={toggleTableSortOrder}
+                    activeOpacity={0.7}
                   >
-                    Date &amp; Time
-                  </Text>
+                    <Text
+                      style={[
+                        styles.tableHeaderCell,
+                        { color: safeTheme.colors.textSecondary, flex: 0 },
+                      ]}
+                    >
+                      Date &amp; Time
+                    </Text>
+                    <Ionicons
+                      name={tableSortOrder === "desc" ? "arrow-down" : "arrow-up"}
+                      size={12}
+                      color={safeTheme.colors.primary}
+                    />
+                    <View
+                      style={{
+                        backgroundColor: `${safeTheme.colors.primary}18`,
+                        paddingHorizontal: 5,
+                        paddingVertical: 1,
+                        borderRadius: 4,
+                      }}
+                    >
+                      <Text style={{ fontSize: 9, color: safeTheme.colors.primary, fontWeight: "700" }}>
+                        {tableSortOrder === "desc" ? "Latest" : "Oldest"}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
                   {selectedPump === "water" || selectedPump === "both" ? (
                     <Text
                       style={[
@@ -605,7 +786,7 @@ export default function PumpHistory() {
                         styles.tableCell,
                         { color: safeTheme.colors.text },
                       ]}
-                      numberOfLines={1}
+                      numberOfLines={2}
                     >
                       {formatTime(event.time)}
                     </Text>
@@ -741,139 +922,139 @@ export default function PumpHistory() {
               </View>
             )
           ) : // ── GRAPH TAB ──
-          isGraphLoading ? (
-            <View style={styles.placeholder}>
-              <ActivityIndicator
-                size="large"
-                color={safeTheme.colors.primary}
-              />
-              <Text
-                style={[
-                  styles.placeholderText,
-                  { color: safeTheme.colors.textSecondary },
-                ]}
-              >
-                Loading graph…
-              </Text>
-            </View>
-          ) : graphData.length > 0 ? (
-            <View style={styles.graphWrapper}>
-              <View style={styles.graphSummaryRow}>
-                <View style={styles.graphSummaryLeft}>
-                  <Text
-                    style={[
-                      styles.graphSummary,
-                      { color: safeTheme.colors.textSecondary },
-                    ]}
-                  >
-                    {graphData.length} points ·{" "}
-                    {selectedPump === "both"
-                      ? "Water + Nutrient"
-                      : selectedPump === "water"
-                        ? "Water Pump"
-                        : "Nutrient Pump"}
-                  </Text>
-                </View>
-                <TouchableOpacity
-                  onPress={() => setIsZoomed(true)}
-                  style={[
-                    styles.zoomButton,
-                    { backgroundColor: safeTheme.colors.primary + "15" },
-                  ]}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Ionicons
-                    name="expand-outline"
-                    size={18}
-                    color={safeTheme.colors.primary}
-                  />
-                  <Text
-                    style={[
-                      styles.zoomButtonText,
-                      { color: safeTheme.colors.primary },
-                    ]}
-                  >
-                    Full
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* ── Legend ── */}
-              <View style={styles.legendContainer}>
-                {selectedPump === "water" || selectedPump === "both" ? (
-                  <View style={styles.legendItem}>
-                    <View
-                      style={[styles.legendDot, { backgroundColor: "#2196F3" }]}
-                    />
-                    <Text
-                      style={[
-                        styles.legendText,
-                        { color: safeTheme.colors.textSecondary },
-                      ]}
-                    >
-                      Water
-                    </Text>
-                  </View>
-                ) : null}
-                {selectedPump === "nutrient" || selectedPump === "both" ? (
-                  <View style={styles.legendItem}>
-                    <View
-                      style={[styles.legendDot, { backgroundColor: "#4CAF50" }]}
-                    />
-                    <Text
-                      style={[
-                        styles.legendText,
-                        { color: safeTheme.colors.textSecondary },
-                      ]}
-                    >
-                      Nutrient
-                    </Text>
-                  </View>
-                ) : null}
-              </View>
-
-              <View style={styles.chartArea}>
-                <LineChart
-                  data={graphData}
-                  color={
-                    selectedPump === "water"
-                      ? "#2196F3"
-                      : selectedPump === "nutrient"
-                        ? "#4CAF50"
-                        : safeTheme.colors.primary
-                  }
-                  unit=""
-                  width={width - 34}
-                  height={245}
-                  labelColor={safeTheme.colors.textSecondary}
-                  xTitle="Time"
-                  yTitle={selectedPump === "both" ? "State" : "Pump"}
-                  onPointPress={setSelectedPoint}
-                  selectedPoint={selectedPoint}
+            isGraphLoading ? (
+              <View style={styles.placeholder}>
+                <ActivityIndicator
+                  size="large"
+                  color={safeTheme.colors.primary}
                 />
+                <Text
+                  style={[
+                    styles.placeholderText,
+                    { color: safeTheme.colors.textSecondary },
+                  ]}
+                >
+                  Loading graph…
+                </Text>
               </View>
-            </View>
-          ) : (
-            <View style={styles.placeholder}>
-              <Ionicons
-                name="analytics-outline"
-                size={48}
-                color={safeTheme.colors.textSecondary}
-              />
-              <Text
-                style={[
-                  styles.placeholderText,
-                  { color: safeTheme.colors.textSecondary },
-                ]}
-              >
-                No pump data for graph
-              </Text>
-            </View>
-          )}
+            ) : graphData.length > 0 ? (
+              <View style={styles.graphWrapper}>
+                <View style={styles.graphSummaryRow}>
+                  <View style={styles.graphSummaryLeft}>
+                    <Text
+                      style={[
+                        styles.graphSummary,
+                        { color: safeTheme.colors.textSecondary },
+                      ]}
+                    >
+                      {graphData.length} points ·{" "}
+                      {selectedPump === "both"
+                        ? "Water + Nutrient"
+                        : selectedPump === "water"
+                          ? "Water Pump"
+                          : "Nutrient Pump"}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    onPress={() => setIsZoomed(true)}
+                    style={[
+                      styles.zoomButton,
+                      { backgroundColor: safeTheme.colors.primary + "15" },
+                    ]}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons
+                      name="expand-outline"
+                      size={18}
+                      color={safeTheme.colors.primary}
+                    />
+                    <Text
+                      style={[
+                        styles.zoomButtonText,
+                        { color: safeTheme.colors.primary },
+                      ]}
+                    >
+                      Full
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* ── Legend ── */}
+                <View style={styles.legendContainer}>
+                  {selectedPump === "water" || selectedPump === "both" ? (
+                    <View style={styles.legendItem}>
+                      <View
+                        style={[styles.legendDot, { backgroundColor: "#2196F3" }]}
+                      />
+                      <Text
+                        style={[
+                          styles.legendText,
+                          { color: safeTheme.colors.textSecondary },
+                        ]}
+                      >
+                        Water
+                      </Text>
+                    </View>
+                  ) : null}
+                  {selectedPump === "nutrient" || selectedPump === "both" ? (
+                    <View style={styles.legendItem}>
+                      <View
+                        style={[styles.legendDot, { backgroundColor: "#4CAF50" }]}
+                      />
+                      <Text
+                        style={[
+                          styles.legendText,
+                          { color: safeTheme.colors.textSecondary },
+                        ]}
+                      >
+                        Nutrient
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={styles.chartArea}>
+                  <LineChart
+                    data={graphData}
+                    color={
+                      selectedPump === "water"
+                        ? "#2196F3"
+                        : selectedPump === "nutrient"
+                          ? "#4CAF50"
+                          : safeTheme.colors.primary
+                    }
+                    unit=""
+                    width={width - 34}
+                    height={245}
+                    labelColor={safeTheme.colors.textSecondary}
+                    xTitle="Time"
+                    yTitle={selectedPump === "both" ? "State" : "Pump"}
+                    onPointPress={setSelectedPoint}
+                    selectedPoint={selectedPoint}
+                  />
+                </View>
+              </View>
+            ) : (
+              <View style={styles.placeholder}>
+                <Ionicons
+                  name="analytics-outline"
+                  size={48}
+                  color={safeTheme.colors.textSecondary}
+                />
+                <Text
+                  style={[
+                    styles.placeholderText,
+                    { color: safeTheme.colors.textSecondary },
+                  ]}
+                >
+                  No pump data for graph
+                </Text>
+              </View>
+            )}
         </View>
 
 
-         {/* ── LIVE PUMP · LAST 10 MIN ── */}
+        {/* ── LIVE PUMP · LAST 10 MIN ── */}
         <LiveChartCard
           title="Pump · Live"
           subtitle={`${selectedPump === "water" ? "Water" : selectedPump === "nutrient" ? "Nutrient" : "Both"} pump — last 10 min of MQTT data`}
@@ -1249,7 +1430,7 @@ const styles = StyleSheet.create({
   pageInfoSub: { fontSize: 11, marginTop: 2, opacity: 0.7 },
 
   // Graph
-  graphWrapper: { padding: 14, gap: 10,  },
+  graphWrapper: { padding: 14, gap: 10, },
   graphSummary: { fontSize: 12, fontWeight: "500", textAlign: "center" },
   legendContainer: {
     flexDirection: "row",

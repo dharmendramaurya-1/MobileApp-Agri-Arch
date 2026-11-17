@@ -36,6 +36,7 @@ export const TankSafetyProvider = ({ children }) => {
     getSelectedDeviceActuatorStatus,
     getSelectedDeviceSensorData,
     getSelectedDeviceCleanTankStatus,
+    getSelectedDeviceConfig,
     publishActuatorStatus,
     publishCleanTank,
     isConnected,
@@ -48,6 +49,8 @@ export const TankSafetyProvider = ({ children }) => {
   const actuatorStatus = getSelectedDeviceActuatorStatus();
   const sensorData = getSelectedDeviceSensorData();
   const rawCleanTankStatus = getSelectedDeviceCleanTankStatus();
+  const deviceConfig = typeof getSelectedDeviceConfig === 'function' ? getSelectedDeviceConfig() : null;
+  const isBypaslvl = Boolean(deviceConfig?.bypaslvl);
 
   const currentLevel = sensorData?.waterLevel ?? null;
   const isPumpOn = actuatorStatus?.water_pump === true;
@@ -75,9 +78,33 @@ export const TankSafetyProvider = ({ children }) => {
   currentLevelRef.current = currentLevel;
   actuatorStatusRef.current = actuatorStatus;
 
-  // Sync external clean tank status from MQTT
+  // Sync external clean tank status from MQTT (including hardware SensFlt bits 8-12)
   useEffect(() => {
     if (rawCleanTankStatus !== undefined && rawCleanTankStatus !== null) {
+      if (typeof rawCleanTankStatus === 'object' && rawCleanTankStatus.code !== undefined) {
+        // Direct state from firmware SensFlt bits 8-12:
+        // 0 = IDLE, 1 = DRAINING, 2 = REFILLING, 3 = COMPLETED, 4 = ERROR
+        if (rawCleanTankStatus.code === 1) {
+          setCleanTankActive(true);
+          setCleanTankPhase(CLEAN_TANK_PHASES.DRAINING);
+        } else if (rawCleanTankStatus.code === 2) {
+          setCleanTankActive(true);
+          setCleanTankPhase(CLEAN_TANK_PHASES.REFILLING);
+        } else if (rawCleanTankStatus.code === 3) {
+          setCleanTankActive(false);
+          setCleanTankPhase(CLEAN_TANK_PHASES.COMPLETED);
+        } else if (rawCleanTankStatus.code === 4) {
+          setCleanTankActive(false);
+          setCleanTankPhase(CLEAN_TANK_PHASES.ALERT_NO_INFLOW);
+          setSafetyAlert('Hardware Clean Tank Error (Code 4)');
+        } else if (rawCleanTankStatus.code === 0) {
+          setCleanTankActive(false);
+          setCleanTankPhase(CLEAN_TANK_PHASES.IDLE);
+          setCleanTankMessage('');
+        }
+        return;
+      }
+
       if (rawCleanTankStatus && !cleanTankActive) {
         setCleanTankActive(true);
         if (cleanTankPhase === CLEAN_TANK_PHASES.IDLE) {
@@ -162,71 +189,33 @@ export const TankSafetyProvider = ({ children }) => {
   }, [deviceKey, publishCleanTank, sendActuatorUpdate]);
 
   // ── Auto Clean Tank State Machine Monitor ──
+  // Note: Firmware handles automated valve transitions on hardware.
+  // The app only reflects the state machine status to the user and avoids
+  // publishing unsolicited actuator payloads on startup or resume.
   useEffect(() => {
     if (!cleanTankActive) return;
 
     const level = currentLevel;
     const phase = cleanTankPhase;
 
-    // ── Phase 1 / DRAINING: Wait until waterLevel < 5% ──
     if (phase === CLEAN_TANK_PHASES.DRAINING) {
       if (level !== null && level < 5) {
-        console.log(`🚰 [CleanTank] Level is ${level}% (< 5%). Closing Outlet, Opening Inlet to refill.`);
         setCleanTankPhase(CLEAN_TANK_PHASES.REFILLING);
-        setCleanTankMessage('Phase 2: Draining complete (< 5%). Outlet closed, Inlet opened. Monitoring water inflow (≥ 3% every 3 min)...');
-
-        // Close Outlet, Open Inlet
-        sendActuatorUpdate({
-          water_OLvalve: false,
-          water_ILvalve: true,
-        });
-
-        // Initialize 3-minute inflow monitor
-        inflowStartTimeRef.current = Date.now();
-        inflowBaselineLevelRef.current = level;
-        setInflowSecondsRemaining(180);
+        setCleanTankMessage('Phase 2: Draining complete (< 5%). Refilling tank...');
       }
-    }
-
-    // ── Phase 2 / REFILLING: Level reaches > 15% -> Start Pump ──
-    if (phase === CLEAN_TANK_PHASES.REFILLING) {
+    } else if (phase === CLEAN_TANK_PHASES.REFILLING) {
       if (level !== null && level > 15 && !isPumpOn) {
-        console.log(`🚰 [CleanTank] Level reached ${level}% (> 15%). Starting water pump.`);
         setCleanTankPhase(CLEAN_TANK_PHASES.PUMP_RESUMED);
-        setCleanTankMessage('Phase 3: Water level > 15%. Water Pump restarted successfully!');
-
-        // Start Pump
-        sendActuatorUpdate({
-          water_pump: true,
-        });
-
-        // If level crosses 90%, complete clean tank
-        if (level >= 90) {
-          console.log(`🚰 [CleanTank] Tank full (>= 90%). Completing Clean Tank.`);
-          sendActuatorUpdate({
-            water_ILvalve: false,
-          });
-          setCleanTankPhase(CLEAN_TANK_PHASES.COMPLETED);
-          setCleanTankMessage('Clean Tank process completed successfully! Tank refilled.');
-          publishCleanTank(deviceKey, false);
-          setCleanTankActive(false);
-        }
+        setCleanTankMessage('Phase 3: Water level > 15%. Water Pump resumed.');
       }
-    }
-
-    if (phase === CLEAN_TANK_PHASES.PUMP_RESUMED) {
+    } else if (phase === CLEAN_TANK_PHASES.PUMP_RESUMED) {
       if (level !== null && level >= 90) {
-        console.log(`🚰 [CleanTank] Tank full (>= 90%). Inlet closed.`);
-        sendActuatorUpdate({
-          water_ILvalve: false,
-        });
         setCleanTankPhase(CLEAN_TANK_PHASES.COMPLETED);
         setCleanTankMessage('Clean Tank process completed successfully! Tank full.');
-        publishCleanTank(deviceKey, false);
         setCleanTankActive(false);
       }
     }
-  }, [cleanTankActive, cleanTankPhase, currentLevel, isPumpOn, deviceKey, sendActuatorUpdate, publishCleanTank]);
+  }, [cleanTankActive, cleanTankPhase, currentLevel, isPumpOn]);
 
   // ── 3-Minute Inflow Monitoring Loop (Applies ONLY during Clean Tank) ──
   useEffect(() => {
@@ -316,35 +305,9 @@ export const TankSafetyProvider = ({ children }) => {
   }, [isInletOpen, deviceKey, sendActuatorUpdate, publishCleanTank]);
 
   // ── General Valve Level Protections ──
-  useEffect(() => {
-    if (currentLevel === null || currentLevel === undefined) return;
-
-    // 1. CLEAN TANK PROTECTIONS
-    if (cleanTankActive) {
-      if (isOutletOpen && currentLevel < 5) {
-        console.log(`🚰 [CleanTank] Level is ${currentLevel}% (< 5%). Closing Outlet Valve.`);
-        sendActuatorUpdate({ water_OLvalve: false });
-      }
-      if (isInletOpen && currentLevel >= 90) {
-        console.log(`🚰 [CleanTank] Tank full (>= 90%). Closing Inlet Valve.`);
-        sendActuatorUpdate({ water_ILvalve: false });
-      }
-      return;
-    }
-
-    // 2. AUTO MODE INLET VALVE AUTOMATION:
-    if (!isManualMode) {
-      // In auto mode: open inlet valve when water falls below 15%, stop after it crosses 90%
-      if (currentLevel < 15 && !isInletOpen) {
-        console.log(`🤖 [AutoMode] Tank Level is ${currentLevel}% (< 15%). Opening Inlet Valve.`);
-        sendActuatorUpdate({ water_ILvalve: true });
-      } else if (currentLevel >= 90 && isInletOpen) {
-        console.log(`🤖 [AutoMode] Tank Level is ${currentLevel}% (>= 90%). Closing Inlet Valve.`);
-        sendActuatorUpdate({ water_ILvalve: false });
-      }
-    }
-    // In MANUAL mode: No automatic overrides — the user has full manual control to turn all devices ON or OFF.
-  }, [currentLevel, isInletOpen, isOutletOpen, cleanTankActive, isManualMode, sendActuatorUpdate]);
+  // Note: Automation logic is handled by device firmware. The app does NOT
+  // issue unsolicited actuator updates on startup, reload, or background resume.
+  // The app only issues commands on explicit user actions.
 
   const clearSafetyAlert = () => setSafetyAlert(null);
 
@@ -361,8 +324,8 @@ export const TankSafetyProvider = ({ children }) => {
     isOutletOpen,
     startCleanTank,
     stopCleanTank,
-    canOpenOutletValve: (targetLevel = currentLevel) => canOpenOutletValve(targetLevel, cleanTankActive),
-    canOpenInletValve: (targetLevel = currentLevel) => canOpenInletValve(targetLevel),
+    canOpenOutletValve: (targetLevel = currentLevel) => isBypaslvl || canOpenOutletValve(targetLevel, cleanTankActive),
+    canOpenInletValve: (targetLevel = currentLevel) => isBypaslvl || canOpenInletValve(targetLevel),
   };
 
   return (

@@ -53,8 +53,8 @@ const getSensorStatusFromFlags = (sensorKey, deviceStatus) => {
   }
 
   // Parse device status if it's a number
-  const flags = typeof deviceStatus === 'number' 
-    ? parseDeviceStatus(deviceStatus) 
+  const flags = typeof deviceStatus === 'number'
+    ? parseDeviceStatus(deviceStatus)
     : deviceStatus;
 
   // ── AMBIENT TEMPERATURE ──
@@ -157,26 +157,26 @@ export default function SensorDetailScreen({
 }) {
   const insets = useSafeAreaInsets();
   const { theme, isDark } = useTheme();
-  
+
   // ✅ ADDED: deviceStatusFlags and cropSettings
-  const { 
-    getSelectedDeviceSensorData, 
-    getSelectedDeviceId, 
-    getSelectedExternalKey, 
+  const {
+    getSelectedDeviceSensorData,
+    getSelectedDeviceId,
+    getSelectedExternalKey,
     availableDevices,
     deviceStatusFlags,
     getSelectedDeviceCropSettings,
     externalKey
   } = useMqtt();
-  
+
   // ✅ Use HistoricalDataContext
-  const { 
-    fetchSensorHistorical, 
+  const {
+    fetchSensorHistorical,
     isLoading: isHistoricalLoading,
     error: historicalError,
-    lastUpdated 
+    lastUpdated
   } = useHistoricalData();
-  
+
   const sensorData = getSelectedDeviceSensorData();
   const { onScroll, headerHeight } = useScroll();
   const scrollRef = useRef(null);
@@ -187,9 +187,10 @@ export default function SensorDetailScreen({
   const [timeRange, setTimeRange] = useState("1d");
   const [activeTab, setActiveTab] = useState("table");
   const [allTableData, setAllTableData] = useState([]);
+  const [tableSortOrder, setTableSortOrder] = useState("desc"); // 'desc' = latest time first
   const [currentPage, setCurrentPage] = useState(1);
   const [isTableLoading, setIsTableLoading] = useState(false);
-    const [graphData, setGraphData] = useState([]); // Keep track of graph data
+  const [graphData, setGraphData] = useState([]); // Keep track of graph data
   const [isGraphLoading, setIsGraphLoading] = useState(false);
   const [isZoomed, setIsZoomed] = useState(false);
   const [selectedPoint, setSelectedPoint] = useState(null);
@@ -198,7 +199,7 @@ export default function SensorDetailScreen({
   const selectedDevId = getSelectedDeviceId();
   const selectedExtKey = getSelectedExternalKey();
 
-    const liveDeviceKey = selectedExtKey || externalKey || null;
+  const liveDeviceKey = selectedExtKey || externalKey || null;
   const livePoints = useLiveMqttWindow({
     deviceKey: liveDeviceKey,
     enabled: !!liveDeviceKey,
@@ -231,8 +232,9 @@ export default function SensorDetailScreen({
 
   const getTimeWindow = useCallback(() => {
     const days = RANGE_DAYS[timeRange] || 7;
-    const toMs = Date.now();
-    const fromMs = toMs - days * 24 * 60 * 60 * 1000;
+    // Add 1 hour buffer so device clock drift does not filter out latest records
+    const toMs = Date.now() + 60 * 60 * 1000;
+    const fromMs = Date.now() - days * 24 * 60 * 60 * 1000;
     return { from: fromMs, to: toMs };
   }, [timeRange]);
 
@@ -254,7 +256,13 @@ export default function SensorDetailScreen({
       });
 
       if (result.success) {
-        setAllTableData(downsampleData(result.data, MAX_TABLE_ROWS));
+        // Sort by latest time first (descending order) so newest records appear at the top
+        const sorted = [...(result.data || [])].sort((a, b) =>
+          tableSortOrder === "asc"
+            ? (a.time || 0) - (b.time || 0)
+            : (b.time || 0) - (a.time || 0)
+        );
+        setAllTableData(sorted.slice(0, MAX_TABLE_ROWS));
       } else {
         setAllTableData([]);
         console.error("Table fetch error:", result.error);
@@ -265,7 +273,21 @@ export default function SensorDetailScreen({
     } finally {
       setIsTableLoading(false);
     }
-  }, [getTimeWindow, getDevicePublisherAndKey, sensorName, fetchSensorHistorical]);
+  }, [getTimeWindow, getDevicePublisherAndKey, sensorName, fetchSensorHistorical, tableSortOrder]);
+
+  const toggleTableSortOrder = useCallback(() => {
+    setTableSortOrder((prevOrder) => {
+      const nextOrder = prevOrder === "desc" ? "asc" : "desc";
+      setAllTableData((prevData) =>
+        [...prevData].sort((a, b) =>
+          nextOrder === "asc"
+            ? (a.time || 0) - (b.time || 0)
+            : (b.time || 0) - (a.time || 0)
+        )
+      );
+      return nextOrder;
+    });
+  }, []);
 
   const fetchGraphData = useCallback(async () => {
     setIsGraphLoading(true);
@@ -436,17 +458,30 @@ export default function SensorDetailScreen({
   const formatTableTime = (ms) => {
     if (!ms) return "--";
     const d = new Date(ms);
-    const now = new Date();
-    const isToday = d.toDateString() === now.toDateString();
-    const yesterday = new Date();
-    yesterday.setDate(now.getDate() - 1);
-    const isYesterday = d.toDateString() === yesterday.toDateString();
-
-    const timeStr = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    if (isToday) return `Today, ${timeStr}`;
-    if (isYesterday) return `Yesterday, ${timeStr}`;
-    const dateStr = d.toLocaleDateString([], { day: "2-digit", month: "short" });
-    return `${dateStr}, ${timeStr}`;
+    // Device timestamp is already fixed to IST; use UTC methods to prevent double-applying timezone offset
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+    const day = String(d.getUTCDate()).padStart(2, "0");
+    const month = months[d.getUTCMonth()];
+    let hours = d.getUTCHours();
+    const minutes = String(d.getUTCMinutes()).padStart(2, "0");
+    const ampm = hours >= 12 ? "PM" : "AM";
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    const formattedHours = String(hours).padStart(2, "0");
+    return `${day} ${month}, ${formattedHours}:${minutes} ${ampm}`;
   };
 
   // Client-side pagination over downsampled data
@@ -462,223 +497,223 @@ export default function SensorDetailScreen({
 
   return (
     <>
-    <ScrollView
-      ref={scrollRef}
-      style={[styles.container, { backgroundColor: theme.colors.background }]}
-      contentContainerStyle={{
-        paddingTop: contentPaddingTop ?? headerHeight,
-        paddingBottom: 10,
-      }}
-      onScroll={onScroll}
-      scrollEventThrottle={16}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* ─── HEADER ─── */}
-      {showHeader && (
-        <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={[styles.backButton, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="arrow-back" size={20} color={theme.colors.text} />
-          </TouchableOpacity>
-          <View style={styles.headerTitleContainer}>
-            <Text style={[styles.headerTitle, { color: theme.colors.text }]} numberOfLines={1}>
-              {config.name}
-            </Text>
-            <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>
-              {config.location || "Greenhouse"} · Telemetry & Trends
-            </Text>
-          </View>
-          <View style={[styles.liveSyncBadge, { backgroundColor: isDark ? "rgba(46,125,50,0.2)" : "rgba(46,125,50,0.1)" }]}>
-            <View style={styles.livePulseDot} />
-            <Text style={[styles.liveSyncText, { color: isDark ? "#81C784" : "#2E7D32" }]}>
-              Live
-            </Text>
-          </View>
-        </View>
-      )}
-
-      {/* ─── HERO LIVE METRIC CARD (Compact & Pretty) ─── */}
-      <View
-        style={[
-          styles.heroCard,
-          {
-            backgroundColor: theme.colors.surface,
-            borderColor: theme.colors.border,
-          },
-        ]}
+      <ScrollView
+        ref={scrollRef}
+        style={[styles.container, { backgroundColor: theme.colors.background }]}
+        contentContainerStyle={{
+          paddingTop: contentPaddingTop ?? headerHeight,
+          paddingBottom: 10,
+        }}
+        onScroll={onScroll}
+        scrollEventThrottle={16}
+        showsVerticalScrollIndicator={false}
       >
-        {/* Top meta row */}
-        <View style={styles.heroTopRow}>
-          <View style={styles.heroSensorTag}>
-            <View
-              style={[
-                styles.sensorIconSquircle,
-                { backgroundColor: `${config.color || theme.colors.primary}18` },
-              ]}
+        {/* ─── HEADER ─── */}
+        {showHeader && (
+          <View style={styles.header}>
+            <TouchableOpacity
+              onPress={() => router.back()}
+              style={[styles.backButton, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border }]}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              activeOpacity={0.7}
             >
-              <Ionicons
-                name={config.icon || "speedometer-outline"}
-                size={16}
-                color={config.color || theme.colors.primary}
-              />
-            </View>
-            <View>
-              <Text style={[styles.heroSensorCategory, { color: theme.colors.textSecondary }]}>
-                Real-Time Reading
-              </Text>
-              <Text style={[styles.heroSensorName, { color: theme.colors.text }]} numberOfLines={1}>
+              <Ionicons name="arrow-back" size={20} color={theme.colors.text} />
+            </TouchableOpacity>
+            <View style={styles.headerTitleContainer}>
+              <Text style={[styles.headerTitle, { color: theme.colors.text }]} numberOfLines={1}>
                 {config.name}
               </Text>
+              <Text style={[styles.headerSubtitle, { color: theme.colors.textSecondary }]}>
+                {config.location || "Greenhouse"} · Telemetry & Trends
+              </Text>
+            </View>
+            <View style={[styles.liveSyncBadge, { backgroundColor: isDark ? "rgba(46,125,50,0.2)" : "rgba(46,125,50,0.1)" }]}>
+              <View style={styles.livePulseDot} />
+              <Text style={[styles.liveSyncText, { color: isDark ? "#81C784" : "#2E7D32" }]}>
+                Live
+              </Text>
             </View>
           </View>
+        )}
 
-          {/* Status Badge */}
-          <View style={[styles.statusBadge, { backgroundColor: liveStatus.bg }]}>
-            <Ionicons name={liveStatus.icon} size={12} color={liveStatus.color} />
-            <Text style={[styles.statusText, { color: liveStatus.color }]}>
-              {liveStatus.label}
-            </Text>
-          </View>
-        </View>
-
-        {/* Middle row: Big Value on Left, Target Badge on Right */}
-        <View style={styles.heroMiddleRow}>
-          <View style={styles.heroValueRow}>
-            <Text style={[styles.heroValue, { color: theme.colors.text }]}>
-              {formatValue(liveValue)}
-            </Text>
-            <Text style={[styles.heroUnit, { color: theme.colors.textSecondary }]}>
-              {config.unit}
-            </Text>
-          </View>
-
-          {Boolean(sensorLimits.min !== undefined || sensorLimits.max !== undefined) && (
-            <View
-              style={[
-                styles.targetRangeBadge,
-                {
-                  backgroundColor: isDark
-                    ? "rgba(255,255,255,0.04)"
-                    : "rgba(46,125,50,0.06)",
-                  borderColor: isDark
-                    ? "rgba(255,255,255,0.08)"
-                    : "rgba(46,125,50,0.15)",
-                },
-              ]}
-            >
-              <Ionicons
-                name="shield-checkmark-outline"
-                size={13}
-                color={theme.colors.primary}
-              />
+        {/* ─── HERO LIVE METRIC CARD (Compact & Pretty) ─── */}
+        <View
+          style={[
+            styles.heroCard,
+            {
+              backgroundColor: theme.colors.surface,
+              borderColor: theme.colors.border,
+            },
+          ]}
+        >
+          {/* Top meta row */}
+          <View style={styles.heroTopRow}>
+            <View style={styles.heroSensorTag}>
+              <View
+                style={[
+                  styles.sensorIconSquircle,
+                  { backgroundColor: `${config.color || theme.colors.primary}18` },
+                ]}
+              >
+                <Ionicons
+                  name={config.icon || "speedometer-outline"}
+                  size={16}
+                  color={config.color || theme.colors.primary}
+                />
+              </View>
               <View>
-                <Text style={[styles.targetRangeLabel, { color: theme.colors.textSecondary }]}>
-                  Optimal Range
+                <Text style={[styles.heroSensorCategory, { color: theme.colors.textSecondary }]}>
+                  Real-Time Reading
                 </Text>
-                <Text style={[styles.targetRangeText, { color: theme.colors.text }]}>
-                  {sensorLimits.min ?? "--"} — {sensorLimits.max ?? "--"} {config.unit}
+                <Text style={[styles.heroSensorName, { color: theme.colors.text }]} numberOfLines={1}>
+                  {config.name}
                 </Text>
               </View>
             </View>
-          )}
-        </View>
 
-        {/* Bottom row: Compact Stats Strip (Min · Avg · Max) */}
-        {datasetSummary ? (
-          <View
-            style={[
-              styles.summaryChipsRow,
-              { borderTopColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)" },
-            ]}
-          >
-            <View style={styles.statInlineItem}>
-              <Text style={[styles.statInlineLabel, { color: theme.colors.textSecondary }]}>
-                Min:
-              </Text>
-              <Text style={[styles.statInlineValue, { color: "#2196F3" }]}>
-                {formatValue(datasetSummary.min)} {config.unit}
-              </Text>
-            </View>
-
-            <View style={[styles.statDot, { backgroundColor: isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.15)" }]} />
-
-            <View style={styles.statInlineItem}>
-              <Text style={[styles.statInlineLabel, { color: theme.colors.textSecondary }]}>
-                Avg:
-              </Text>
-              <Text style={[styles.statInlineValue, { color: theme.colors.text }]}>
-                {formatValue(datasetSummary.avg)} {config.unit}
-              </Text>
-            </View>
-
-            <View style={[styles.statDot, { backgroundColor: isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.15)" }]} />
-
-            <View style={styles.statInlineItem}>
-              <Text style={[styles.statInlineLabel, { color: theme.colors.textSecondary }]}>
-                Max:
-              </Text>
-              <Text style={[styles.statInlineValue, { color: "#F44336" }]}>
-                {formatValue(datasetSummary.max)} {config.unit}
+            {/* Status Badge */}
+            <View style={[styles.statusBadge, { backgroundColor: liveStatus.bg }]}>
+              <Ionicons name={liveStatus.icon} size={12} color={liveStatus.color} />
+              <Text style={[styles.statusText, { color: liveStatus.color }]}>
+                {liveStatus.label}
               </Text>
             </View>
           </View>
-        ) : null}
-      </View>
 
-      {/* ─── HISTORICAL DATA SECTION ─── */}
-      <View style={styles.historicalSection}>
-        <View style={styles.historicalHeader}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          {/* Middle row: Big Value on Left, Target Badge on Right */}
+          <View style={styles.heroMiddleRow}>
+            <View style={styles.heroValueRow}>
+              <Text style={[styles.heroValue, { color: theme.colors.text }]}>
+                {formatValue(liveValue)}
+              </Text>
+              <Text style={[styles.heroUnit, { color: theme.colors.textSecondary }]}>
+                {config.unit}
+              </Text>
+            </View>
+
+            {Boolean(sensorLimits.min !== undefined || sensorLimits.max !== undefined) && (
+              <View
+                style={[
+                  styles.targetRangeBadge,
+                  {
+                    backgroundColor: isDark
+                      ? "rgba(255,255,255,0.04)"
+                      : "rgba(46,125,50,0.06)",
+                    borderColor: isDark
+                      ? "rgba(255,255,255,0.08)"
+                      : "rgba(46,125,50,0.15)",
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="shield-checkmark-outline"
+                  size={13}
+                  color={theme.colors.primary}
+                />
+                <View>
+                  <Text style={[styles.targetRangeLabel, { color: theme.colors.textSecondary }]}>
+                    Optimal Range
+                  </Text>
+                  <Text style={[styles.targetRangeText, { color: theme.colors.text }]}>
+                    {sensorLimits.min ?? "--"} — {sensorLimits.max ?? "--"} {config.unit}
+                  </Text>
+                </View>
+              </View>
+            )}
+          </View>
+
+          {/* Bottom row: Compact Stats Strip (Min · Avg · Max) */}
+          {datasetSummary ? (
             <View
               style={[
-                styles.sectionIconBadge,
-                { backgroundColor: `${theme.colors.primary}18` },
+                styles.summaryChipsRow,
+                { borderTopColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.05)" },
               ]}
             >
-              <Ionicons name="analytics" size={16} color={theme.colors.primary} />
+              <View style={styles.statInlineItem}>
+                <Text style={[styles.statInlineLabel, { color: theme.colors.textSecondary }]}>
+                  Min:
+                </Text>
+                <Text style={[styles.statInlineValue, { color: "#2196F3" }]}>
+                  {formatValue(datasetSummary.min)} {config.unit}
+                </Text>
+              </View>
+
+              <View style={[styles.statDot, { backgroundColor: isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.15)" }]} />
+
+              <View style={styles.statInlineItem}>
+                <Text style={[styles.statInlineLabel, { color: theme.colors.textSecondary }]}>
+                  Avg:
+                </Text>
+                <Text style={[styles.statInlineValue, { color: theme.colors.text }]}>
+                  {formatValue(datasetSummary.avg)} {config.unit}
+                </Text>
+              </View>
+
+              <View style={[styles.statDot, { backgroundColor: isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.15)" }]} />
+
+              <View style={styles.statInlineItem}>
+                <Text style={[styles.statInlineLabel, { color: theme.colors.textSecondary }]}>
+                  Max:
+                </Text>
+                <Text style={[styles.statInlineValue, { color: "#F44336" }]}>
+                  {formatValue(datasetSummary.max)} {config.unit}
+                </Text>
+              </View>
             </View>
-            <Text style={[styles.historicalTitle, { color: theme.colors.text }]}>
-              Historical Trends
-            </Text>
-          </View>
-          <View
-            style={[
-              styles.periodBadge,
-              { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" },
-            ]}
-          >
-            <Text style={[styles.periodBadgeText, { color: theme.colors.textSecondary }]}>
-              {RANGE_LABELS[timeRange]}
-            </Text>
-          </View>
+          ) : null}
         </View>
 
-        {/* Time Range Pills: 24h, 7d, 30d */}
-        <View style={styles.timeRangeContainer}>
-          {[
-            { key: "1d", label: "24 Hours" },
-            { key: "7d", label: "7 Days" },
-            { key: "30d", label: "30 Days" },
-          ].map((item) => {
-            const isSelected = timeRange === item.key;
-            return (
-              <TouchableOpacity
-                key={item.key}
+        {/* ─── HISTORICAL DATA SECTION ─── */}
+        <View style={styles.historicalSection}>
+          <View style={styles.historicalHeader}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <View
                 style={[
-                  styles.timeRangeButton,
-                  isSelected
-                    ? [
+                  styles.sectionIconBadge,
+                  { backgroundColor: `${theme.colors.primary}18` },
+                ]}
+              >
+                <Ionicons name="analytics" size={16} color={theme.colors.primary} />
+              </View>
+              <Text style={[styles.historicalTitle, { color: theme.colors.text }]}>
+                Historical Trends
+              </Text>
+            </View>
+            <View
+              style={[
+                styles.periodBadge,
+                { backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" },
+              ]}
+            >
+              <Text style={[styles.periodBadgeText, { color: theme.colors.textSecondary }]}>
+                {RANGE_LABELS[timeRange]}
+              </Text>
+            </View>
+          </View>
+
+          {/* Time Range Pills: 24h, 7d, 30d */}
+          <View style={styles.timeRangeContainer}>
+            {[
+              { key: "1d", label: "24 Hours" },
+              { key: "7d", label: "7 Days" },
+              { key: "30d", label: "30 Days" },
+            ].map((item) => {
+              const isSelected = timeRange === item.key;
+              return (
+                <TouchableOpacity
+                  key={item.key}
+                  style={[
+                    styles.timeRangeButton,
+                    isSelected
+                      ? [
                         styles.timeRangeButtonActive,
                         {
                           backgroundColor: theme.colors.primary,
                           borderColor: theme.colors.primary,
                         },
                       ]
-                    : [
+                      : [
                         styles.timeRangeButtonInactive,
                         {
                           backgroundColor: isDark
@@ -687,349 +722,372 @@ export default function SensorDetailScreen({
                           borderColor: theme.colors.border,
                         },
                       ],
-                ]}
-                onPress={() => setTimeRange(item.key)}
-                activeOpacity={0.75}
-              >
-                <Text
-                  style={[
-                    styles.timeRangeText,
-                    {
-                      color: isSelected ? "#FFFFFF" : theme.colors.textSecondary,
-                      fontWeight: isSelected ? "700" : "500",
-                    },
                   ]}
+                  onPress={() => setTimeRange(item.key)}
+                  activeOpacity={0.75}
                 >
-                  {item.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+                  <Text
+                    style={[
+                      styles.timeRangeText,
+                      {
+                        color: isSelected ? "#FFFFFF" : theme.colors.textSecondary,
+                        fontWeight: isSelected ? "700" : "500",
+                      },
+                    ]}
+                  >
+                    {item.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
 
-        {/* View Switcher: Table vs Graph */}
-        <View
-          style={[
-            styles.tabSwitcher,
-            { backgroundColor: isDark ? "rgba(255,255,255,0.04)" : "#EAEAEA" },
-          ]}
-        >
-          <TouchableOpacity
+          {/* View Switcher: Table vs Graph */}
+          <View
             style={[
-              styles.tabButton,
-              activeTab === "table" && [
-                styles.tabButtonActive,
-                { backgroundColor: theme.colors.surface },
-              ],
+              styles.tabSwitcher,
+              { backgroundColor: isDark ? "rgba(255,255,255,0.04)" : "#EAEAEA" },
             ]}
-            onPress={() => setActiveTab("table")}
-            activeOpacity={0.8}
           >
-            <Ionicons
-              name="list"
-              size={15}
-              color={activeTab === "table" ? theme.colors.primary : theme.colors.textSecondary}
-            />
-            <Text
+            <TouchableOpacity
               style={[
-                styles.tabButtonText,
-                {
-                  color: activeTab === "table" ? theme.colors.primary : theme.colors.textSecondary,
-                  fontWeight: activeTab === "table" ? "700" : "500",
-                },
+                styles.tabButton,
+                activeTab === "table" && [
+                  styles.tabButtonActive,
+                  { backgroundColor: theme.colors.surface },
+                ],
               ]}
+              onPress={() => setActiveTab("table")}
+              activeOpacity={0.8}
             >
-              Table View
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.tabButton,
-              activeTab === "graph" && [
-                styles.tabButtonActive,
-                { backgroundColor: theme.colors.surface },
-              ],
-            ]}
-            onPress={() => setActiveTab("graph")}
-            activeOpacity={0.8}
-          >
-            <Ionicons
-              name="trending-up"
-              size={15}
-              color={activeTab === "graph" ? theme.colors.primary : theme.colors.textSecondary}
-            />
-            <Text
-              style={[
-                styles.tabButtonText,
-                {
-                  color: activeTab === "graph" ? theme.colors.primary : theme.colors.textSecondary,
-                  fontWeight: activeTab === "graph" ? "700" : "500",
-                },
-              ]}
-            >
-              Trend Chart
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Content Card: Table or Graph */}
-        <View
-          style={[
-            styles.contentCard,
-            {
-              backgroundColor: theme.colors.surface,
-              borderColor: theme.colors.border,
-            },
-          ]}
-        >
-          {historicalError ? (
-            <View style={styles.placeholder}>
-              <Ionicons name="alert-circle-outline" size={40} color="#F44336" />
-              <Text style={[styles.placeholderText, { color: "#F44336" }]}>
-                {historicalError}
+              <Ionicons
+                name="list"
+                size={15}
+                color={activeTab === "table" ? theme.colors.primary : theme.colors.textSecondary}
+              />
+              <Text
+                style={[
+                  styles.tabButtonText,
+                  {
+                    color: activeTab === "table" ? theme.colors.primary : theme.colors.textSecondary,
+                    fontWeight: activeTab === "table" ? "700" : "500",
+                  },
+                ]}
+              >
+                Table View
               </Text>
-            </View>
-          ) : activeTab === "table" ? (
-            isTableLoading ? (
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.tabButton,
+                activeTab === "graph" && [
+                  styles.tabButtonActive,
+                  { backgroundColor: theme.colors.surface },
+                ],
+              ]}
+              onPress={() => setActiveTab("graph")}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name="trending-up"
+                size={15}
+                color={activeTab === "graph" ? theme.colors.primary : theme.colors.textSecondary}
+              />
+              <Text
+                style={[
+                  styles.tabButtonText,
+                  {
+                    color: activeTab === "graph" ? theme.colors.primary : theme.colors.textSecondary,
+                    fontWeight: activeTab === "graph" ? "700" : "500",
+                  },
+                ]}
+              >
+                Trend Chart
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Content Card: Table or Graph */}
+          <View
+            style={[
+              styles.contentCard,
+              {
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.border,
+              },
+            ]}
+          >
+            {historicalError ? (
               <View style={styles.placeholder}>
-                <ActivityIndicator size="large" color={theme.colors.primary} />
-                <Text style={[styles.placeholderText, { color: theme.colors.textSecondary }]}>
-                  Loading sensor logs…
+                <Ionicons name="alert-circle-outline" size={40} color="#F44336" />
+                <Text style={[styles.placeholderText, { color: "#F44336" }]}>
+                  {historicalError}
                 </Text>
               </View>
-            ) : tableData.length > 0 ? (
-              <>
-                <View
-                  style={[
-                    styles.tableHeader,
-                    {
-                      backgroundColor: isDark
-                        ? "rgba(255,255,255,0.03)"
-                        : "rgba(0,0,0,0.02)",
-                      borderBottomColor: theme.colors.border,
-                    },
-                  ]}
-                >
-                  <Text style={[styles.tableHeaderCell, { color: theme.colors.textSecondary }]}>
-                    Date &amp; Time
-                  </Text>
-                  <Text
-                    style={[
-                      styles.tableHeaderCell,
-                      styles.tableHeaderCellCenter,
-                      { color: theme.colors.textSecondary },
-                    ]}
-                  >
-                    Reading
-                  </Text>
-                  <Text
-                    style={[
-                      styles.tableHeaderCell,
-                      styles.tableHeaderCellRight,
-                      { color: theme.colors.textSecondary },
-                    ]}
-                  >
-                    Status
+            ) : activeTab === "table" ? (
+              isTableLoading ? (
+                <View style={styles.placeholder}>
+                  <ActivityIndicator size="large" color={theme.colors.primary} />
+                  <Text style={[styles.placeholderText, { color: theme.colors.textSecondary }]}>
+                    Loading sensor logs…
                   </Text>
                 </View>
-
-                {tableData.map((point, idx) => {
-                  const pointStatus = evaluateValueStatus(point.value);
-                  return (
-                    <View
-                      key={`${point.time}-${idx}`}
+              ) : tableData.length > 0 ? (
+                <>
+                  <View
+                    style={[
+                      styles.tableHeader,
+                      {
+                        backgroundColor: isDark
+                          ? "rgba(255,255,255,0.03)"
+                          : "rgba(0,0,0,0.02)",
+                        borderBottomColor: theme.colors.border,
+                      },
+                    ]}
+                  >
+                    <TouchableOpacity
+                      style={{ flexDirection: "row", alignItems: "center", gap: 4, flex: 2 }}
+                      onPress={toggleTableSortOrder}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.tableHeaderCell, { color: theme.colors.textSecondary, flex: 0 }]}>
+                        Date &amp; Time
+                      </Text>
+                      <Ionicons
+                        name={tableSortOrder === "desc" ? "arrow-down" : "arrow-up"}
+                        size={12}
+                        color={theme.colors.primary}
+                      />
+                      <View
+                        style={{
+                          backgroundColor: `${theme.colors.primary}18`,
+                          paddingHorizontal: 5,
+                          paddingVertical: 1,
+                          borderRadius: 4,
+                        }}
+                      >
+                        <Text style={{ fontSize: 9, color: theme.colors.primary, fontWeight: "700" }}>
+                          {tableSortOrder === "desc" ? "Latest" : "Oldest"}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                    <Text
                       style={[
-                        styles.tableRow,
-                        idx % 2 === 1 && [
-                          styles.tableRowStriped,
-                          {
-                            backgroundColor: isDark
-                              ? "rgba(255,255,255,0.015)"
-                              : "rgba(76,175,80,0.025)",
-                          },
-                        ],
-                        { borderBottomColor: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)" },
+                        styles.tableHeaderCell,
+                        styles.tableHeaderCellCenter,
+                        { color: theme.colors.textSecondary },
                       ]}
                     >
-                      <Text style={[styles.tableCellDate, { color: theme.colors.text }]}>
-                        {formatTableTime(point.time)}
-                      </Text>
+                      Reading
+                    </Text>
+                    <Text
+                      style={[
+                        styles.tableHeaderCell,
+                        styles.tableHeaderCellRight,
+                        { color: theme.colors.textSecondary },
+                      ]}
+                    >
+                      Status
+                    </Text>
+                  </View>
 
-                      <View style={styles.tableValueCell}>
-                        <Text style={[styles.tableValue, { color: pointStatus.color }]}>
-                          {formatValue(point.value)}
+                  {tableData.map((point, idx) => {
+                    const pointStatus = evaluateValueStatus(point.value);
+                    return (
+                      <View
+                        key={`${point.time}-${idx}`}
+                        style={[
+                          styles.tableRow,
+                          idx % 2 === 1 && [
+                            styles.tableRowStriped,
+                            {
+                              backgroundColor: isDark
+                                ? "rgba(255,255,255,0.015)"
+                                : "rgba(76,175,80,0.025)",
+                            },
+                          ],
+                          { borderBottomColor: isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.04)" },
+                        ]}
+                      >
+                        <Text style={[styles.tableCellDate, { color: theme.colors.text }]}>
+                          {formatTableTime(point.time)}
                         </Text>
-                        <Text style={[styles.tableUnit, { color: theme.colors.textSecondary }]}>
-                          {point.unit || config.unit}
-                        </Text>
-                      </View>
 
-                      <View style={styles.tableStatusCell}>
-                        <View style={[styles.miniStatusBadge, { backgroundColor: pointStatus.bg }]}>
-                          <Text style={[styles.miniStatusText, { color: pointStatus.color }]}>
-                            {pointStatus.label}
+                        <View style={styles.tableValueCell}>
+                          <Text style={[styles.tableValue, { color: pointStatus.color }]}>
+                            {formatValue(point.value)}
+                          </Text>
+                          <Text style={[styles.tableUnit, { color: theme.colors.textSecondary }]}>
+                            {point.unit || config.unit}
                           </Text>
                         </View>
+
+                        <View style={styles.tableStatusCell}>
+                          <View style={[styles.miniStatusBadge, { backgroundColor: pointStatus.bg }]}>
+                            <Text style={[styles.miniStatusText, { color: pointStatus.color }]}>
+                              {pointStatus.label}
+                            </Text>
+                          </View>
+                        </View>
+                      </View>
+                    );
+                  })}
+
+                  {/* Pagination Footer */}
+                  <View
+                    style={[
+                      styles.paginationFooter,
+                      { borderTopColor: theme.colors.border },
+                    ]}
+                  >
+                    <TouchableOpacity
+                      style={[
+                        styles.pageButton,
+                        {
+                          backgroundColor: isDark
+                            ? "rgba(255,255,255,0.05)"
+                            : "rgba(0,0,0,0.04)",
+                        },
+                        safePage <= 1 && { opacity: 0.35 },
+                      ]}
+                      disabled={safePage <= 1}
+                      onPress={() => setCurrentPage(safePage - 1)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="chevron-back" size={16} color={theme.colors.primary} />
+                      <Text style={[styles.pageButtonText, { color: theme.colors.primary }]}>
+                        Prev
+                      </Text>
+                    </TouchableOpacity>
+
+                    <View style={styles.pageInfo}>
+                      <Text style={[styles.pageInfoText, { color: theme.colors.text }]}>
+                        Page {safePage} of {totalPages}
+                      </Text>
+                      <Text style={[styles.pageInfoSub, { color: theme.colors.textSecondary }]}>
+                        {tableTotal > 0 ? `${startIndex}-${endIndex} of ${tableTotal} records` : "No records"}
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.pageButton,
+                        {
+                          backgroundColor: isDark
+                            ? "rgba(255,255,255,0.05)"
+                            : "rgba(0,0,0,0.04)",
+                        },
+                        safePage >= totalPages && { opacity: 0.35 },
+                      ]}
+                      disabled={safePage >= totalPages}
+                      onPress={() => setCurrentPage(safePage + 1)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={[styles.pageButtonText, { color: theme.colors.primary }]}>
+                        Next
+                      </Text>
+                      <Ionicons name="chevron-forward" size={16} color={theme.colors.primary} />
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <View style={styles.placeholder}>
+                  <Ionicons name="analytics-outline" size={42} color={theme.colors.textSecondary} />
+                  <Text style={[styles.placeholderText, { color: theme.colors.textSecondary }]}>
+                    No historical records found for this period
+                  </Text>
+                </View>
+              )
+            ) : (
+              /* ── GRAPH TAB ── */
+              isGraphLoading ? (
+                <View style={styles.placeholder}>
+                  <ActivityIndicator size="large" color={theme.colors.primary} />
+                  <Text style={[styles.placeholderText, { color: theme.colors.textSecondary }]}>
+                    Loading trend graph…
+                  </Text>
+                </View>
+              ) : graphData.length > 0 ? (
+                <View style={styles.graphWrapper}>
+                  {/* Summary + Zoom button */}
+                  <View style={styles.graphSummaryRow}>
+                    <View style={styles.graphSummaryLeft}>
+                      <Text style={[styles.graphSummaryDetail, { color: theme.colors.text }]}>
+                        {graphData.length} Data Points Analyzed
+                      </Text>
+                      <Text style={[styles.graphSummarySub, { color: theme.colors.textSecondary }]}>
+                        Min {formatValue(Math.min(...graphData.map((d) => d.value)))} · Max {formatValue(Math.max(...graphData.map((d) => d.value)))} {config.unit}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => setIsZoomed(true)}
+                      style={[
+                        styles.zoomButton,
+                        {
+                          backgroundColor: isDark
+                            ? "rgba(46,125,50,0.2)"
+                            : "rgba(46,125,50,0.1)",
+                          borderColor: isDark ? "#2E7D32" : "#81C784",
+                        },
+                      ]}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name="expand-outline" size={16} color={theme.colors.primary} />
+                      <Text style={[styles.zoomButtonText, { color: theme.colors.primary }]}>
+                        Fullscreen
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* Chart Area */}
+                  <View style={styles.graphWithAxis}>
+                    <View style={styles.chartAndXAxis}>
+                      <View style={styles.chartArea}>
+                        <LineChart
+                          data={graphData}
+                          color={config.color || theme.colors.primary}
+                          unit={config.unit}
+                          width={width - 34}
+                          height={245}
+                          labelColor={theme.colors.textSecondary}
+                          xTitle="Time"
+                          yTitle={config.unit ? `Value (${config.unit})` : "Value"}
+                          showGradient={true}
+                          showDots={graphData.length <= 50}
+                          onPointPress={setSelectedPoint}
+                          selectedPoint={selectedPoint}
+                        />
                       </View>
                     </View>
-                  );
-                })}
-
-                {/* Pagination Footer */}
-                <View
-                  style={[
-                    styles.paginationFooter,
-                    { borderTopColor: theme.colors.border },
-                  ]}
-                >
-                  <TouchableOpacity
-                    style={[
-                      styles.pageButton,
-                      {
-                        backgroundColor: isDark
-                          ? "rgba(255,255,255,0.05)"
-                          : "rgba(0,0,0,0.04)",
-                      },
-                      safePage <= 1 && { opacity: 0.35 },
-                    ]}
-                    disabled={safePage <= 1}
-                    onPress={() => setCurrentPage(safePage - 1)}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons name="chevron-back" size={16} color={theme.colors.primary} />
-                    <Text style={[styles.pageButtonText, { color: theme.colors.primary }]}>
-                      Prev
-                    </Text>
-                  </TouchableOpacity>
-
-                  <View style={styles.pageInfo}>
-                    <Text style={[styles.pageInfoText, { color: theme.colors.text }]}>
-                      Page {safePage} of {totalPages}
-                    </Text>
-                    <Text style={[styles.pageInfoSub, { color: theme.colors.textSecondary }]}>
-                      {tableTotal > 0 ? `${startIndex}-${endIndex} of ${tableTotal} records` : "No records"}
-                    </Text>
-                  </View>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.pageButton,
-                      {
-                        backgroundColor: isDark
-                          ? "rgba(255,255,255,0.05)"
-                          : "rgba(0,0,0,0.04)",
-                      },
-                      safePage >= totalPages && { opacity: 0.35 },
-                    ]}
-                    disabled={safePage >= totalPages}
-                    onPress={() => setCurrentPage(safePage + 1)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.pageButtonText, { color: theme.colors.primary }]}>
-                      Next
-                    </Text>
-                    <Ionicons name="chevron-forward" size={16} color={theme.colors.primary} />
-                  </TouchableOpacity>
-                </View>
-              </>
-            ) : (
-              <View style={styles.placeholder}>
-                <Ionicons name="analytics-outline" size={42} color={theme.colors.textSecondary} />
-                <Text style={[styles.placeholderText, { color: theme.colors.textSecondary }]}>
-                  No historical records found for this period
-                </Text>
-              </View>
-            )
-          ) : (
-            /* ── GRAPH TAB ── */
-            isGraphLoading ? (
-              <View style={styles.placeholder}>
-                <ActivityIndicator size="large" color={theme.colors.primary} />
-                <Text style={[styles.placeholderText, { color: theme.colors.textSecondary }]}>
-                  Loading trend graph…
-                </Text>
-              </View>
-            ) : graphData.length > 0 ? (
-              <View style={styles.graphWrapper}>
-                {/* Summary + Zoom button */}
-                <View style={styles.graphSummaryRow}>
-                  <View style={styles.graphSummaryLeft}>
-                    <Text style={[styles.graphSummaryDetail, { color: theme.colors.text }]}>
-                      {graphData.length} Data Points Analyzed
-                    </Text>
-                    <Text style={[styles.graphSummarySub, { color: theme.colors.textSecondary }]}>
-                      Min {formatValue(Math.min(...graphData.map((d) => d.value)))} · Max {formatValue(Math.max(...graphData.map((d) => d.value)))} {config.unit}
-                    </Text>
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => setIsZoomed(true)}
-                    style={[
-                      styles.zoomButton,
-                      {
-                        backgroundColor: isDark
-                          ? "rgba(46,125,50,0.2)"
-                          : "rgba(46,125,50,0.1)",
-                        borderColor: isDark ? "#2E7D32" : "#81C784",
-                      },
-                    ]}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons name="expand-outline" size={16} color={theme.colors.primary} />
-                    <Text style={[styles.zoomButtonText, { color: theme.colors.primary }]}>
-                      Fullscreen
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Chart Area */}
-                <View style={styles.graphWithAxis}>
-                  <View style={styles.chartAndXAxis}>
-                    <View style={styles.chartArea}>
-                      <LineChart
-                        data={graphData}
-                        color={config.color || theme.colors.primary}
-                        unit={config.unit}
-                        width={width - 34}
-                        height={245}
-                        labelColor={theme.colors.textSecondary}
-                        xTitle="Time"
-                        yTitle={config.unit ? `Value (${config.unit})` : "Value"}
-                        showGradient={true}
-                        showDots={graphData.length <= 50}
-                        onPointPress={setSelectedPoint}
-                        selectedPoint={selectedPoint}
-                      />
-                    </View>
                   </View>
                 </View>
-              </View>
-            ) : (
-              <View style={styles.placeholder}>
-                <Ionicons name="analytics-outline" size={42} color={theme.colors.textSecondary} />
-                <Text style={[styles.placeholderText, { color: theme.colors.textSecondary }]}>
-                  No trend points available for this period
-                </Text>
-              </View>
-            )
-          )}
+              ) : (
+                <View style={styles.placeholder}>
+                  <Ionicons name="analytics-outline" size={42} color={theme.colors.textSecondary} />
+                  <Text style={[styles.placeholderText, { color: theme.colors.textSecondary }]}>
+                    No trend points available for this period
+                  </Text>
+                </View>
+              )
+            )}
+          </View>
         </View>
-      </View>
 
-     
 
-      {/* ─── LIVE · LAST 10 MIN ─── */}
-      <View style={{ marginBottom: 4, marginTop: 12}}>
-        <LiveChartCard
-          title={`${config.name} · Live`}
-          subtitle={`${config.name} — last 10 minutes of MQTT data`}
-          color={config.color}
-          unit={config.unit}
-          points={livePoints}
-          themeColors={theme.colors}
-        />
-      </View>
-    </ScrollView>
+
+        {/* ─── LIVE · LAST 10 MIN ─── */}
+        <View style={{ marginBottom: 4, marginTop: 12 }}>
+          <LiveChartCard
+            title={`${config.name} · Live`}
+            subtitle={`${config.name} — last 10 minutes of MQTT data`}
+            color={config.color}
+            unit={config.unit}
+            points={livePoints}
+            themeColors={theme.colors}
+          />
+        </View>
+      </ScrollView>
 
       {/* ─── FULLSCREEN ZOOM MODAL ─── */}
       <Modal
@@ -1125,7 +1183,7 @@ export default function SensorDetailScreen({
 
 // ─── STYLES ──────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: { flex: 1 },
+  container: { flex: 1, paddingTop: 18, },
   header: {
     flexDirection: "row",
     alignItems: "center",

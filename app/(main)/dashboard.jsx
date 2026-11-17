@@ -525,14 +525,19 @@ export default function Dashboard() {
   // to avoid orange flicker while waiting for device confirmation.
   const modeColor = getModeColor ? getModeColor() : isManualMode ? "#4CAF50" : "#FF9800";
 
-  // Show mode whenever loaded. The label stays frozen on the current mode
-  // even while a switch is in-flight; it only updates once the device confirms.
-  const showMode = isModeLoaded;
+  // Derive mode with robust fallback to status flags / config so it never gets stuck on "--"
+  const resolvedMode = (deviceStatusFlags && deviceStatusFlags.mode !== null && deviceStatusFlags.mode !== undefined)
+    ? (deviceStatusFlags.mode ? "Auto" : "Manual")
+    : (deviceConfig && deviceConfig.auto_mode !== undefined)
+      ? (deviceConfig.auto_mode ? "Auto" : "Manual")
+      : (isManualMode ? "Manual" : "Auto");
+
+  const showMode = Boolean(deviceKey);
   const modeText = !deviceKey
     ? "--"
-    : !isModeLoaded
-      ? "--"
-      : modeDisplay || (isManualMode ? "Manual" : "Auto");
+    : (modeDisplay && modeDisplay !== "Loading...")
+      ? modeDisplay
+      : resolvedMode;
 
   const hasNoDevices = availableDevices && availableDevices.length === 0;
 
